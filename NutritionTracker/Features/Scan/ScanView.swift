@@ -25,7 +25,7 @@ struct ScanView: View {
                 }
                 Button { openCamera() } label: { Label("Take Photo", systemImage: "camera") }
                     .buttonStyle(.borderedProminent)
-                PhotosPicker(selection: $photoItem, maxSelectionCount: 1, matching: .images) {
+                PhotosPicker(selection: $photoItem, matching: .images) {
                     Label("Choose Photo", systemImage: "photo")
                 }.buttonStyle(.bordered)
                 Button { openBarcode() } label: { Label("Scan Barcode", systemImage: "barcode.viewfinder") }
