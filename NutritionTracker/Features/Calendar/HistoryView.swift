@@ -8,14 +8,25 @@ struct HistoryView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("YOUR HISTORY").font(.caption.bold()).tracking(1.4).foregroundStyle(AppTheme.accent)
+                        Text("Food calendar").font(.largeTitle.bold())
+                    }
                     DatePicker("Date", selection: $selected, displayedComponents: .date)
-                        .datePickerStyle(.graphical)
-                    NutritionSummaryView(nutrition: LocalDay.total(entries))
+                        .datePickerStyle(.graphical).tint(AppTheme.accent).appCard()
+                    VStack(alignment: .leading, spacing: 14) {
+                        AppSectionHeading(title: "Daily total")
+                        NutritionSummaryView(nutrition: LocalDay.total(entries))
+                    }.appCard()
+                    AppSectionHeading(title: "Food log", trailing: "\(entries.count) items")
                     if entries.isEmpty { EmptyStateView(title: "No food recorded.") }
                     ForEach(entries, id: \.id) { FoodEntryCard(entry: $0) }
-                }.padding()
-            }.navigationTitle("Calendar")
+                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 32)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("Calendar")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

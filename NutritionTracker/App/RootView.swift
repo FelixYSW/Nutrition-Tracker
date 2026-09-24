@@ -14,6 +14,7 @@ struct RootView: View {
                     AddMealView().tabItem { Label("Add Meal", systemImage: "plus.circle") }.tag(2)
                     HistoryView().tabItem { Label("Calendar", systemImage: "calendar") }.tag(3)
                 }
+                .tint(AppTheme.accent)
             }
         }.environment(drafts)
     }

@@ -4,23 +4,28 @@ struct QuantityStepper: View {
     @Binding var value: Double
     var unit: ServingUnit
     var body: some View {
-        HStack(spacing: 12) {
-            Button { value = max(0, value - unit.step) } label: { Image(systemName: "minus.circle.fill") }
+        HStack(spacing: 0) {
+            Button { value = max(0, value - unit.step) } label: {
+                Image(systemName: "minus").font(.subheadline.bold()).frame(width: 42, height: 42)
+            }
                 .accessibilityLabel("Decrease quantity")
             Text(value.formatted(.number.precision(.fractionLength(0...2))))
-                .monospacedDigit().frame(minWidth: 36)
-            Button { value += unit.step } label: { Image(systemName: "plus.circle.fill") }
+                .font(.subheadline.bold()).monospacedDigit().frame(minWidth: 42)
+            Button { value += unit.step } label: {
+                Image(systemName: "plus").font(.subheadline.bold()).frame(width: 42, height: 42)
+            }
                 .accessibilityLabel("Increase quantity")
         }
-        .font(.title3).buttonStyle(.plain).foregroundStyle(.tint)
-        .frame(minHeight: 44)
+        .buttonStyle(.plain).foregroundStyle(AppTheme.accent)
+        .background(AppTheme.accent.opacity(0.10), in: Capsule())
+        .accessibilityElement(children: .contain)
     }
 }
 
 struct NutritionSummaryView: View {
     var nutrition: Nutrition
     var body: some View {
-        HStack {
+        HStack(spacing: 4) {
             metric("kcal", nutrition.calories)
             metric("Protein", nutrition.protein)
             metric("Carbs", nutrition.carbs)
@@ -28,10 +33,10 @@ struct NutritionSummaryView: View {
         }
     }
     private func metric(_ title: String, _ value: Double) -> some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
             Text(value.formatted(.number.precision(.fractionLength(0))))
-                .font(.headline).monospacedDigit()
-            Text(title).font(.caption).foregroundStyle(.secondary)
+                .font(.subheadline.bold()).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+            Text(title).font(.caption2).foregroundStyle(.secondary)
         }.frame(maxWidth: .infinity)
     }
 }
@@ -41,6 +46,7 @@ struct CircularNutritionProgress: View {
     let consumed: Double
     let target: Double
     let color: Color
+    var size: CGFloat = 74
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
@@ -50,7 +56,7 @@ struct CircularNutritionProgress: View {
                     .rotationEffect(.degrees(-90))
                 Text(consumed.formatted(.number.precision(.fractionLength(0))))
                     .font(.subheadline.bold()).monospacedDigit()
-            }.frame(width: 72, height: 72)
+            }.frame(width: size, height: size)
             Text(title).font(.caption.bold())
             Text("/ \(Int(target))").font(.caption2).foregroundStyle(.secondary)
         }.accessibilityElement(children: .ignore)
@@ -62,34 +68,53 @@ struct FoodEntryCard: View {
     let entry: FoodEntry
     @State private var expanded = false
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack {
-                VStack(alignment: .leading) {
-                    Text(entry.name).font(.headline)
+                Image(systemName: entry.source == .barcode ? "barcode" : entry.source == .photoAI ? "camera.fill" : "fork.knife")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.name).font(.headline).lineLimit(2)
                     Text(entry.consumedAt, style: .time).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("\(Int(entry.total.calories)) kcal").font(.subheadline.bold())
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("\(Int(entry.total.calories))").font(.title3.bold()).monospacedDigit()
+                    Text("kcal").font(.caption2).foregroundStyle(.secondary)
+                }
             }
             NutritionSummaryView(nutrition: entry.total)
             if !entry.ingredients.isEmpty {
-                Button(expanded ? "Hide ingredients" : "Show ingredients") { expanded.toggle() }
-                    .font(.caption)
+                Button { expanded.toggle() } label: {
+                    HStack {
+                        Text(expanded ? "Hide ingredients" : "\(entry.ingredients.count) ingredients")
+                        Spacer()
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    }.font(.subheadline.bold()).foregroundStyle(AppTheme.accent)
+                }
                 if expanded {
                     ForEach(entry.ingredients, id: \.id) { ingredient in
                         HStack { Text(ingredient.name); Spacer(); Text("\(Int(ingredient.total.calories)) kcal") }
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
             }
-        }.padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }.appCard()
     }
 }
 
 struct EmptyStateView: View {
     let title: String
     var body: some View {
-        ContentUnavailableView(title, systemImage: "fork.knife")
+        VStack(spacing: 12) {
+            Image(systemName: "fork.knife.circle")
+                .font(.system(size: 46, weight: .light)).foregroundStyle(AppTheme.accent)
+            Text(title).font(.headline)
+            Text("Your food will appear here once you add it.")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }.frame(maxWidth: .infinity).padding(.vertical, 36).appCard()
     }
 }
 
@@ -110,7 +135,15 @@ struct NutritionEditor: View {
         }
     }
     private func field(_ label: String, value: Binding<Double>) -> some View {
-        LabeledContent(label) { TextField(label, value: value, format: .number).keyboardType(.decimalPad).multilineTextAlignment(.trailing) }
+        HStack(spacing: 12) {
+            Text(label).font(.subheadline).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            TextField(label, value: value, format: .number)
+                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                .font(.subheadline.bold()).monospacedDigit()
+                .frame(width: 94).padding(.horizontal, 12).frame(height: 40)
+                .background(AppTheme.field, in: RoundedRectangle(cornerRadius: 11))
+        }.frame(minHeight: 44)
     }
 }
 

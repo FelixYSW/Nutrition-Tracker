@@ -19,32 +19,60 @@ struct ScanView: View {
     @State private var missingBarcode: String?
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                if let data = imageData, let image = UIImage(data: data) {
-                    Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 260).clipShape(RoundedRectangle(cornerRadius: 16))
-                }
-                Button { openCamera() } label: { Label("Take Photo", systemImage: "camera") }
-                    .buttonStyle(.borderedProminent)
-                PhotosPicker(selection: $photoItem, matching: .images) {
-                    Label("Choose Photo", systemImage: "photo")
-                }.buttonStyle(.bordered)
-                Button { openBarcode() } label: { Label("Scan Barcode", systemImage: "barcode.viewfinder") }
-                    .buttonStyle(.bordered)
-                if let stage { LoadingAnalysisView(stage: stage) }
-                if imageData != nil && stage == nil {
-                    Button("Analyse Photo") { Task { await analyze() } }.buttonStyle(.borderedProminent)
-                }
-                if let code = missingBarcode {
-                    Text("Product Not Found").font(.headline)
-                    Button("Enter Product Manually") {
-                        var draft = FoodDraft(); draft.barcode = code; draft.source = .barcode
-                        store.load(draft); missingBarcode = nil
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("QUICK CAPTURE").font(.caption.bold()).tracking(1.4).foregroundStyle(AppTheme.accent)
+                        Text("Scan your food").font(.largeTitle.bold())
+                        Text("Use one photo or a product barcode to start a food entry.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }.padding(.bottom, 6)
+
+                    if let data = imageData, let image = UIImage(data: data) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Image(uiImage: image).resizable().scaledToFill()
+                                .frame(maxWidth: .infinity).frame(height: 220)
+                                .clipped().clipShape(RoundedRectangle(cornerRadius: 16))
+                            Text("Current photo").font(.subheadline.bold())
+                            Text("Portions from a single photo are approximate. Review every result.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if stage == nil {
+                                Button("Analyse Photo") { Task { await analyze() } }
+                                    .font(.headline).frame(maxWidth: .infinity).frame(minHeight: 48)
+                                    .buttonStyle(.borderedProminent).tint(AppTheme.accent)
+                            }
+                        }.appCard()
                     }
-                    Button("Scan Another Barcode") { missingBarcode = nil; openBarcode() }
-                }
-                Spacer()
-            }.padding()
+
+                    AppSectionHeading(title: "Choose a method")
+                    Button { openCamera() } label: {
+                        ScanActionLabel(icon: "camera.fill", title: "Take Photo", subtitle: "Capture a meal with your camera")
+                    }.buttonStyle(.plain)
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        ScanActionLabel(icon: "photo.on.rectangle.angled", title: "Choose Photo", subtitle: "Select one image from your library")
+                    }.buttonStyle(.plain)
+                    Button { openBarcode() } label: {
+                        ScanActionLabel(icon: "barcode.viewfinder", title: "Scan Barcode", subtitle: "Find packaged food nutrition")
+                    }.buttonStyle(.plain)
+
+                    if let stage { LoadingAnalysisView(stage: stage).frame(maxWidth: .infinity).appCard() }
+                    if let code = missingBarcode {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Product Not Found").font(.headline)
+                            Text("Barcode \(code) is not in the food database.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button("Enter Product Manually") {
+                                var draft = FoodDraft(); draft.barcode = code; draft.source = .barcode
+                                store.load(draft); missingBarcode = nil
+                            }.buttonStyle(.borderedProminent).tint(AppTheme.accent)
+                            Button("Scan Another Barcode") { missingBarcode = nil; openBarcode() }
+                        }.frame(maxWidth: .infinity, alignment: .leading).appCard()
+                    }
+                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 32)
+            }
+                .background(AppTheme.background.ignoresSafeArea())
                 .navigationTitle("Scan")
+                .navigationBarTitleDisplayMode(.inline)
                 .onChange(of: photoItem) { _, item in
                     Task { if let data = try? await item?.loadTransferable(type: Data.self) { receive(data) } }
                 }
@@ -108,5 +136,24 @@ struct ScanView: View {
             draft.nutrition = product.nutrition
             store.load(draft)
         } catch { message = "Product lookup failed: \(error.localizedDescription)" }
+    }
+}
+
+private struct ScanActionLabel: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.title3).foregroundStyle(AppTheme.accent)
+                .frame(width: 48, height: 48)
+                .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline).foregroundStyle(.primary)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+        }.frame(minHeight: 58).appCard()
     }
 }
