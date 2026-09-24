@@ -1,0 +1,43 @@
+name: NutritionTracker
+options:
+  bundleIdPrefix: com.felix
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    SWIFT_VERSION: '5.9'
+    TARGETED_DEVICE_FAMILY: '1'
+targets:
+  NutritionTracker:
+    type: application
+    platform: iOS
+    sources:
+      - path: NutritionTracker
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.felix.NutritionTracker
+        MARKETING_VERSION: 1.0
+        CURRENT_PROJECT_VERSION: 1
+        INFOPLIST_KEY_CFBundleDisplayName: Nutrition Tracker
+        INFOPLIST_KEY_NSCameraUsageDescription: Take food photos and scan product barcodes.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Choose a food photo for analysis.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save an image you choose to retain.
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+  NutritionTrackerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: NutritionTrackerTests
+    dependencies:
+      - target: NutritionTracker
+schemes:
+  NutritionTracker:
+    build:
+      targets:
+        NutritionTracker: all
+        NutritionTrackerTests: [test]
+    test:
+      targets:
+        - NutritionTrackerTests
+    management:
+      shared: true

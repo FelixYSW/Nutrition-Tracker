@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "classes": [
+    {"id": "rice_white", "name": "White rice", "aliases": {"foodseg103": ["rice"], "malaysia_food11": ["rice"], "mf150": ["white rice"]}},
+    {"id": "egg", "name": "Egg", "aliases": {"foodseg103": ["egg"], "mf150": ["egg"]}},
+    {"id": "chicken", "name": "Chicken", "aliases": {"foodseg103": ["chicken"], "mf150": ["chicken"]}},
+    {"id": "sambal", "name": "Sambal", "aliases": {"mf150": ["sambal"]}}
+  ]
+}
