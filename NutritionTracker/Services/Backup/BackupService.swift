@@ -63,14 +63,14 @@ struct BarcodeBackup: Codable {
     }
 }
 struct NutritionBackup: Codable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var exportDate = Date()
     var profile: ProfileBackup?
     var target: TargetBackup?
     var foodEntries: [FoodBackup]
     var barcodeCache: [BarcodeBackup]
     func validate() throws {
-        guard schemaVersion == 1 else { throw BackupError.unsupportedVersion }
+        guard schemaVersion == 1 || schemaVersion == 2 else { throw BackupError.unsupportedVersion }
         guard foodEntries.allSatisfy({ $0.quantity > 0 && $0.servingSize > 0 && $0.nutrition.isValid &&
             $0.ingredients.allSatisfy { $0.quantity > 0 && $0.servingSize > 0 && $0.nutrition.isValid } }) else {
             throw BackupError.invalidData
@@ -84,12 +84,20 @@ enum BackupError: LocalizedError {
 }
 enum BackupService {
     static func encode(_ backup: NutritionBackup) throws -> Data {
-        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // Version 1 used ISO 8601 without fractional seconds. Version 2 preserves Date precision.
+        encoder.dateEncodingStrategy = backup.schemaVersion == 1 ? .iso8601 : .deferredToDate
         return try encoder.encode(backup)
     }
     static func decode(_ data: Data) throws -> NutritionBackup {
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let version = try JSONDecoder().decode(BackupVersion.self, from: data).schemaVersion
+        guard version == 1 || version == 2 else { throw BackupError.unsupportedVersion }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = version == 1 ? .iso8601 : .deferredToDate
         let backup = try decoder.decode(NutritionBackup.self, from: data)
         try backup.validate(); return backup
     }
 }
+
+private struct BackupVersion: Decodable { let schemaVersion: Int }

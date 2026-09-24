@@ -14,7 +14,7 @@ xcodebuild test -project NutritionTracker.xcodeproj -scheme NutritionTracker -de
 xcodebuild build -project NutritionTracker.xcodeproj -scheme NutritionTracker -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 ```
 
-The generated project has a shared scheme. SwiftData stores profile, targets, food, ingredients, barcode cache and optional correction records in the app container. Backup JSON is only an interchange format, not the live database. The app does not erase its database on update; model changes should use a SwiftData migration plan before changing released schemas. Uninstalling removes local data, so export a backup first.
+The generated project has a shared scheme. SwiftData stores profile, targets, food, ingredients, barcode cache and optional correction records in `Library/Application Support/default.store` inside the app container. The app creates that directory before opening the store. Backup JSON is only an interchange format, not the live database. The app does not erase its database on update; model changes should use a SwiftData migration plan before changing released schemas. Uninstalling removes local data, so export a backup first.
 
 ## Nutrition and images
 
@@ -74,7 +74,7 @@ Potential Malaysian expansion sources include Malaysia Food-11, MF-150, and the 
 
 ## Barcode, backup, secrets and sideloading
 
-Barcode lookup uses the [Open Food Facts product API](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/). Missing fields are treated as unknown. Settings exports a versioned JSON file through the native document share flow and validates a backup before import. Import replaces current records; export first if you need the previous data. Image files are not embedded in JSON backup.
+Barcode lookup uses the [Open Food Facts product API](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/). Missing fields are treated as unknown. Settings exports a version 2 JSON file with full date precision through the native document share flow; version 1 ISO 8601 backups remain importable. Import validates a backup before replacing current records; export first if you need the previous data. Image files are not embedded in JSON backup.
 
 An optional API key can be entered or deleted in Settings and is stored in iOS Keychain. No default key or provider is compiled into the app. Do not commit secrets, provisioning files, data, weights, or personal photos. A build-time key inside an IPA is extractable, so the workflow does not inject one.
 

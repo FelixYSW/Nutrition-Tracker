@@ -6,9 +6,7 @@ struct NutritionTrackerApp: App {
     let container: ModelContainer?
 
     init() {
-        container = try? ModelContainer(for: UserProfile.self, NutritionTarget.self,
-                                        FoodEntry.self, IngredientItem.self,
-                                        BarcodeProductCache.self, CorrectionRecord.self)
+        container = try? AppModelStore.makeContainer()
     }
 
     var body: some Scene {

@@ -50,9 +50,24 @@ final class NutritionTrackerTests: XCTestCase {
                               ingredients: [IngredientItem(name: "A", nutrition: Nutrition(calories: 50))])
         let backup = NutritionBackup(profile: nil, target: nil, foodEntries: [FoodBackup(entry)], barcodeCache: [])
         let decoded = try BackupService.decode(BackupService.encode(backup))
+        XCTAssertEqual(decoded.schemaVersion, 2)
         XCTAssertEqual(decoded.foodEntries, backup.foodEntries)
+        var legacy = backup; legacy.schemaVersion = 1
+        let decodedLegacy = try BackupService.decode(BackupService.encode(legacy))
+        XCTAssertEqual(decodedLegacy.foodEntries.first?.name, "Test")
         var bad = decoded; bad.schemaVersion = 99
         XCTAssertThrowsError(try BackupService.decode(BackupService.encode(bad)))
+    }
+    func testStoreCreatesApplicationSupportDirectory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NutritionTracker-\(UUID().uuidString)", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        let container = try AppModelStore.makeContainer(directory: directory)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+        let context = ModelContext(container)
+        context.insert(FoodEntry(name: "Stored food", nutrition: Nutrition(calories: 90)))
+        try context.save()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("default.store").path))
     }
     func testAIResultReviewDraftAndConfidence() {
         let result = AnalysisResult(detections: [Detection(name: "rice", canonicalID: "rice", confidence: 0.43)],
