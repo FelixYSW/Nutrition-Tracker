@@ -56,6 +56,7 @@ struct CircularNutritionProgress: View {
                     .rotationEffect(.degrees(-90))
                 Text(consumed.formatted(.number.precision(.fractionLength(0))))
                     .font(.subheadline.bold()).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.65)
             }.frame(width: size, height: size)
             Text(title).font(.caption.bold())
             Text("/ \(Int(target))").font(.caption2).foregroundStyle(.secondary)
@@ -66,6 +67,8 @@ struct CircularNutritionProgress: View {
 
 struct FoodEntryCard: View {
     let entry: FoodEntry
+    var onEdit: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
     @State private var expanded = false
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -83,6 +86,16 @@ struct FoodEntryCard: View {
                 VStack(alignment: .trailing, spacing: 1) {
                     Text("\(Int(entry.total.calories))").font(.title3.bold()).monospacedDigit()
                     Text("kcal").font(.caption2).foregroundStyle(.secondary)
+                }
+                if let onEdit, let onDelete {
+                    Menu {
+                        Button(action: onEdit) { Label("Edit", systemImage: "pencil") }
+                        Button(role: .destructive, action: onDelete) { Label("Delete", systemImage: "trash") }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.headline)
+                            .frame(width: 44, height: 44)
+                            .accessibilityLabel("Actions for \(entry.name)")
+                    }
                 }
             }
             NutritionSummaryView(nutrition: entry.total)

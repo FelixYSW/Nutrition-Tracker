@@ -15,6 +15,7 @@ struct RootView: View {
                     HistoryView().tabItem { Label("Calendar", systemImage: "calendar") }.tag(3)
                 }
                 .tint(AppTheme.accent)
+                .background(AppTheme.background.ignoresSafeArea())
             }
         }.environment(drafts)
     }

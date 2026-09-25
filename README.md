@@ -2,6 +2,10 @@
 
 Native iOS 17+ nutrition log built with SwiftUI and SwiftData. It supports onboarding, editable targets, manual simple and composite foods, a daily dashboard, calendar history, camera/photo analysis review, packaged-food barcode lookup, local backup, and optional local AI model installation. Nutrition targets and image estimates are informational, not medical advice. The four tabs are Dashboard, Scan, Add Meal, and Calendar; Settings is behind the Dashboard gear.
 
+## Interface and navigation
+
+Every page uses an edge-to-edge background while its controls remain inside the iPhone's safe areas; content is centered and adapts to narrow screens, landscape, and larger text sizes. Dashboard, Scan, Add Meal, and Calendar are each one tab tap away, and a food name is ready for entry as soon as Add Meal opens. Camera, library, and barcode actions take one more tap. Food cards expose an actions menu and the native long-press menu for editing or deletion; dates, photos, pickers, and confirmation dialogs use familiar iOS patterns. Empty views explain what will appear, analysis shows progress, and failures use clear alerts or recovery actions. Photo and barcode results always lead to editable Add Meal review, and saving returns to Dashboard, so navigation stays predictable.
+
 ## Build on a Mac
 
 Requires Xcode with the iOS 17+ SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The bundle ID is always `com.felix.NutritionTracker`.

@@ -19,8 +19,26 @@ struct AppCard: ViewModifier {
     }
 }
 
+struct AppPageContent: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let top: CGFloat
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: 600)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 16 : 20)
+            .padding(.top, top)
+            .padding(.bottom, 32)
+    }
+}
+
 extension View {
     func appCard() -> some View { modifier(AppCard()) }
+    func appPageContent(top: CGFloat = 18) -> some View { modifier(AppPageContent(top: top)) }
+    func appPageSurface() -> some View {
+        frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppTheme.background.ignoresSafeArea())
+    }
 }
 
 enum AppKeyboard {

@@ -29,17 +29,10 @@ struct AddMealView: View {
                             .frame(maxWidth: .infinity, alignment: .leading).appCard()
                     }
 
-                    if store.drafts.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "plus.circle.dashed").font(.system(size: 42)).foregroundStyle(AppTheme.accent)
-                            Text("Start with a food").font(.headline)
-                            Text("You can add more foods before saving.")
-                                .font(.subheadline).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity).padding(.vertical, 28).appCard()
-                    }
-
                     ForEach($store.drafts) { $draft in
-                        FoodDraftCard(draft: $draft) { store.drafts.removeAll { $0.id == draft.id } }
+                        FoodDraftCard(draft: $draft, showsDelete: store.canRemoveFood) {
+                            store.remove(draft.id)
+                        }
                     }
 
                     Button { store.drafts.append(FoodDraft()) } label: {
@@ -49,10 +42,10 @@ struct AddMealView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(AppTheme.accent)
                     .background(AppTheme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 32)
+                }.appPageContent()
             }
             .scrollDismissesKeyboard(.interactively)
-            .background(AppTheme.background.ignoresSafeArea())
+            .appPageSurface()
             .navigationTitle("Add Meal")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -70,6 +63,10 @@ struct AddMealView: View {
                             .font(.headline).frame(maxWidth: .infinity).frame(minHeight: 50)
                             .buttonStyle(.borderedProminent).tint(AppTheme.accent)
                             .disabled(!store.drafts.allSatisfy(\.isValid))
+                        if !store.drafts.allSatisfy(\.isValid) {
+                            Text("Add a food name and valid amounts to save.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 8)
                         .background(.bar)
                 }
@@ -106,7 +103,7 @@ struct AddMealView: View {
         }
         do {
             try context.save()
-            store.drafts = []; store.aiOriginal = nil; store.pendingImage = nil; store.editingID = nil
+            store.reset()
             store.selectedTab = 0
         } catch { self.error = error.localizedDescription }
     }
@@ -129,8 +126,27 @@ private struct UnitMenu: View {
     }
 }
 
+private struct QuantityInputRow: View {
+    @Binding var unit: ServingUnit
+    @Binding var quantity: Double
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                UnitMenu(unit: $unit)
+                Spacer(minLength: 8)
+                QuantityStepper(value: $quantity, unit: unit)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                UnitMenu(unit: $unit)
+                QuantityStepper(value: $quantity, unit: unit)
+            }
+        }
+    }
+}
+
 struct FoodDraftCard: View {
     @Binding var draft: FoodDraft
+    let showsDelete: Bool
     let remove: () -> Void
 
     var body: some View {
@@ -142,8 +158,10 @@ struct FoodDraftCard: View {
                     .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
                 TextField("Food name", text: $draft.name)
                     .font(.title3.bold()).textInputAutocapitalization(.words)
-                Button(role: .destructive, action: remove) { Image(systemName: "trash") }
-                    .accessibilityLabel("Remove food")
+                if showsDelete {
+                    Button(role: .destructive, action: remove) { Image(systemName: "trash") }
+                        .accessibilityLabel("Remove food")
+                }
             }
 
             Divider()
@@ -157,11 +175,7 @@ struct FoodDraftCard: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("QUANTITY").font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
-                HStack {
-                    UnitMenu(unit: $draft.unit)
-                    Spacer(minLength: 8)
-                    QuantityStepper(value: $draft.quantity, unit: draft.unit)
-                }
+                QuantityInputRow(unit: $draft.unit, quantity: $draft.quantity)
                 HStack {
                     Text("Serving size").font(.subheadline).foregroundStyle(.secondary)
                     Spacer()
@@ -171,7 +185,9 @@ struct FoodDraftCard: View {
                         .frame(height: 40).background(AppTheme.field, in: RoundedRectangle(cornerRadius: 11))
                 }
             }
-            if draft.quantity == 0 { Button("Remove zero-quantity food", role: .destructive, action: remove) }
+            if draft.quantity == 0 && showsDelete {
+                Button("Remove zero-quantity food", role: .destructive, action: remove)
+            }
 
             Divider()
             if draft.ingredients.isEmpty {
@@ -213,11 +229,7 @@ struct IngredientCard: View {
                 Text("Detection confidence: \(Int(confidence * 100))%\(confidence < 0.6 ? " - check this item" : "")")
                     .font(.caption).foregroundStyle(confidence < 0.6 ? Color.orange : Color.secondary)
             }
-            HStack {
-                UnitMenu(unit: $ingredient.unit)
-                Spacer(minLength: 8)
-                QuantityStepper(value: $ingredient.quantity, unit: ingredient.unit)
-            }
+            QuantityInputRow(unit: $ingredient.unit, quantity: $ingredient.quantity)
             if ingredient.quantity == 0 { Button("Remove zero-quantity ingredient", role: .destructive, action: remove) }
             HStack {
                 Text("Serving size").font(.subheadline).foregroundStyle(.secondary)

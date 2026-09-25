@@ -68,9 +68,9 @@ struct ScanView: View {
                             Button("Scan Another Barcode") { missingBarcode = nil; openBarcode() }
                         }.frame(maxWidth: .infinity, alignment: .leading).appCard()
                     }
-                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 32)
+                }.appPageContent()
             }
-                .background(AppTheme.background.ignoresSafeArea())
+                .appPageSurface()
                 .navigationTitle("Scan")
                 .navigationBarTitleDisplayMode(.inline)
                 .onChange(of: photoItem) { _, item in

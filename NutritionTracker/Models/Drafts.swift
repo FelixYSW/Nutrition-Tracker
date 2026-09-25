@@ -60,11 +60,20 @@ struct FoodDraft: Identifiable, Codable, Equatable {
 }
 
 @MainActor @Observable final class DraftStore {
-    var drafts: [FoodDraft] = []
+    var drafts: [FoodDraft] = [FoodDraft()]
     var selectedTab = 0
     var aiOriginal: Data?
     var pendingImage: Data?
     var editingID: UUID?
-    func load(_ draft: FoodDraft) { drafts = [draft]; selectedTab = 2 }
-    func edit(_ entry: FoodEntry) { editingID = entry.id; load(FoodDraft(entry)) }
+    var canRemoveFood: Bool { drafts.count > 1 }
+    func remove(_ id: UUID) {
+        guard canRemoveFood else { return }
+        drafts.removeAll { $0.id == id }
+    }
+    func reset() {
+        drafts = [FoodDraft()]
+        aiOriginal = nil; pendingImage = nil; editingID = nil
+    }
+    func load(_ draft: FoodDraft) { editingID = nil; drafts = [draft]; selectedTab = 2 }
+    func edit(_ entry: FoodEntry) { load(FoodDraft(entry)); editingID = entry.id }
 }

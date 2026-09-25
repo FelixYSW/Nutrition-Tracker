@@ -114,10 +114,10 @@ struct SettingsView: View {
                         Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 32)
+                }.appPageContent()
             }
             .scrollDismissesKeyboard(.interactively)
-            .background(AppTheme.background.ignoresSafeArea())
+            .appPageSurface()
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

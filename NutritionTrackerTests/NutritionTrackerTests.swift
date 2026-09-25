@@ -85,4 +85,18 @@ final class NutritionTrackerTests: XCTestCase {
         XCTAssertEqual(repository.food(for: "rice_white")?.per100g.calories, 130)
         XCTAssertNil(repository.food(for: "rice_unknown"))
     }
+    @MainActor func testAddMealStartsWithOneFoodAndKeepsLastCard() {
+        let store = DraftStore()
+        XCTAssertEqual(store.drafts.count, 1)
+        XCTAssertFalse(store.canRemoveFood)
+        store.remove(store.drafts[0].id)
+        XCTAssertEqual(store.drafts.count, 1)
+        store.drafts.append(FoodDraft())
+        XCTAssertTrue(store.canRemoveFood)
+        store.remove(store.drafts[0].id)
+        XCTAssertEqual(store.drafts.count, 1)
+        store.reset()
+        XCTAssertEqual(store.drafts.count, 1)
+        XCTAssertFalse(store.canRemoveFood)
+    }
 }

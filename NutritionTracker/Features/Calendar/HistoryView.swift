@@ -22,9 +22,9 @@ struct HistoryView: View {
                     AppSectionHeading(title: "Food log", trailing: "\(entries.count) items")
                     if entries.isEmpty { EmptyStateView(title: "No food recorded.") }
                     ForEach(entries, id: \.id) { FoodEntryCard(entry: $0) }
-                }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 32)
+                }.appPageContent()
             }
-            .background(AppTheme.background.ignoresSafeArea())
+            .appPageSurface()
             .navigationTitle("Calendar")
             .navigationBarTitleDisplayMode(.inline)
         }

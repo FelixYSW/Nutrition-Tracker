@@ -55,10 +55,10 @@ struct OnboardingView: View {
                     if step == 0 { personalDetails }
                     else if step == 1 { routineDetails }
                     else { targetDetails }
-                }.padding(.horizontal, 20).padding(.top, 24).padding(.bottom, 32)
+                }.appPageContent(top: 24)
             }
             .scrollDismissesKeyboard(.interactively)
-            .background(AppTheme.background.ignoresSafeArea())
+            .appPageSurface()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { AppKeyboard.dismiss() } } }
             .safeAreaInset(edge: .bottom) {
