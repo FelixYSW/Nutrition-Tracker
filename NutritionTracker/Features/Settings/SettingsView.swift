@@ -82,9 +82,10 @@ struct SettingsView: View {
                     SettingsSection("AI", icon: "sparkles") {
                         statusRow("Food recognition", value: modelStatus("FoodRecognition"))
                         statusRow("Portion estimation", value: modelStatus("FoodPortion"))
+                        Text("REMOTE API KEY (OPTIONAL)").font(.caption.bold()).tracking(1)
+                            .foregroundStyle(.secondary)
                         SecureField("Optional remote API key", text: $apiKey)
-                            .textContentType(.password).padding(12)
-                            .background(AppTheme.field, in: RoundedRectangle(cornerRadius: 12))
+                            .textContentType(.password).appInputBox()
                         HStack {
                             Button("Save Key") {
                                 message = SecretStore.save(apiKey) ? "Key stored in Keychain." : "Could not store key."
@@ -150,10 +151,7 @@ struct SettingsView: View {
         HStack {
             Text(title).font(.subheadline)
             Spacer()
-            TextField(title, value: value, format: .number)
-                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                .font(.subheadline.bold()).frame(width: 72)
-            Text(unit).font(.caption).foregroundStyle(.secondary)
+            NumericEntryField(value: value, unit: unit, hint: "Enter \(title.lowercased())")
         }.frame(minHeight: 44)
     }
     private func statusRow(_ title: String, value: String) -> some View {

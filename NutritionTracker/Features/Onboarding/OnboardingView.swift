@@ -94,7 +94,7 @@ struct OnboardingView: View {
             HStack {
                 Text("Target weight").font(.subheadline)
                 Spacer()
-                OptionalNumberField(value: $targetWeight).frame(width: 90)
+                OptionalNumberField(value: $targetWeight, hint: "e.g. 65").frame(width: 104)
                 Text("kg").font(.caption).foregroundStyle(.secondary)
             }
         }.appCard()
@@ -115,7 +115,7 @@ struct OnboardingView: View {
             HStack {
                 Text("Body fat").font(.subheadline)
                 Spacer()
-                OptionalNumberField(value: $bodyFat).frame(width: 90)
+                OptionalNumberField(value: $bodyFat, hint: "e.g. 20").frame(width: 104)
                 Text("%").font(.caption).foregroundStyle(.secondary)
             }
             Text("Training days are stored for context. Activity already includes exercise calories.")
@@ -137,10 +137,7 @@ struct OnboardingView: View {
         HStack {
             Text(title).font(.subheadline)
             Spacer()
-            TextField(title, value: value, format: .number)
-                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                .font(.subheadline.bold()).frame(width: 90)
-            Text(unit).font(.caption).foregroundStyle(.secondary)
+            NumericEntryField(value: value, unit: unit, hint: "Enter \(title.lowercased())")
         }.frame(minHeight: 44)
     }
 

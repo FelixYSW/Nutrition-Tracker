@@ -5,6 +5,17 @@ enum FoodSource: String, Codable, CaseIterable { case manual, photoAI, barcode }
 enum ServingUnit: String, Codable, CaseIterable, Identifiable {
     case serving, piece, gram, millilitre, scoop, tablespoon, teaspoon
     var id: String { rawValue }
+    var shortLabel: String {
+        switch self {
+        case .serving: "srv"
+        case .piece: "pc"
+        case .gram: "g"
+        case .millilitre: "ml"
+        case .scoop: "scoop"
+        case .tablespoon: "tbsp"
+        case .teaspoon: "tsp"
+        }
+    }
     var step: Double {
         switch self { case .piece: 1; case .gram: 10; case .millilitre: 25; case .scoop: 0.5; default: 0.25 }
     }

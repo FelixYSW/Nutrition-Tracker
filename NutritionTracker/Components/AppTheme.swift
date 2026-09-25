@@ -34,6 +34,13 @@ struct AppPageContent: ViewModifier {
 
 extension View {
     func appCard() -> some View { modifier(AppCard()) }
+    func appInputBox() -> some View {
+        padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .background(AppTheme.field, in: RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11)
+                .strokeBorder(AppTheme.accent.opacity(0.25), lineWidth: 1))
+    }
     func appPageContent(top: CGFloat = 18) -> some View { modifier(AppPageContent(top: top)) }
     func appPageSurface() -> some View {
         frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -151,13 +151,16 @@ struct FoodDraftCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            Text("FOOD NAME").font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Image(systemName: draft.ingredients.isEmpty ? "fork.knife" : "square.stack.3d.up.fill")
                     .foregroundStyle(AppTheme.accent)
                     .frame(width: 38, height: 38)
                     .background(AppTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
-                TextField("Food name", text: $draft.name)
-                    .font(.title3.bold()).textInputAutocapitalization(.words)
+                TextField("e.g. Chicken rice", text: $draft.name)
+                    .font(.subheadline.bold()).textInputAutocapitalization(.words)
+                    .appInputBox()
+                    .accessibilityLabel("Food name")
                 if showsDelete {
                     Button(role: .destructive, action: remove) { Image(systemName: "trash") }
                         .accessibilityLabel("Remove food")
@@ -179,11 +182,11 @@ struct FoodDraftCard: View {
                 HStack {
                     Text("Serving size").font(.subheadline).foregroundStyle(.secondary)
                     Spacer()
-                    TextField("Size", value: $draft.servingSize, format: .number)
-                        .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                        .font(.subheadline.bold()).frame(width: 94).padding(.horizontal, 12)
-                        .frame(height: 40).background(AppTheme.field, in: RoundedRectangle(cornerRadius: 11))
+                    NumericEntryField(value: $draft.servingSize, unit: draft.unit.shortLabel,
+                                      hint: "Serving amount")
                 }
+                Text("The nutrition values below apply to this serving size.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             if draft.quantity == 0 && showsDelete {
                 Button("Remove zero-quantity food", role: .destructive, action: remove)
@@ -219,9 +222,12 @@ struct IngredientCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("INGREDIENT NAME").font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
             HStack {
-                TextField("Ingredient name", text: $ingredient.name)
+                TextField("e.g. Rice", text: $ingredient.name)
                     .font(.subheadline.bold()).textInputAutocapitalization(.words)
+                    .appInputBox()
+                    .accessibilityLabel("Ingredient name")
                 Button(role: .destructive, action: remove) { Image(systemName: "trash") }
                     .accessibilityLabel("Remove ingredient")
             }
@@ -234,10 +240,8 @@ struct IngredientCard: View {
             HStack {
                 Text("Serving size").font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
-                TextField("Size", value: $ingredient.servingSize, format: .number)
-                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                    .font(.subheadline.bold()).frame(width: 94).padding(.horizontal, 12)
-                    .frame(height: 40).background(AppTheme.card, in: RoundedRectangle(cornerRadius: 11))
+                NumericEntryField(value: $ingredient.servingSize, unit: ingredient.unit.shortLabel,
+                                  hint: "Serving amount")
             }
             DisclosureGroup("Nutrition per serving") { NutritionEditor(nutrition: $ingredient.nutrition) }
                 .font(.subheadline.bold()).tint(AppTheme.accent)

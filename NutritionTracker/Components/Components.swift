@@ -140,32 +140,57 @@ struct NutritionEditor: View {
     @Binding var nutrition: Nutrition
     var body: some View {
         Group {
-            field("Calories", value: $nutrition.calories)
-            field("Protein (g)", value: $nutrition.protein)
-            field("Carbs (g)", value: $nutrition.carbs)
-            field("Fat (g)", value: $nutrition.fat)
-            field("Fibre (g)", value: $nutrition.fibre)
+            field("Calories", unit: "kcal", value: $nutrition.calories)
+            field("Protein", unit: "g", value: $nutrition.protein)
+            field("Carbs", unit: "g", value: $nutrition.carbs)
+            field("Fat", unit: "g", value: $nutrition.fat)
+            field("Fibre", unit: "g", value: $nutrition.fibre)
         }
     }
-    private func field(_ label: String, value: Binding<Double>) -> some View {
+    private func field(_ label: String, unit: String, value: Binding<Double>) -> some View {
         HStack(spacing: 12) {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            TextField(label, value: value, format: .number)
-                .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                .font(.subheadline.bold()).monospacedDigit()
-                .frame(width: 94).padding(.horizontal, 12).frame(height: 40)
-                .background(AppTheme.field, in: RoundedRectangle(cornerRadius: 11))
+            NumericEntryField(value: value, unit: unit, hint: "Enter \(label.lowercased())")
         }.frame(minHeight: 44)
+    }
+}
+
+struct NumericEntryField: View {
+    @Binding var value: Double
+    let unit: String
+    let hint: String
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(hint).font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.75)
+            HStack(spacing: 4) {
+                TextField("0", value: $value, format: .number)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                    .font(.subheadline.bold()).monospacedDigit()
+                    .accessibilityLabel(hint)
+                Text(unit).font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 94)
+        .padding(.vertical, 5)
+        .appInputBox()
     }
 }
 
 struct OptionalNumberField: View {
     @Binding var value: Double?
+    var hint = "Optional"
     var body: some View {
-        TextField("Optional", text: Binding(
-            get: { value.map { String($0) } ?? "" },
-            set: { value = $0.isEmpty ? nil : Double($0) }
-        )).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(hint).font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.75)
+            TextField("Optional", text: Binding(
+                get: { value.map { String($0) } ?? "" },
+                set: { value = $0.isEmpty ? nil : Double($0) }
+            ))
+            .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+            .font(.subheadline.bold())
+        }.padding(.vertical, 5).appInputBox()
     }
 }
