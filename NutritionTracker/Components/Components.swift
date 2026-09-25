@@ -3,15 +3,32 @@ import SwiftUI
 struct QuantityStepper: View {
     @Binding var value: Double
     var unit: ServingUnit
+    @State private var quantityText: String
+    @FocusState private var quantityFocused: Bool
+
+    init(value: Binding<Double>, unit: ServingUnit) {
+        _value = value
+        self.unit = unit
+        _quantityText = State(initialValue: Self.display(value.wrappedValue))
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            Button { value = max(0, value - unit.step) } label: {
+        HStack(spacing: 4) {
+            Button { adjust(by: -unit.step) } label: {
                 Image(systemName: "minus").font(.subheadline.bold()).frame(width: 42, height: 42)
             }
                 .accessibilityLabel("Decrease quantity")
-            Text(value.formatted(.number.precision(.fractionLength(0...2))))
-                .font(.subheadline.bold()).monospacedDigit().frame(minWidth: 42)
-            Button { value += unit.step } label: {
+            TextField("Quantity", text: $quantityText)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.center)
+                .font(.subheadline.bold()).monospacedDigit()
+                .focused($quantityFocused)
+                .frame(width: 68, height: 38)
+                .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(AppTheme.accent.opacity(0.35), lineWidth: 1))
+                .accessibilityLabel("Quantity")
+            Button { adjust(by: unit.step) } label: {
                 Image(systemName: "plus").font(.subheadline.bold()).frame(width: 42, height: 42)
             }
                 .accessibilityLabel("Increase quantity")
@@ -19,6 +36,25 @@ struct QuantityStepper: View {
         .buttonStyle(.plain).foregroundStyle(AppTheme.accent)
         .background(AppTheme.accent.opacity(0.10), in: Capsule())
         .accessibilityElement(children: .contain)
+        .onChange(of: quantityText) { _, newText in
+            let parsed = Double(newText.replacingOccurrences(of: ",", with: "."))
+            value = parsed.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
+        }
+        .onChange(of: value) { _, newValue in
+            if !quantityFocused { quantityText = Self.display(newValue) }
+        }
+        .onChange(of: quantityFocused) { _, focused in
+            if !focused { quantityText = Self.display(value) }
+        }
+    }
+
+    private func adjust(by change: Double) {
+        value = max(0, value + change)
+        quantityText = Self.display(value)
+    }
+
+    private static func display(_ value: Double) -> String {
+        value.formatted(.number.grouping(.never).precision(.fractionLength(0...6)))
     }
 }
 

@@ -17,9 +17,9 @@ struct AddMealView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("FOOD JOURNAL").font(.caption.bold()).tracking(1.4).foregroundStyle(AppTheme.accent)
-                        Text("What did you eat?").font(.largeTitle.bold())
-                        Text("Add a food or build a dish from ingredients.")
+                        Text("ADD TO JOURNAL").font(.caption.bold()).tracking(1.4).foregroundStyle(AppTheme.accent)
+                        Text("Food cart").font(.largeTitle.bold())
+                        Text("Add foods, adjust quantities, then save them together.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }.padding(.bottom, 4)
 
@@ -30,13 +30,15 @@ struct AddMealView: View {
                     }
 
                     ForEach($store.drafts) { $draft in
-                        FoodDraftCard(draft: $draft, showsDelete: store.canRemoveFood) {
+                        FoodDraftCard(draft: $draft,
+                                      itemNumber: (store.drafts.firstIndex { $0.id == draft.id } ?? 0) + 1,
+                                      showsDelete: store.canRemoveFood) {
                             store.remove(draft.id)
                         }
                     }
 
                     Button { store.drafts.append(FoodDraft()) } label: {
-                        Label("Add another food", systemImage: "plus.circle.fill")
+                        Label("Add food to cart", systemImage: "plus.circle.fill")
                             .font(.headline).frame(maxWidth: .infinity).frame(minHeight: 48)
                     }
                     .buttonStyle(.plain)
@@ -57,9 +59,15 @@ struct AddMealView: View {
             .safeAreaInset(edge: .bottom) {
                 if !store.drafts.isEmpty && !keyboardVisible {
                     VStack(spacing: 10) {
+                        HStack {
+                            Text("Cart total").font(.headline)
+                            Spacer()
+                            Text("\(store.drafts.count) \(store.drafts.count == 1 ? "food" : "foods")")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
                         NutritionSummaryView(nutrition: store.drafts.reduce(.zero) { $0 + $1.total })
                         Button(store.drafts.allSatisfy { Calendar.autoupdatingCurrent.isDateInToday($0.consumedAt) }
-                               ? "Add to Today" : "Save Food") { save() }
+                               ? "Add to Today" : "Save to Journal") { save() }
                             .font(.headline).frame(maxWidth: .infinity).frame(minHeight: 50)
                             .buttonStyle(.borderedProminent).tint(AppTheme.accent)
                             .disabled(!store.drafts.allSatisfy(\.isValid))
@@ -146,12 +154,13 @@ private struct QuantityInputRow: View {
 
 struct FoodDraftCard: View {
     @Binding var draft: FoodDraft
+    let itemNumber: Int
     let showsDelete: Bool
     let remove: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("FOOD NAME").font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
+            Text("FOOD \(itemNumber)").font(.caption.bold()).tracking(1).foregroundStyle(AppTheme.accent)
             HStack(spacing: 10) {
                 Image(systemName: draft.ingredients.isEmpty ? "fork.knife" : "square.stack.3d.up.fill")
                     .foregroundStyle(AppTheme.accent)
@@ -179,23 +188,12 @@ struct FoodDraftCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("QUANTITY").font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
                 QuantityInputRow(unit: $draft.unit, quantity: $draft.quantity)
-                HStack {
-                    Text("Serving size").font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    NumericEntryField(value: $draft.servingSize, unit: draft.unit.shortLabel,
-                                      hint: "Serving amount")
-                }
-                Text("The nutrition values below apply to this serving size.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            if draft.quantity == 0 && showsDelete {
-                Button("Remove zero-quantity food", role: .destructive, action: remove)
-            }
-
             Divider()
             if draft.ingredients.isEmpty {
-                DisclosureGroup("Nutrition per serving") { NutritionEditor(nutrition: $draft.nutrition) }
-                    .font(.subheadline.bold()).tint(AppTheme.accent)
+                Text("NUTRITION PER \(draft.servingSize.formatted(.number.precision(.fractionLength(0...2)))) \(draft.unit.shortLabel.uppercased())")
+                    .font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
+                NutritionEditor(nutrition: $draft.nutrition)
             } else {
                 AppSectionHeading(title: "Ingredients", trailing: "\(draft.ingredients.count)")
                 ForEach($draft.ingredients) { $ingredient in
@@ -205,12 +203,6 @@ struct FoodDraftCard: View {
             Button { draft.ingredients.append(IngredientDraft()) } label: {
                 Label("Add ingredient", systemImage: "plus.circle.fill")
                     .font(.subheadline.bold()).foregroundStyle(AppTheme.accent)
-            }
-            Divider()
-            HStack {
-                Text("Food total").font(.subheadline.bold())
-                Spacer()
-                Text("\(Int(draft.total.calories)) kcal").font(.headline).monospacedDigit()
             }
         }.appCard()
     }
@@ -236,20 +228,9 @@ struct IngredientCard: View {
                     .font(.caption).foregroundStyle(confidence < 0.6 ? Color.orange : Color.secondary)
             }
             QuantityInputRow(unit: $ingredient.unit, quantity: $ingredient.quantity)
-            if ingredient.quantity == 0 { Button("Remove zero-quantity ingredient", role: .destructive, action: remove) }
-            HStack {
-                Text("Serving size").font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-                NumericEntryField(value: $ingredient.servingSize, unit: ingredient.unit.shortLabel,
-                                  hint: "Serving amount")
-            }
-            DisclosureGroup("Nutrition per serving") { NutritionEditor(nutrition: $ingredient.nutrition) }
-                .font(.subheadline.bold()).tint(AppTheme.accent)
-            HStack {
-                Text("Ingredient total").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text("\(Int(ingredient.total.calories)) kcal").font(.subheadline.bold()).monospacedDigit()
-            }
+            Text("NUTRITION PER \(ingredient.servingSize.formatted(.number.precision(.fractionLength(0...2)))) \(ingredient.unit.shortLabel.uppercased())")
+                .font(.caption.bold()).tracking(1).foregroundStyle(.secondary)
+            NutritionEditor(nutrition: $ingredient.nutrition)
         }.padding(14).background(AppTheme.field, in: RoundedRectangle(cornerRadius: 16))
     }
 }
