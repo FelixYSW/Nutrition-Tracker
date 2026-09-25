@@ -176,18 +176,18 @@ struct NutritionEditor: View {
     @Binding var nutrition: Nutrition
     var body: some View {
         Group {
-            field("Calories", unit: "kcal", value: $nutrition.calories)
-            field("Protein", unit: "g", value: $nutrition.protein)
-            field("Carbs", unit: "g", value: $nutrition.carbs)
-            field("Fat", unit: "g", value: $nutrition.fat)
-            field("Fibre", unit: "g", value: $nutrition.fibre)
+            field("Calories", unit: "kcal", example: "e.g. 250", value: $nutrition.calories)
+            field("Protein", unit: "g", example: "e.g. 20", value: $nutrition.protein)
+            field("Carbs", unit: "g", example: "e.g. 30", value: $nutrition.carbs)
+            field("Fat", unit: "g", example: "e.g. 10", value: $nutrition.fat)
+            field("Fibre", unit: "g", example: "e.g. 5", value: $nutrition.fibre)
         }
     }
-    private func field(_ label: String, unit: String, value: Binding<Double>) -> some View {
+    private func field(_ label: String, unit: String, example: String, value: Binding<Double>) -> some View {
         HStack(spacing: 12) {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            NumericEntryField(value: value, unit: unit, hint: "Enter \(label.lowercased())")
+            NumericEntryField(value: value, unit: unit, hint: "Enter \(label.lowercased())", example: example)
         }.frame(minHeight: 44)
     }
 }
@@ -196,21 +196,52 @@ struct NumericEntryField: View {
     @Binding var value: Double
     let unit: String
     let hint: String
+    var example: String = "0"
+    @State private var entryText: String
+    @FocusState private var isFocused: Bool
+
+    init(value: Binding<Double>, unit: String, hint: String, example: String = "0") {
+        _value = value
+        self.unit = unit
+        self.hint = hint
+        self.example = example
+        _entryText = State(initialValue: Self.display(value.wrappedValue))
+    }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 2) {
-            Text(hint).font(.caption2).foregroundStyle(.secondary)
+            Text(example == "0" ? hint : example).font(.caption2).foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.75)
             HStack(spacing: 4) {
-                TextField("0", value: $value, format: .number)
+                TextField(example, text: $entryText)
                     .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                     .font(.subheadline.bold()).monospacedDigit()
+                    .focused($isFocused)
                     .accessibilityLabel(hint)
                 Text(unit).font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .frame(width: 94)
+        .frame(width: 104)
         .padding(.vertical, 5)
-        .appInputBox()
+        .padding(.horizontal, 10)
+        .frame(minHeight: 48)
+        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11)
+            .strokeBorder(AppTheme.accent.opacity(0.55), lineWidth: 1.5))
+        .onChange(of: entryText) { _, newText in
+            let parsed = Double(newText.replacingOccurrences(of: ",", with: "."))
+            value = parsed.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil } ?? 0
+        }
+        .onChange(of: value) { _, newValue in
+            if !isFocused { entryText = Self.display(newValue) }
+        }
+        .onChange(of: isFocused) { _, focused in
+            if !focused { entryText = Self.display(value) }
+        }
+    }
+
+    private static func display(_ value: Double) -> String {
+        value.formatted(.number.grouping(.never).precision(.fractionLength(0...6)))
     }
 }
 
