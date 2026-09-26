@@ -68,7 +68,7 @@ struct DashboardView: View {
             .navigationTitle("Dashboard")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button { showSettings = true } label: { Image(systemName: "gearshape.fill").accessibilityLabel("Settings") } }
-            .sheet(isPresented: $showSettings) { SettingsView() }
+            .fullScreenCover(isPresented: $showSettings) { SettingsView() }
             .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in now = .now }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name.NSSystemTimeZoneDidChange)) { _ in now = .now }
             .onChange(of: scenePhase) { _, phase in if phase == .active { now = .now } }

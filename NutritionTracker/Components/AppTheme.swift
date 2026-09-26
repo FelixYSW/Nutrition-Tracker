@@ -24,7 +24,6 @@ struct AppPageContent: ViewModifier {
     let top: CGFloat
     func body(content: Content) -> some View {
         content
-            .frame(maxWidth: 600)
             .frame(maxWidth: .infinity)
             .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 16 : 20)
             .padding(.top, top)

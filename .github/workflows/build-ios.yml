@@ -20,6 +20,8 @@ jobs:
         run: xcodebuild test -project NutritionTracker.xcodeproj -scheme NutritionTracker -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
       - name: Release build
         run: xcodebuild build -project NutritionTracker.xcodeproj -scheme NutritionTracker -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+      - name: Verify full-screen launch configuration
+        run: /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' DerivedData/Build/Products/Release-iphoneos/NutritionTracker.app/Info.plist
       - name: Package unsigned IPA
         shell: bash
         run: |
