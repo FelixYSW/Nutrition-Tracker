@@ -40,11 +40,152 @@ struct OnboardingView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 if step != .welcome {
-                    ProgressView(value: Double(step.progressIndex),
-                                 total: Double(Step.progressTotal))
-                        .padding(.horizontal, AppTheme.cardPadding)
-                        .padding(.top, 8)
-                        .accessibilityLabel("Step \(step.progressIndex + 1) of \(Step.progressTotal)")
+                    HStack(spacing: 5) {
+                        ForEach(0..<Step.progressTotal, id: \.self) { index in
+                            Capsule()
+                                .fill(index <= step.progressIndex
+                                      ? AppTheme.accentFill : AppTheme.subtleFill)
+                                .frame(height: 6)
+                        }
+                    }
+                    .padding(.horizontal, AppTheme.cardPadding + 4)
+                    .padding(.top, 8)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Step \(step.progressIndex + 1) of \(Step.progressTotal)")
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                        stepContent
+                    }
+                    .appPageContent()
+                }
+
+                footer
+            }
+            .appPageSurface()
+            .navigationTitle(step.title)
+            .navigationBarTitleDisplayMode(.large)
+        }
+    }
+
+    // MARK: Steps
+
+    @ViewBuilder
+    private var stepContent: some View {
+        switch step {
+        case .welcome:
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Track what you eat, in ranges.")
+                    .font(.title2.bold())
+                Text("A few questions let the app work out a sensible daily "
+                     + "calorie and macro range for you. Everything stays on "
+                     + "this iPhone.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("These are estimates to aim at, not medical advice.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .appCard()
+
+        case .basics:
+            VStack(alignment: .leading, spacing: 16) {
+                DatePicker("Date of birth",
+                           selection: $input.dateOfBirth,
+                           in: input.dateOfBirthRange,
+                           displayedComponents: .date)
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sex used for the BMR calculation")
+                        .font(.subheadline)
+                    Picker("Sex", selection: $input.sex) {
+                        ForEach(BiologicalSex.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("The Mifflin-St Jeor formula uses a different constant "
+                         + "for each. It only affects the estimate.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .appCard()
+
+        case .body:
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Metric units").font(.caption).foregroundStyle(.secondary)
+
+                SliderEntryRow(title: "Height", value: $input.heightCm,
+                               range: 120...220, step: 1, unitLabel: "cm")
+                SliderEntryRow(title: "Current weight", value: $input.weightKg,
+                               range: 30...200, step: 0.5, unitLabel: "kg",
+                               fractionDigits: 1)
+
+                Divider()
+
+                Toggle("I have a target weight", isOn: $input.hasTargetWeight)
+                    .tint(AppTheme.accentFill)
+                    .onChange(of: input.hasTargetWeight) { _, isOn in
+                        if isOn, input.targetWeightKg <= 0 {
+                            input.targetWeightKg = input.weightKg
+                        }
+                    }
+                if input.hasTargetWeight {
+                    SliderEntryRow(title: "Target weight", value: $input.targetWeightKg,
+                                   range: 30...200, step: 0.5, unitLabel: "kg",
+                                   fractionDigits: 1)
+                }
+
+                Divider()
+
+                Toggle("I know my body-fat percentage", isOn: $input.hasBodyFat)
+                    .tint(AppTheme.accentFill)
+                    .onChange(of: input.hasBodyFat) { _, isOn in
+                        if isOn, input.bodyFatPercent <= 0 { input.bodyFatPercent = 20 }
+                    }
+                if input.hasBodyFat {
+                    SliderEntryRow(title: "Body fat", value: $input.bodyFatPercent,
+                                   range: 3...60, step: 0.5, unitLabel: "%",
+                                   fractionDigits: 1)
+                    Text("Stored for context. It does not change the calculation.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .appCard()
+
+        case .goal: "Your goal"
+            case .activity: "Activity"
+            case .training: "Training"
+            case .review: "Your daily ranges"
+            }
+        }
+
+        /// Progress excludes the welcome screen, which asks for nothing.
+        var progressIndex: Int { max(0, rawValue - 1) }
+        static var progressTotal: Int { Step.allCases.count - 1 }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if step != .welcome {
+                    HStack(spacing: 5) {
+                        ForEach(0..<Step.progressTotal, id: \.self) { index in
+                            Capsule()
+                                .fill(index <= step.progressIndex
+                                      ? AppTheme.accentFill : AppTheme.subtleFill)
+                                .frame(height: 6)
+                        }
+                    }
+                    .padding(.horizontal, AppTheme.cardPadding + 4)
+                    .padding(.top, 8)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Step \(step.progressIndex + 1) of \(Step.progressTotal)")
                 }
 
                 ScrollView {
@@ -170,11 +311,15 @@ struct OnboardingView: View {
 
         case .training:
             VStack(alignment: .leading, spacing: 16) {
-                Stepper("Strength sessions: \(input.strengthSessions)/week",
-                        value: $input.strengthSessions, in: 0...14)
+                SliderEntryRow(title: "Strength sessions per week",
+                               value: Binding(get: { Double(input.strengthSessions) },
+                                              set: { input.strengthSessions = Int($0.rounded()) }),
+                               range: 0...14, step: 1)
                 Divider()
-                Stepper("Cardio sessions: \(input.cardioSessions)/week",
-                        value: $input.cardioSessions, in: 0...14)
+                SliderEntryRow(title: "Cardio sessions per week",
+                               value: Binding(get: { Double(input.cardioSessions) },
+                                              set: { input.cardioSessions = Int($0.rounded()) }),
+                               range: 0...14, step: 1)
                 Text("Kept as part of your profile. Your activity level above "
                      + "already accounts for the calories, so these are not "
                      + "counted twice.")
@@ -255,20 +400,19 @@ struct OnboardingView: View {
             HStack(spacing: 12) {
                 if step != .welcome {
                     Button("Back") { goBack() }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.appSecondary)
                 }
 
                 Button(step == .review ? "Save and start" : "Continue") {
                     advance()
                 }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.appPrimary)
                 .disabled(validationMessage != nil)
             }
         }
-        .padding(.horizontal, AppTheme.cardPadding)
+        .padding(.horizontal, AppTheme.cardPadding + 4)
         .padding(.vertical, 12)
-        .background(.bar)
+        .background(AppTheme.background)
     }
 
     private var validationMessage: String? {
@@ -297,6 +441,11 @@ struct OnboardingView: View {
             return
         }
         guard let next = Step(rawValue: step.rawValue + 1) else { return }
+        if next == .body {
+            // Sliders need a sensible starting point rather than zero.
+            if input.heightCm <= 0 { input.heightCm = 170 }
+            if input.weightKg <= 0 { input.weightKg = 65 }
+        }
         withAnimation(.snappy) { step = next }
 
         // Calculate once on arrival at review, then leave the user's edits alone.
@@ -400,7 +549,7 @@ struct SelectionRow: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.subheadline.weight(.medium))
+                        .font(.headline)
                         .foregroundStyle(.primary)
                     if let detail {
                         Text(detail)
@@ -411,10 +560,18 @@ struct SelectionRow: View {
                 }
                 Spacer(minLength: 8)
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
                     .foregroundStyle(isSelected ? AppTheme.accent : Color.secondary)
                     .accessibilityHidden(true)
             }
-            .appCard()
+            .padding(AppTheme.cardPadding + 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? AppTheme.skyCard : AppTheme.cardBackground,
+                        in: RoundedRectangle(cornerRadius: AppTheme.cornerRadius,
+                                             style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous)
+                    .stroke(AppTheme.accentFill, lineWidth: isSelected ? 2 : 0))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
@@ -429,6 +586,19 @@ struct RangeEditorRow: View {
 
     @State private var minValue: Double = 0
     @State private var maxValue: Double = 0
+
+    /// Upper end of the sliders; generous enough for any realistic target.
+    private var sliderBound: Double {
+        switch nutrient {
+        case .calories: 4500
+        case .protein: 300
+        case .carbs: 600
+        case .fat: 200
+        case .fibre: 80
+        }
+    }
+
+    private var sliderStep: Double { nutrient == .calories ? 50 : 1 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -447,12 +617,12 @@ struct RangeEditorRow: View {
                 }
             }
 
-            HStack(spacing: 10) {
-                NumericEntryField(title: "Minimum", value: $minValue,
-                                  unitLabel: nutrient.unitLabel)
-                NumericEntryField(title: "Maximum", value: $maxValue,
-                                  unitLabel: nutrient.unitLabel)
-            }
+            SliderEntryRow(title: "Minimum", value: $minValue,
+                           range: 0...max(sliderBound, minValue),
+                           step: sliderStep, unitLabel: nutrient.unitLabel)
+            SliderEntryRow(title: "Maximum", value: $maxValue,
+                           range: 0...max(sliderBound, maxValue),
+                           step: sliderStep, unitLabel: nutrient.unitLabel)
 
             if minValue > maxValue, maxValue > 0 {
                 Text("Minimum is above maximum; they will be swapped.")

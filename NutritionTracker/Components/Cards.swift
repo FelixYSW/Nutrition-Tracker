@@ -41,15 +41,20 @@ struct FoodEntryCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: entry.source.symbolName)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(AppTheme.accentFill.opacity(0.2),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .accessibilityHidden(true)
+
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.name)
                         .font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
-                        Image(systemName: entry.source.symbolName)
-                            .font(.caption2)
-                            .accessibilityHidden(true)
                         Text(AppFormatters.time.string(from: entry.consumedAt))
                         Text("\u{00B7}")
                         Text("\(AppFormatters.quantity(entry.quantity, unit: entry.unit)) \(entry.unit.shortLabel)")

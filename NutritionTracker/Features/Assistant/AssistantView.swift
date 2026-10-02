@@ -2,10 +2,10 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 
-/// Assistant chat sheet, opened from the Dashboard nav bar (spec section 29A).
+/// Assistant chat, one of the five destinations in the floating tab bar
+/// (spec section 29A).
 struct AssistantView: View {
     @Environment(\.modelContext) private var context
-    @Environment(\.dismiss) private var dismiss
 
     @State private var viewModel: AssistantViewModel?
     @State private var photoSelection: PhotosPickerItem?
@@ -22,9 +22,6 @@ struct AssistantView: View {
             .navigationTitle("Assistant")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Clear conversation", systemImage: "trash") {
@@ -157,9 +154,9 @@ struct AssistantView: View {
                     .font(.subheadline)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
-                    .background(AppTheme.accent, in: RoundedRectangle(
-                        cornerRadius: 16, style: .continuous))
-                    .foregroundStyle(.white)
+                    .background(AppTheme.accentFill, in: RoundedRectangle(
+                        cornerRadius: 20, style: .continuous))
+                    .foregroundStyle(AppTheme.onAccent)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

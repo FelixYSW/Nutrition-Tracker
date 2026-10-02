@@ -85,6 +85,27 @@ enum AppFormatters {
         return formatter
     }()
 
+    static let weekdayName: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("EEEE")
+        return formatter
+    }()
+
+    static let dayAndMonth: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("dMMMM")
+        return formatter
+    }()
+
+    static let monthAndYear: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("MMMMyyyy")
+        return formatter
+    }()
+
     static let shortDay: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = .autoupdatingCurrent

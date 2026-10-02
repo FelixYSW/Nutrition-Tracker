@@ -29,11 +29,14 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                rangeSummarySection
                 profileSection
                 targetsSection
                 dataSection
                 aboutSection
             }
+            .scrollContentBackground(.hidden)
+            .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -86,6 +89,44 @@ struct SettingsView: View {
                      + "retained photos from this iPhone. It cannot be undone. "
                      + "Export a backup first if you might want this data back.")
             }
+        }
+    }
+
+    // MARK: Range summary
+
+    /// Pale blue card at the top: today's calorie range and the profile it
+    /// came from.
+    private var rangeSummarySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("YOUR DAILY RANGE")
+                    .font(.caption.weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(AppTheme.skyCardText)
+                if let target {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(AppFormatters.range(target.ranges.calories))
+                            .font(.system(size: 30, weight: .heavy, design: .rounded))
+                            .monospacedDigit()
+                        Text("kcal")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(AppTheme.skyCardText)
+                    }
+                } else {
+                    Text("No targets yet")
+                        .font(.title3.weight(.bold))
+                }
+                if let profile {
+                    Text("\(profile.goal.displayName) \u{00B7} "
+                         + "\(AppFormatters.amount(profile.heightCm)) cm \u{00B7} "
+                         + "\(AppFormatters.amount(profile.weightKg)) kg")
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.skyCardText)
+                }
+            }
+            .appSkyCard()
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
         }
     }
 
@@ -164,11 +205,13 @@ struct SettingsView: View {
                         if !newValue { ImageStore.deleteAll() }
                         save()
                     }))
+            .tint(AppTheme.accentFill)
 
             Toggle("Keep my corrections for future training",
                    isOn: Binding(
                     get: { settings.storeCorrectionsForTraining },
                     set: { settings.storeCorrectionsForTraining = $0; save() }))
+            .tint(AppTheme.accentFill)
 
             Button("Export backup") { exportBackup() }
 
@@ -315,22 +358,11 @@ struct ProfileEditorView: View {
                 Section("Body") {
                     DatePicker("Date of birth", selection: $profile.dateOfBirth,
                                displayedComponents: .date)
-                    HStack {
-                        Text("Height")
-                        Spacer()
-                        TextField("cm", value: $profile.heightCm, format: .number)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-                        Text("cm").foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Weight")
-                        Spacer()
-                        TextField("kg", value: $profile.weightKg, format: .number)
-                            .multilineTextAlignment(.trailing)
-                            .keyboardType(.decimalPad)
-                        Text("kg").foregroundStyle(.secondary)
-                    }
+                    SliderEntryRow(title: "Height", value: $profile.heightCm,
+                                   range: 120...220, step: 1, unitLabel: "cm")
+                    SliderEntryRow(title: "Weight", value: $profile.weightKg,
+                                   range: 30...200, step: 0.5, unitLabel: "kg",
+                                   fractionDigits: 1)
                     Picker("Sex", selection: Binding(
                         get: { profile.sex }, set: { profile.sex = $0 })) {
                         ForEach(BiologicalSex.allCases) { Text($0.displayName).tag($0) }
@@ -349,10 +381,16 @@ struct ProfileEditorView: View {
                 }
 
                 Section("Training") {
-                    Stepper("Strength: \(profile.strengthSessionsPerWeek)/week",
-                            value: $profile.strengthSessionsPerWeek, in: 0...14)
-                    Stepper("Cardio: \(profile.cardioSessionsPerWeek)/week",
-                            value: $profile.cardioSessionsPerWeek, in: 0...14)
+                    SliderEntryRow(title: "Strength sessions per week",
+                                   value: Binding(
+                                    get: { Double(profile.strengthSessionsPerWeek) },
+                                    set: { profile.strengthSessionsPerWeek = Int($0.rounded()) }),
+                                   range: 0...14, step: 1)
+                    SliderEntryRow(title: "Cardio sessions per week",
+                                   value: Binding(
+                                    get: { Double(profile.cardioSessionsPerWeek) },
+                                    set: { profile.cardioSessionsPerWeek = Int($0.rounded()) }),
+                                   range: 0...14, step: 1)
                 }
             }
             .navigationTitle("Edit profile")

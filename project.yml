@@ -44,6 +44,7 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: Used to photograph food for nutrition analysis and to scan product barcodes.
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Used to pick a single food photo to analyse.
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   NutritionTrackerTests:
     type: bundle.unit-test

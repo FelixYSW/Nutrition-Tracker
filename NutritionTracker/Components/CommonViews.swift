@@ -27,8 +27,8 @@ struct EmptyStateView: View {
             }
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 2)
+                    .buttonStyle(.appPrimary)
+                    .padding(.top, 6)
             }
         }
         .frame(maxWidth: .infinity)
@@ -61,7 +61,7 @@ struct ErrorStateView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let onRetry {
                 Button(retryTitle, action: onRetry)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.appSecondary)
             }
         }
         .frame(maxWidth: .infinity)
@@ -104,7 +104,7 @@ struct LoadingAnalysisView: View {
     private func icon(for candidate: AnalysisStage) -> some View {
         if candidate.order < stage.order {
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(AppTheme.accentFill)
                 .accessibilityHidden(true)
         } else if candidate.order == stage.order {
             ProgressView()
@@ -208,6 +208,46 @@ struct NutritionEditor: View {
                     NumericEntryField(title: "Sodium", value: $nutrition.sodium, unitLabel: "mg")
                 }
             }
+        }
+    }
+}
+
+/// A labelled native slider with its current value on the right. On iOS 26 the
+/// thumb picks up the system glass look automatically.
+struct SliderEntryRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 1
+    var unitLabel: String = ""
+    var fractionDigits: Int = 0
+
+    private var valueText: String {
+        let number = value.formatted(.number.precision(.fractionLength(fractionDigits)))
+        return unitLabel.isEmpty ? number : "\(number) \(unitLabel)"
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 8)
+                Text(valueText)
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .foregroundStyle(AppTheme.accent)
+                    .monospacedDigit()
+            }
+            .accessibilityHidden(true)
+
+            Slider(value: Binding(
+                get: { min(max(value, range.lowerBound), range.upperBound) },
+                set: { value = $0 }),
+                   in: range,
+                   step: step)
+                .tint(AppTheme.accentFill)
+                .accessibilityLabel(title)
+                .accessibilityValue(valueText)
         }
     }
 }

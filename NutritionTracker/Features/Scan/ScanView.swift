@@ -177,7 +177,7 @@ struct ScanView: View {
                 VStack(spacing: 16) {
                     ErrorStateView(title: "Camera unavailable", message: explanation)
                     Button("Close") { mode = .idle }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.appPrimary)
                 }
                 .padding()
             }
@@ -217,7 +217,7 @@ struct ScanView: View {
                     .font(.footnote)
                     .foregroundStyle(.white)
                 Button("Cancel") { mode = .idle }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.appPrimary)
             }
             .padding(.bottom, 32)
         }
@@ -359,9 +359,11 @@ struct ScanActionButton: View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: systemImage)
-                    .font(.title2)
-                    .frame(width: 34)
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(width: 48, height: 48)
                     .foregroundStyle(AppTheme.accent)
+                    .background(AppTheme.accentFill.opacity(0.2),
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)

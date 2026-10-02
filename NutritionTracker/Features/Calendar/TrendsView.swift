@@ -58,33 +58,17 @@ struct TrendsView: View {
             }
             .pickerStyle(.segmented)
 
-            // Scrollable rather than segmented: five nutrients will not fit
-            // across an SE at larger text sizes.
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(Nutrient.allCases) { candidate in
-                        Button {
-                            withAnimation(.snappy) { nutrient = candidate }
-                        } label: {
-                            Text(candidate.displayName)
-                                .font(.footnote.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(
-                                    nutrient == candidate
-                                        ? AppTheme.color(for: candidate).opacity(0.18)
-                                        : AppTheme.subtleFill,
-                                    in: Capsule())
-                                .foregroundStyle(nutrient == candidate
-                                    ? AppTheme.color(for: candidate)
-                                    : Color.primary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(
-                            nutrient == candidate ? [.isButton, .isSelected] : .isButton)
-                    }
+            HStack {
+                Text("Nutrient")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Nutrient", selection: $nutrient) {
+                    ForEach(Nutrient.allCases) { Text($0.displayName).tag($0) }
                 }
-                .padding(.horizontal, 2)
+                .pickerStyle(.menu)
+                .tint(AppTheme.accent)
+                .accessibilityLabel("Nutrient")
             }
         }
     }
@@ -134,8 +118,7 @@ struct TrendsView: View {
                                       unit: scale.calendarComponent),
                             y: .value(nutrient.displayName, value))
                             .foregroundStyle(
-                                AppTheme.color(for: range.state(consumed: value),
-                                               nutrient: nutrient))
+                                AppTheme.summaryColor(for: range.state(consumed: value)))
                             // A sparse bucket is drawn hollow-ish so an average
                             // over two logged days is not read as a full week.
                             .opacity(bucket.isSparse ? 0.45 : 1)
@@ -220,7 +203,7 @@ struct TrendsView: View {
     private func summaryRow(state: RangeState, count: Int, unit: String) -> some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(AppTheme.color(for: state, nutrient: nutrient))
+                .fill(AppTheme.summaryColor(for: state))
                 .frame(width: 8, height: 8)
                 .accessibilityHidden(true)
             Text(label(for: state))
