@@ -1,89 +1,237 @@
 # Nutrition Tracker
 
-Native iOS 17+ nutrition log built with SwiftUI and SwiftData. It supports onboarding, editable targets, manual simple and composite foods, a daily dashboard, calendar history, camera/photo analysis review, packaged-food barcode lookup, local backup, and optional local AI model installation. Nutrition targets and image estimates are informational, not medical advice. The four tabs are Dashboard, Scan, Add Meal, and Calendar; Settings is behind the Dashboard gear.
+A native iPhone app for tracking calories and macros. It sets daily targets as ranges, logs food by hand, from a photo, or from a barcode, and shows trends over time. Data stays on the phone. The one exception is the optional AI assistant, which needs the internet.
 
-## Interface and navigation
+> Targets and photo-based nutrition are **estimates**, not medical advice.
 
-Every page uses an edge-to-edge background while its controls remain inside the iPhone's safe areas; content is centered and adapts to narrow screens, landscape, and larger text sizes. Editable text and numbers sit in outlined boxes with examples, labels, and units, making input areas clear. Dashboard, Scan, Add Meal, and Calendar are each one tab tap away, and a food name is ready for entry as soon as Add Meal opens. Add Meal works like a food cart: add multiple foods, type a quantity or use the stepper, edit visible nutrition fields, review the combined calories and macros, and save together. Camera, library, and barcode actions take one more tap. Food cards expose an actions menu and the native long-press menu for editing or deletion; dates, photos, pickers, and confirmation dialogs use familiar iOS patterns. Empty views explain what will appear, analysis shows progress, and failures use clear alerts or recovery actions. Photo and barcode results always lead to editable Add Meal review, and saving returns to Dashboard, so navigation stays predictable.
+## Contents
 
-## Build on a Mac
+- [What it does](#what-it-does)
+- [Architecture](#architecture)
+- [Build and run](#build-and-run)
+- [On-device models](#on-device-models)
+- [Nutrition data](#nutrition-data)
+- [Remote AI and API keys](#remote-ai-and-api-keys)
+- [CI: unsigned IPA from GitHub Actions](#ci-unsigned-ipa-from-github-actions)
+- [Installing with Sideloadly (and the 7-day limit)](#installing-with-sideloadly-and-the-7-day-limit)
+- [Backup and your data](#backup-and-your-data)
+- [Licences and attribution](#licences-and-attribution)
+- [Verification status](#verification-status)
 
-Requires Xcode with the iOS 17+ SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The bundle ID is always `com.felix.NutritionTracker`.
+## What it does
 
-```sh
-brew install xcodegen
-xcodegen generate
-open NutritionTracker.xcodeproj
-xcodebuild test -project NutritionTracker.xcodeproj -scheme NutritionTracker -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
-xcodebuild build -project NutritionTracker.xcodeproj -scheme NutritionTracker -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+- **Onboarding** asks for your body, goal and activity details in several short steps. It then works out daily **ranges** for calories, protein, carbs, fat and fibre. You can edit either end of any range before saving.
+- **Dashboard** shows today only. Each nutrient has a ring with three states:
+  - *under*: shown calmly, because that's normal for most of the day
+  - *within*: shown as on track
+  - *over*: flagged
+  
+  The ring shades the target band so you can see where "in range" is at a glance.
+- **Add Meal** is a list of draft foods. Each can be a simple food or a composite food made of ingredients, with minus/plus quantity controls. You can backdate a meal.
+- **Scan** has three actions: Take Photo, Choose Photo, Scan Barcode. Photos go through two on-device models. Barcodes are looked up in a local cache, then Open Food Facts.
+- **Calendar** shows any day's food log. A **Trends** view charts daily, weekly and monthly calories and macros against your target band.
+- **Assistant** (optional, from the Dashboard nav bar) suggests what to eat with the room you have left. It can also log, edit and delete food, or summarise your trends. **Every change it proposes waits for you to confirm it.**
+- **Settings** (gear icon on the Dashboard) covers profile, ranges, AI configuration, backup and restore, and data deletion.
+
+The app has four tabs: Dashboard, Scan, Add Meal, Calendar. Settings and the assistant open as sheets from the Dashboard.
+
+## Architecture
+
+SwiftUI, SwiftData, async/await, iOS 17+, iPhone only. Folders are organised by feature.
+
+```
+NutritionTracker/
+  App/          entry point, root view, cross-tab router
+  Models/       value types (Nutrition, NutrientRange), SwiftData entities, drafts
+  Persistence/  ModelContainer + versioned migration plan, fetch helpers
+  Services/
+    Nutrition/  NutritionTargetCalculator, NutritionRepository, FoodOntology
+    AI/         Model A/B protocols, Core ML adapters, pipeline, remote fallback
+    Assistant/  provider-agnostic service, context builder, tools, executor
+    Barcode/    Open Food Facts client, cache-first lookup
+    Backup/     versioned JSON export/import
+    Keychain/   API key storage
+    Images/     photo storage and preparation
+  Features/     Onboarding, Dashboard, Scan, AddMeal, Calendar, Settings, Assistant
+  Components/   rings, steppers, cards, shared views, theme
+  Utilities/    local-day logic, midnight observer, trend aggregation
+  Resources/    ontology.json, myfcd_reference.json (+ .mlpackage models when added)
+NutritionTrackerTests/
+ml/             training, evaluation, Core ML export (see ml/README.md)
+docs/           ARCHITECTURE.md
 ```
 
-The generated project has a shared scheme. SwiftData stores profile, targets, food, ingredients, barcode cache and optional correction records in `Library/Application Support/default.store` inside the app container. The app creates that directory before opening the store. Backup JSON is only an interchange format, not the live database. The app does not erase its database on update; model changes should use a SwiftData migration plan before changing released schemas. Uninstalling removes local data, so export a backup first.
+Key decisions:
 
-## Nutrition and images
+- **Every save path goes through a draft.** Manual entry, photo analysis, barcodes and the assistant all produce a `FoodEntryDraft` that you review. Nothing AI-generated is saved without you seeing it.
+- **No stored daily totals.** Today's figures, the Calendar and Trends all filter `FoodEntry.consumedAt` when they're shown. At local midnight the day changes and the totals start from zero; nothing is deleted. The app listens for `NSCalendarDayChanged`, time zone changes and returning to the foreground.
+- **Totals are calculated, not stored.** A composite food's nutrition comes from its ingredients, and the parent quantity scales all of them.
+- **Targets are ranges.** All the calculation constants live in `NutritionConstants`. Recalculating keeps any range end you edited by hand.
 
-`NutritionTargetCalculator` uses Mifflin-St Jeor BMR, one activity multiplier, goal adjustment, weight-based protein, a fat floor, remaining carbohydrate energy, and 14 g fibre per 1,000 kcal. Exercise session counts are profile context only. Targets never recalculate automatically after profile edits; Settings has an explicit action.
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Photo analysis expects two compiled Core ML models in `NutritionTracker/Resources/`: `FoodRecognition.mlmodelc` and `FoodPortion.mlmodelc`. Without Model A, the app reports that local recognition is unavailable and the user can enter food manually. Without Model B, Model A detections remain editable with placeholder portions; the result must be reviewed before saving. The photo pipeline has no production remote provider yet. Entering an API key stores it in Keychain but does not activate remote analysis.
+## Build and run
 
-Model A's current training export is a semantic segmentation baseline. It reads class logits into regions, but cannot distinguish two instances of the same class or retain masks. Its displayed confidence is only a preliminary heuristic. Model B is an RGB dish-level regression baseline and currently divides mass equally among recognized classes. A single RGB phone image cannot determine mass precisely. Malaysian-dish recognition and portion accuracy are unverified; users should correct estimates. Only users who enable local correction retention store the original and final results. Images are retained in Application Support only when the toggle is on. No personal images are uploaded.
+Requires macOS, Xcode 15.3+ (iOS 17 SDK) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
-The bundled `food_reference.json` starts empty because MyFCD values must be manually verified with provenance. A canonical ID with a verified row takes priority over Model B's nutrition output. Open Food Facts is used for barcode lookups only, with a local cache. For a new MyFCD entry, add its canonical ID to `ml/config/ontology.json`, fill a row in `ml/config/myfcd_reference.csv` from [MyFCD](https://myfcd.moh.gov.my/myfcdcurrent/), including source URL and verification date, then compile:
+```bash
+brew install xcodegen
+xcodegen generate                 # creates NutritionTracker.xcodeproj (gitignored)
+open NutritionTracker.xcodeproj
+```
 
-```sh
+Command-line build and tests:
+
+```bash
+xcodebuild test -project NutritionTracker.xcodeproj -scheme NutritionTracker \
+  -destination 'platform=iOS Simulator,name=iPhone 15'
+
+xcodebuild build -project NutritionTracker.xcodeproj -scheme NutritionTracker \
+  -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+```
+
+The bundle identifier is `com.felix.NutritionTracker`. Don't change it: Sideloadly installs each new build over the existing app, and that only works while the ID stays the same.
+
+**SwiftData** stores its database in the app's normal container. Upgrades never delete or recreate it. Schema changes go through `AppMigrationPlan` in `Persistence/AppModelContainer.swift`: add a new `VersionedSchema` and a migration stage, never a reset.
+
+## On-device models
+
+The app **builds and runs without any model files**. If they're missing, Scan says "Local model unavailable", and barcode scanning, manual entry and the optional remote fallback still work.
+
+| Model | Expected file in the app bundle | Produces |
+|---|---|---|
+| A: recognition | `IngredientSegmenter.mlmodelc` (from `IngredientSegmenter.mlpackage`) | foods and ingredients, confidence, area |
+| B: portion and nutrition | `NutritionEstimator.mlmodelc` (from `NutritionEstimator.mlpackage`) | mass, calories, protein, carbs, fat |
+
+To add them, drop the `.mlpackage` files into `NutritionTracker/Resources/` and run `xcodegen generate`. Training, evaluation and export are covered in **[ml/README.md](ml/README.md)**, including:
+
+- preparing FoodSeg103 and Nutrition5k
+- the Malaysian fine-tuning sets (Malaysia Food-11, MF-150, Roboflow Malaysian Food Recognition 1 and 2)
+
+Quick version:
+
+```bash
+pip install -r ml/requirements.txt
+python -m ml.ingredient_segmentation.train --stage base --manifests ml/data/manifests/foodseg103.jsonl
+python -m ml.nutrition_estimation.train --inputs rgb
+python -m ml.ingredient_segmentation.export --checkpoint ml/runs/model_a_base/best.pt
+python -m ml.nutrition_estimation.export   --checkpoint ml/runs/model_b_rgb_mobilenet_v3_large/best.pt
+```
+
+**Set your expectations:**
+
+- One handheld photo can't determine portion size precisely. The app labels every portion as an estimate and always lets you correct it.
+- Recognition of Malaysian dishes starts weak, because the public datasets are small.
+- Model B has only been trained on Nutrition5k, so nobody has measured how well it handles local food.
+
+`.mlpackage` files are gitignored, so CI builds ship **without** models unless you change that. Models are large and depend on dataset licences, so decide deliberately before committing them or adding a CI step to download them.
+
+**How photo analysis works:**
+
+1. Prepare the image once, at 640 px on the longest edge.
+2. Model A identifies the foods and how much of the plate each covers.
+3. Model B estimates the mass of each.
+4. Nutrition comes from the reference table wherever a food matches. Model B's own nutrition estimate is used only as the last resort.
+5. Swift adds everything up.
+6. The result opens in Add Meal for you to review.
+
+Any detection below 60% confidence is flagged.
+
+## Nutrition data
+
+The app looks up nutrition in this order, using the first match:
+
+1. **Your own saved foods.** Barcode products you entered by hand count as verified.
+2. **Open Food Facts**, for barcodes. Results are cached locally for 90 days, and an out-of-date cache entry is still used when you're offline.
+3. **MyFCD**, the Malaysian Food Composition Database (Ministry of Health), for local dishes.
+4. A **generic reference** table for other foods.
+5. **Model B's estimate**, as the last resort.
+
+MyFCD has no API, so its values are copied in by hand and bundled with the app. Nothing is scraped at runtime.
+
+```bash
+# 1. Fill in per-100 g values from myfcd.moh.gov.my in ml/config/myfcd_reference.csv
+# 2. Compile into the app bundle:
 python ml/scripts/compile_reference.py
 ```
 
-All quantities and totals update locally. The current day is derived from `Calendar.autoupdatingCurrent`; day change, time zone change, foreground return and a periodic foreground refresh update the Dashboard. History records are never cleared at midnight.
+> **Current state:** the 14 MyFCD rows are **blank placeholders** waiting for real values. The 19 generic rows are typical reference figures entered by hand; spot-check them. Until MyFCD is filled in, Malaysian dishes rely on manual entry or Model B.
 
-## Model training
+## Remote AI and API keys
 
-Use a machine with Python 3.10+, sufficient disk, and preferably a GPU. Install dependencies:
+Both are optional. The app compiles and runs with neither configured.
 
-```sh
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r ml/requirements.txt
-```
+| Feature | Where to configure | Keychain slot |
+|---|---|---|
+| Remote vision fallback (used when local models are missing or find nothing) | Settings → AI | `remote-vision-api-key` |
+| AI assistant | Settings → AI Assistant | `assistant-api-key` |
 
-Download [FoodSeg103](https://xiongweiwu.github.io/foodseg103.html) and [Nutrition5k](https://github.com/google-research-datasets/Nutrition5k) using each project's instructions and terms. Dataset download is deliberately manual so users accept the respective licences. Place files under ignored `ml/data/`. FoodSeg103 or Roboflow COCO exports with true polygons can be converted to a training manifest after expanding the ontology with every mapped category:
+- Keys live **only in the iOS Keychain**, stored device-only and readable only while the phone is unlocked. They never go in SwiftData, UserDefaults, backups or logs.
+- Both features ship with an Anthropic implementation, behind provider-agnostic protocols (`RemoteVisionService`, `AssistantServing`).
+- **The assistant needs you to opt in first.** It sends your profile basics, today's targets and food log, and a 14-day trend summary to the provider. It never sends photos (apart from a menu photo you attach yourself), your date of birth, your body-fat percentage or your target weight.
 
-```sh
-python ml/scripts/prepare_coco.py --annotations ml/data/foodseg/annotations.json --images ml/data/foodseg/images --source foodseg103 --output ml/data/foodseg/prepared --expand-ontology
-CLASSES=$(python -c 'import json; print(len(json.load(open("NutritionTracker/Resources/food_labels.json"))))')
-python ml/ingredient_segmentation/train.py --manifest ml/data/foodseg/prepared/manifest.jsonl --classes "$CLASSES"
-python ml/ingredient_segmentation/train.py --manifest ml/data/foodseg/prepared/manifest.jsonl --classes "$CLASSES" --resume ml/checkpoints/segmentation.pt --eval-only --eval-split test
-python ml/ingredient_segmentation/export.py --checkpoint ml/checkpoints/segmentation.pt --output ml/runs/FoodRecognition.mlpackage
-```
+### Build-time key via a GitHub secret (private builds only)
 
-The importer adds unknown FoodSeg labels as distinct IDs, avoiding accidental synonym merges, and regenerates `food_labels.json`. Review the new IDs and map true synonyms manually before training. Compile the exported package in Xcode and add it to app resources. This script reports per-class precision, recall, mask IoU, and mean mask IoU; instance mask mAP is not yet implemented. Avoid claiming segmentation quality without evaluating an untouched test split.
+If you add a repository secret named `REMOTE_AI_API_KEY`, CI writes it into the app's Info.plist as `RemoteAIAPIKey`. A key saved in the Keychain at runtime always takes priority over this one.
 
-Prepare a Nutrition5k JSONL manifest with the official dish ID splits. Inspect your download's RGB path and supply it as a template; the converter deliberately refuses to guess a file path:
+> **Warning:** anyone with the IPA can extract a key compiled into it, just by unzipping the file. Use this only for builds you install on your own phone. Never distribute such an IPA.
 
-```sh
-python ml/scripts/prepare_nutrition5k.py --root ml/data/nutrition5k --train-ids ml/data/nutrition5k/dish_ids/splits/train.txt --test-ids ml/data/nutrition5k/dish_ids/splits/test.txt --image-template 'imagery/realsense_overhead/{dish_id}/rgb.png' --output ml/data/nutrition5k/manifest.jsonl
-```
+To add it: GitHub repo → Settings → Secrets and variables → Actions → New repository secret → `REMOTE_AI_API_KEY`. The workflow masks the value and never prints it.
 
-Replace the split filenames and image template with the actual paths in the downloaded release. The manifest contains `image`, `split`, `mass_g`, `calories`, `protein`, `carbs`, and `fat` fields. Splits are dish-disjoint. Then:
+## CI: unsigned IPA from GitHub Actions
 
-```sh
-python ml/nutrition_estimation/train.py --manifest ml/data/nutrition5k/manifest.jsonl
-python ml/nutrition_estimation/train.py --manifest ml/data/nutrition5k/manifest.jsonl --resume ml/checkpoints/portion.pt --eval-only --eval-split test
-python ml/nutrition_estimation/export.py --checkpoint ml/checkpoints/portion.pt --output ml/runs/FoodPortion.mlpackage
-```
+Workflow: [`.github/workflows/build-ios.yml`](.github/workflows/build-ios.yml). It runs on every push to `main`, and you can also start it from the Actions tab (Run workflow).
 
-Training prints validation MAE for mass, calories, protein, carbs and fat. An RGB-only run is the baseline. Depth and segmentation input variants need independent model architecture and evaluation before use. The current repository has no trained weights. The iOS app will not silently generate predictions without models.
+What it does:
 
-Potential Malaysian expansion sources include Malaysia Food-11, MF-150, and the Roboflow Malaysian Food Recognition collections. They differ in annotation type. Classification and multilabel data do not provide segmentation masks, so they cannot be passed to the COCO mask importer as segmentation ground truth. Add verified aliases and any licensed polygon masks first, then fine-tune from the FoodSeg103 checkpoint with `--resume`. Local food recognition starts weak and should be measured against a held-out Malaysian photo set. Check each dataset's usage and redistribution terms, plus model code and weights licences, before distribution. Nutrition5k's fixed rig and depth data do not validate handheld phone estimates.
+1. Installs XcodeGen and generates the Xcode project.
+2. Runs the unit tests on an iPhone 15 simulator.
+3. Builds Release for `iphoneos` with signing turned off.
+4. Packages the build as `Payload/NutritionTracker.app` and zips it into `NutritionTracker-unsigned.ipa`.
+5. Uploads the IPA as an artifact.
 
-## Barcode, backup, secrets and sideloading
+It fails with a clear message if no `.app` is produced.
 
-Barcode lookup uses the [Open Food Facts product API](https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/). Missing fields are treated as unknown. Settings exports a version 2 JSON file with full date precision through the native document share flow; version 1 ISO 8601 backups remain importable. Import validates a backup before replacing current records; export first if you need the previous data. Image files are not embedded in JSON backup.
+To download the IPA: Actions → the latest run → **Artifacts** → `NutritionTracker-unsigned-ipa`. The artifact is a zip that contains the `.ipa`.
 
-An optional API key can be entered or deleted in Settings and is stored in iOS Keychain. No default key or provider is compiled into the app. Do not commit secrets, provisioning files, data, weights, or personal photos. A build-time key inside an IPA is extractable, so the workflow does not inject one.
+The IPA is deliberately unsigned; Sideloadly signs it.
 
-`.github/workflows/build-ios.yml` runs on pushes to `main` and manual dispatch. Open the workflow run in GitHub Actions and download the `NutritionTracker-unsigned` artifact. It contains `NutritionTracker-unsigned.ipa`, intended for Sideloadly signing and installation with the same Apple ID, Personal Team, and bundle ID. [Apple says Personal Team provisioning expires after 7 days](https://developer.apple.com/help/account/basics/about-your-developer-account): plan to rebuild or re-sign and reinstall roughly weekly. Export data before any uninstall, which removes the app container.
+## Installing with Sideloadly (and the 7-day limit)
 
-## Current verification and limits
+1. Download and unzip the artifact to get `NutritionTracker-unsigned.ipa`.
+2. Connect your iPhone and open Sideloadly.
+3. Drag the IPA in, enter your Apple ID (a free Personal Team is fine), and start.
+4. On the iPhone, trust the developer profile: Settings → General → VPN & Device Management.
+5. For updates, repeat with the **same Apple ID**. The bundle ID never changes, so each build installs over the old one and keeps your data.
 
-The source was authored in a Windows environment without Xcode, Swift, Python, a GPU, or dataset downloads. No iOS build, simulator test, training run, Core ML conversion, or on-device scanner validation has been performed here. The commands above and the GitHub Actions workflow are the next verification gate. CI should be treated as the first compile/test signal, not as a proven passing build.
+> **Free Apple accounts: apps stop opening 7 days after signing.** This is Apple's limit, not Sideloadly's. Once it passes, the app won't launch until you re-sign it. **Re-sideload about once a week**: set a recurring reminder, and if you want a fresh build, run the workflow first. Re-signing over the existing install keeps your data.
+
+## Backup and your data
+
+- **Uninstalling the app deletes its database.** Export a backup regularly.
+- **To export:** Settings → Data → Export backup produces a versioned JSON file (`schemaVersion` 1) and opens the share sheet. The file contains your profile, target ranges, food entries with their ingredients, and the barcode cache. Photos and API keys are not included.
+- **To import:** Settings → Data → Import backup. The file is fully checked before anything changes. A backup from a newer app version is rejected with a clear message. You then choose **Replace all data** or **Merge** (merge skips entries that are already on the phone).
+- **Photo retention:** "Keep analysed photos" controls whether photos are saved after analysis. Saved photos live in Application Support, are excluded from iCloud backup, and are referenced by relative path.
+- **Corrections:** "Keep my corrections for future training" stores what the models predicted next to what you confirmed. It stays on the device.
+
+## Licences and attribution
+
+The app credits its data sources in Settings → About → Data sources:
+
+- MyFCD
+- Open Food Facts (ODbL)
+- FoodSeg103
+- Nutrition5k
+- Malaysia Food-11
+- MF-150
+- Malaysian Food Recognition 1 and 2 (Roboflow, CC BY 4.0)
+
+Check every licence before distributing a trained model or the bundled values. See [ml/README.md](ml/README.md#licences).
+
+## Verification status
+
+This repository was written on Windows, **without macOS, Xcode, a GPU or a Python runtime**. As a result:
+
+- The Swift code has **not been compiled**, and the XCTest suite has **not been run**. The first GitHub Actions run (or `xcodebuild` on a Mac) is the first real compile. Expect to fix some compiler errors.
+- The Python training code has **not been run**, not even syntax-checked. Neither model has been trained, and no `.mlpackage` exists yet.
+- `NutritionTracker/Resources/myfcd_reference.json` and `ontology.json` **were** generated by running a Node port of `compile_reference.py`.

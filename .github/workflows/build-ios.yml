@@ -1,37 +1,133 @@
-name: Build iOS IPA
+name: Build unsigned iOS IPA
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    runs-on: macos-15
+    name: Build NutritionTracker
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    env:
+      SCHEME: NutritionTracker
+      APP_NAME: NutritionTracker
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Install XcodeGen
-        run: brew install xcodegen
-      - name: Xcode version
-        run: xcodebuild -version
-      - name: Generate project
-        run: xcodegen generate
-      - name: Resolve dependencies
-        run: xcodebuild -resolvePackageDependencies -project NutritionTracker.xcodeproj -scheme NutritionTracker
-      - name: Test
-        run: xcodebuild test -project NutritionTracker.xcodeproj -scheme NutritionTracker -destination 'platform=iOS Simulator,name=iPhone 16' CODE_SIGNING_ALLOWED=NO
-      - name: Release build
-        run: xcodebuild build -project NutritionTracker.xcodeproj -scheme NutritionTracker -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-      - name: Verify full-screen launch configuration
-        run: /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' DerivedData/Build/Products/Release-iphoneos/NutritionTracker.app/Info.plist
-      - name: Package unsigned IPA
-        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen and log formatter
+        run: brew install xcodegen xcbeautify
+
+      - name: Resolve optional remote AI key
+        # Only used when the optional REMOTE_AI_API_KEY secret exists. The value
+        # is never echoed. It is passed to xcodebuild as an Info.plist key rather
+        # than a generated Swift source file, so the app compiles identically
+        # whether or not the secret is configured.
+        #
+        # WARNING: a key baked into an IPA can be extracted from the binary.
+        # This path is for private personal builds only - see the README.
+        env:
+          REMOTE_AI_API_KEY: ${{ secrets.REMOTE_AI_API_KEY }}
         run: |
           set -euo pipefail
-          app="$(find DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name 'NutritionTracker.app' -type d -print -quit)"
-          if [[ -z "$app" ]]; then echo 'NutritionTracker.app not found'; exit 1; fi
-          mkdir -p Payload
-          cp -R "$app" Payload/NutritionTracker.app
-          zip -qry NutritionTracker-unsigned.ipa Payload
-      - uses: actions/upload-artifact@v4
+          if [ -n "${REMOTE_AI_API_KEY:-}" ]; then
+            echo "::add-mask::$REMOTE_AI_API_KEY"
+            echo "Remote AI key present; it will be injected (value not logged)."
+            echo "HAS_REMOTE_KEY=1" >> "$GITHUB_ENV"
+          else
+            echo "No REMOTE_AI_API_KEY secret set; building without one."
+            echo "HAS_REMOTE_KEY=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Resolve Swift package dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$SCHEME"
+
+      - name: Run unit tests (iOS Simulator)
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -destination 'platform=iOS Simulator,name=iPhone 15,OS=latest' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcbeautify || exit 1
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: NutritionTracker-unsigned
+          name: TestResults
+          path: TestResults.xcresult
+          if-no-files-found: ignore
+
+      - name: Build Release for device (unsigned)
+        env:
+          REMOTE_AI_API_KEY: ${{ secrets.REMOTE_AI_API_KEY }}
+        run: |
+          set -euo pipefail
+          EXTRA_SETTINGS=()
+          if [ "${HAS_REMOTE_KEY}" = "1" ]; then
+            EXTRA_SETTINGS+=("INFOPLIST_KEY_RemoteAIAPIKey=${REMOTE_AI_API_KEY}")
+          fi
+          xcodebuild clean build \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            "${EXTRA_SETTINGS[@]}" \
+            | xcbeautify
+
+      - name: Locate built .app
+        id: locate
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app product was found in build/Build/Products/Release-iphoneos"
+            find build/Build/Products -maxdepth 3 || true
+            exit 1
+          fi
+          echo "Found: $APP_PATH"
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          rm -rf payload-staging
+          mkdir -p payload-staging/Payload
+          cp -R "${{ steps.locate.outputs.app_path }}" "payload-staging/Payload/$APP_NAME.app"
+          (cd payload-staging && zip -qry "../$APP_NAME-unsigned.ipa" Payload)
+          ls -lh "$APP_NAME-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: NutritionTracker-unsigned-ipa
           path: NutritionTracker-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

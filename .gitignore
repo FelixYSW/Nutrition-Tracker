@@ -1,19 +1,41 @@
+# macOS / Xcode
+.DS_Store
 *.xcodeproj/
 *.xcworkspace/
-.build/
+xcuserdata/
 DerivedData/
+build/
 *.ipa
-*.mlpackage/
-*.mlmodelc/
-*.pt
-*.pth
-*.ckpt
-*.onnx
+*.dSYM.zip
+Payload/
+
+# Generated build secrets (NEVER commit - see README section "Remote API keys")
+NutritionTracker/Generated/
+BuildSecrets.swift
+
+# Python / ML
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Datasets and checkpoints are large and/or licence-restricted: never commit them.
 ml/data/
+ml/datasets/
 ml/runs/
 ml/checkpoints/
-NutritionTracker/Resources/GeneratedSecrets.swift
-*.mobileprovision
-*.p12
-*.p8
-.DS_Store
+ml/exports/
+*.pt
+*.pth
+*.onnx
+*.mlmodel
+*.mlpackage/
+*.mlmodelc/
+*.tfrecord
+
+# Personal data / private food images
+ml/personal/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

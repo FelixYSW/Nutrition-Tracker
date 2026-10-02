@@ -1,6 +1,13 @@
-torch>=2.3
-torchvision>=0.18
-pillow>=10
-numpy>=1.26
-coremltools>=8
-pycocotools>=2.0
+# Training and export toolchain for Model A and Model B.
+# Python 3.10-3.11 recommended (coremltools wheels lag newer Pythons).
+torch>=2.2
+torchvision>=0.17
+coremltools>=7.2
+numpy>=1.24,<2.0
+pillow>=10.0
+tqdm>=4.66
+
+# Optional dataset download helpers (see ml/README.md):
+#   kaggle      - Malaysia Food-11
+#   roboflow    - Malaysian Food Recognition 1 & 2
+#   gsutil      - Nutrition5k (Google Cloud SDK, installed separately)

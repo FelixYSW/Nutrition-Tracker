@@ -1,1 +1,15 @@
-canonical_id,name,calories,protein,carbs,fat,fibre,sugar,sodium,source_url,verified_date
+canonical_id,display_name,myfcd_code,calories,protein,carbs,fat,fibre,sugar,sodium
+my.rice.coconut,Coconut Rice (Nasi Lemak Rice),,,,,,,,
+my.dish.nasi_lemak,Nasi Lemak,,,,,,,,
+my.dish.nasi_goreng,Nasi Goreng,,,,,,,,
+my.dish.roti_canai,Roti Canai,,,,,,,,
+my.dish.mee_goreng,Mee Goreng,,,,,,,,
+my.dish.char_kuey_teow,Char Kuey Teow,,,,,,,,
+my.dish.laksa,Laksa,,,,,,,,
+my.dish.satay,Satay,,,,,,,,
+my.dish.rendang,Rendang,,,,,,,,
+my.dish.curry_puff,Curry Puff,,,,,,,,
+my.dish.kaya_toast,Kaya Toast,,,,,,,,
+my.drink.teh_tarik,Teh Tarik,,,,,,,,
+my.side.sambal,Sambal,,,,,,,,
+my.side.ikan_bilis_fried,Fried Anchovies (Ikan Bilis),,,,,,,,

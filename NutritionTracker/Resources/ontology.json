@@ -1,0 +1,455 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "canonicalID": "gen.rice.white_cooked",
+      "displayName": "White Rice",
+      "aliases": [
+        "rice",
+        "white rice",
+        "white_rice",
+        "steamed rice",
+        "nasi putih",
+        "nasi"
+      ],
+      "sources": [
+        "foodseg103",
+        "mf150",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "my.rice.coconut",
+      "displayName": "Coconut Rice (Nasi Lemak Rice)",
+      "aliases": [
+        "coconut rice",
+        "nasi lemak rice",
+        "coconut_rice"
+      ],
+      "sources": [
+        "mf150"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.nasi_lemak",
+      "displayName": "Nasi Lemak",
+      "aliases": [
+        "nasi lemak",
+        "nasi_lemak",
+        "nasilemak"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr",
+        "roboflow_mfr2"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.nasi_goreng",
+      "displayName": "Nasi Goreng",
+      "aliases": [
+        "nasi goreng",
+        "nasi_goreng",
+        "fried rice"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.roti_canai",
+      "displayName": "Roti Canai",
+      "aliases": [
+        "roti canai",
+        "roti_canai",
+        "roticanai",
+        "roti prata"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr",
+        "roboflow_mfr2"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.mee_goreng",
+      "displayName": "Mee Goreng",
+      "aliases": [
+        "mee goreng",
+        "mee_goreng",
+        "fried noodles"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.char_kuey_teow",
+      "displayName": "Char Kuey Teow",
+      "aliases": [
+        "char kuey teow",
+        "char_kuey_teow",
+        "char kway teow",
+        "ckt"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr2"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.laksa",
+      "displayName": "Laksa",
+      "aliases": [
+        "laksa",
+        "curry laksa",
+        "asam laksa"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.satay",
+      "displayName": "Satay",
+      "aliases": [
+        "satay",
+        "sate",
+        "chicken satay"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.rendang",
+      "displayName": "Rendang",
+      "aliases": [
+        "rendang",
+        "beef rendang",
+        "chicken rendang"
+      ],
+      "sources": [
+        "malaysia_food11",
+        "mf150"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.curry_puff",
+      "displayName": "Curry Puff",
+      "aliases": [
+        "curry puff",
+        "karipap",
+        "curry_puff"
+      ],
+      "sources": [
+        "malaysia_food11"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.dish.kaya_toast",
+      "displayName": "Kaya Toast",
+      "aliases": [
+        "kaya toast",
+        "roti bakar",
+        "kaya_toast"
+      ],
+      "sources": [
+        "malaysia_food11"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.drink.teh_tarik",
+      "displayName": "Teh Tarik",
+      "aliases": [
+        "teh tarik",
+        "teh_tarik",
+        "milk tea"
+      ],
+      "sources": [
+        "roboflow_mfr2"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.side.sambal",
+      "displayName": "Sambal",
+      "aliases": [
+        "sambal",
+        "chili paste",
+        "chilli sambal",
+        "sambal tumis"
+      ],
+      "sources": [
+        "mf150",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "my.side.ikan_bilis_fried",
+      "displayName": "Fried Anchovies (Ikan Bilis)",
+      "aliases": [
+        "ikan bilis",
+        "anchovies",
+        "anchovy",
+        "fried anchovies",
+        "ikan_bilis"
+      ],
+      "sources": [
+        "mf150",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": true
+    },
+    {
+      "canonicalID": "gen.egg.fried",
+      "displayName": "Fried Egg",
+      "aliases": [
+        "fried egg",
+        "fried_egg",
+        "telur goreng",
+        "sunny side up"
+      ],
+      "sources": [
+        "mf150",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.egg.boiled",
+      "displayName": "Boiled Egg",
+      "aliases": [
+        "boiled egg",
+        "hard boiled egg",
+        "telur rebus",
+        "egg"
+      ],
+      "sources": [
+        "foodseg103",
+        "mf150"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.chicken.breast_cooked",
+      "displayName": "Chicken Breast (Cooked)",
+      "aliases": [
+        "chicken breast",
+        "grilled chicken",
+        "chicken duck",
+        "chicken"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.chicken.fried",
+      "displayName": "Fried Chicken",
+      "aliases": [
+        "fried chicken",
+        "ayam goreng",
+        "fried_chicken"
+      ],
+      "sources": [
+        "mf150",
+        "roboflow_mfr"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.beef.cooked",
+      "displayName": "Beef (Cooked)",
+      "aliases": [
+        "steak",
+        "beef",
+        "pork"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.fish.salmon_cooked",
+      "displayName": "Salmon (Cooked)",
+      "aliases": [
+        "salmon",
+        "fish"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.tofu",
+      "displayName": "Tofu",
+      "aliases": [
+        "tofu",
+        "tauhu",
+        "bean curd"
+      ],
+      "sources": [
+        "foodseg103",
+        "mf150"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.peanut.roasted",
+      "displayName": "Roasted Peanuts",
+      "aliases": [
+        "peanut",
+        "peanuts",
+        "kacang",
+        "groundnut"
+      ],
+      "sources": [
+        "foodseg103",
+        "mf150"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.cucumber",
+      "displayName": "Cucumber",
+      "aliases": [
+        "cucumber",
+        "timun"
+      ],
+      "sources": [
+        "foodseg103",
+        "mf150"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.tomato",
+      "displayName": "Tomato",
+      "aliases": [
+        "tomato",
+        "cherry tomato"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.lettuce",
+      "displayName": "Lettuce",
+      "aliases": [
+        "lettuce",
+        "salad greens"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.carrot",
+      "displayName": "Carrot",
+      "aliases": [
+        "carrot"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.broccoli",
+      "displayName": "Broccoli",
+      "aliases": [
+        "broccoli"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.potato.boiled",
+      "displayName": "Potato (Boiled)",
+      "aliases": [
+        "potato",
+        "boiled potato"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.bread.white",
+      "displayName": "White Bread",
+      "aliases": [
+        "bread",
+        "white bread",
+        "toast"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.noodles.boiled",
+      "displayName": "Noodles (Boiled)",
+      "aliases": [
+        "noodles",
+        "mee",
+        "egg noodles"
+      ],
+      "sources": [
+        "foodseg103",
+        "mf150"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.banana",
+      "displayName": "Banana",
+      "aliases": [
+        "banana",
+        "pisang"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.apple",
+      "displayName": "Apple",
+      "aliases": [
+        "apple"
+      ],
+      "sources": [
+        "foodseg103"
+      ],
+      "isMalaysian": false
+    }
+  ]
+}

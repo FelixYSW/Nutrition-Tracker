@@ -1,0 +1,20 @@
+canonical_id,display_name,calories,protein,carbs,fat,fibre,sugar,sodium
+gen.rice.white_cooked,White Rice,130,2.7,28.2,0.3,0.4,0.1,1
+gen.egg.fried,Fried Egg,196,13.6,0.8,15.3,0,0.4,207
+gen.egg.boiled,Boiled Egg,155,12.6,1.1,10.6,0,1.1,124
+gen.chicken.breast_cooked,Chicken Breast (Cooked),165,31.0,0,3.6,0,0,74
+gen.chicken.fried,Fried Chicken,260,25.0,9.0,14.0,0.3,0,400
+gen.beef.cooked,Beef (Cooked),250,26.0,0,15.0,0,0,72
+gen.fish.salmon_cooked,Salmon (Cooked),206,22.0,0,12.0,0,0,61
+gen.tofu,Tofu,76,8.0,1.9,4.8,0.3,0.6,7
+gen.peanut.roasted,Roasted Peanuts,585,24.0,21.0,50.0,8.0,4.2,6
+gen.cucumber,Cucumber,15,0.7,3.6,0.1,0.5,1.7,2
+gen.tomato,Tomato,18,0.9,3.9,0.2,1.2,2.6,5
+gen.lettuce,Lettuce,15,1.4,2.9,0.2,1.3,0.8,28
+gen.carrot,Carrot,41,0.9,9.6,0.2,2.8,4.7,69
+gen.broccoli,Broccoli,34,2.8,6.6,0.4,2.6,1.7,33
+gen.potato.boiled,Potato (Boiled),87,1.9,20.0,0.1,1.8,0.9,4
+gen.bread.white,White Bread,265,9.0,49.0,3.2,2.7,5.0,491
+gen.noodles.boiled,Noodles (Boiled),138,4.5,25.0,2.1,1.2,0.4,5
+gen.banana,Banana,89,1.1,22.8,0.3,2.6,12.2,1
+gen.apple,Apple,52,0.3,13.8,0.2,2.4,10.4,1

@@ -2,187 +2,631 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
-struct BackupDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-    var data: Data
-    init(data: Data = Data()) { self.data = data }
-    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
-}
-
-private struct SettingsSection<Content: View>: View {
-    let title: String
-    let icon: String
-    let content: Content
-    init(_ title: String, icon: String, @ViewBuilder content: () -> Content) {
-        self.title = title; self.icon = icon; self.content = content()
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Label(title, systemImage: icon).font(.headline).foregroundStyle(AppTheme.accent)
-            Divider()
-            content
-        }.frame(maxWidth: .infinity, alignment: .leading).appCard()
-    }
-}
-
+/// Settings (spec section 29).
 struct SettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+
     @Query private var profiles: [UserProfile]
     @Query private var targets: [NutritionTarget]
-    @Query private var entries: [FoodEntry]
-    @Query private var cache: [BarcodeProductCache]
-    @State private var targetDraft = Nutrition.zero
-    @State private var apiKey = ""
-    @State private var showExport = false
-    @State private var showImport = false
-    @State private var showDelete = false
-    @State private var document = BackupDocument()
-    @State private var message: String?
-    @AppStorage("retainImages") private var retainImages = false
-    @AppStorage("retainCorrections") private var retainCorrections = false
+
+    @State private var isShowingProfileEditor = false
+    @State private var isShowingTargetsEditor = false
+    @State private var isShowingExporter = false
+    @State private var isShowingImporter = false
+    @State private var exportURL: URL?
+    @State private var importSummary: String?
+    @State private var alertMessage: String?
+    @State private var isConfirmingDeleteAll = false
+    @State private var isConfirmingImport: BackupFile?
+
+    private var settings: AppSettings { context.loadAppSettings() }
+    private var profile: UserProfile? { profiles.first }
+    private var target: NutritionTarget? {
+        targets.sorted { $0.updatedAt > $1.updatedAt }.first
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                profileSection
+                targetsSection
+                aiSection
+                assistantSection
+                dataSection
+                aboutSection
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $isShowingProfileEditor) {
+                if let profile { ProfileEditorView(profile: profile) }
+            }
+            .sheet(isPresented: $isShowingTargetsEditor) {
+                if let target { TargetsEditorView(target: target) }
+            }
+            .fileImporter(isPresented: $isShowingImporter,
+                          allowedContentTypes: [.json],
+                          allowsMultipleSelection: false) { result in
+                handleImportSelection(result)
+            }
+            .alert("Backup", isPresented: Binding(
+                get: { alertMessage != nil },
+                set: { if !$0 { alertMessage = nil } })) {
+                Button("OK", role: .cancel) { alertMessage = nil }
+            } message: {
+                Text(alertMessage ?? "")
+            }
+            .alert("Restore this backup?", isPresented: Binding(
+                get: { isConfirmingImport != nil },
+                set: { if !$0 { isConfirmingImport = nil } })) {
+                Button("Replace all data", role: .destructive) {
+                    if let file = isConfirmingImport { performImport(file, strategy: .replace) }
+                    isConfirmingImport = nil
+                }
+                Button("Merge into current data") {
+                    if let file = isConfirmingImport { performImport(file, strategy: .merge) }
+                    isConfirmingImport = nil
+                }
+                Button("Cancel", role: .cancel) { isConfirmingImport = nil }
+            } message: {
+                if let file = isConfirmingImport {
+                    Text("The backup holds \(file.foodEntries.count) food entries "
+                         + "from \(AppFormatters.shortDay.string(from: file.exportDate)). "
+                         + "Replacing deletes what is currently on this device.")
+                }
+            }
+            .alert("Delete all data?", isPresented: $isConfirmingDeleteAll) {
+                Button("Delete everything", role: .destructive) { deleteAll() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes your profile, targets, every food entry and all "
+                     + "retained photos from this iPhone. It cannot be undone. "
+                     + "Export a backup first if you might want this data back.")
+            }
+        }
+    }
+
+    // MARK: Profile
+
+    private var profileSection: some View {
+        Section("Profile") {
+            if let profile {
+                LabeledContent("Goal", value: profile.goal.displayName)
+                LabeledContent("Activity", value: profile.activity.displayName)
+                LabeledContent("Weight",
+                               value: "\(AppFormatters.amount(profile.weightKg)) kg")
+                LabeledContent("Height",
+                               value: "\(AppFormatters.amount(profile.heightCm)) cm")
+
+                Button("Edit profile") { isShowingProfileEditor = true }
+
+                Button("Recalculate targets") { recalculateTargets() }
+
+                if profile.targetsLikelyStale {
+                    // Targets are never silently recalculated; the user is just
+                    // told that they look stale (spec section 6).
+                    Label("Your profile has changed since these targets were "
+                          + "worked out. Recalculating is optional.",
+                          systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("No profile yet.").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: Targets
+
+    private var targetsSection: some View {
+        Section {
+            if let target {
+                ForEach(Nutrient.allCases) { nutrient in
+                    let range = target.ranges[nutrient]
+                    LabeledContent(nutrient.displayName) {
+                        HStack(spacing: 4) {
+                            Text("\(AppFormatters.range(range)) \(nutrient.unitLabel)")
+                                .monospacedDigit()
+                            if range.isManuallyModified {
+                                Image(systemName: "pencil")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityLabel("Edited by you")
+                            }
+                        }
+                    }
+                }
+                Button("Edit daily ranges") { isShowingTargetsEditor = true }
+            } else {
+                Text("No targets yet.").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Daily Targets")
+        } footer: {
+            Text("Each nutrient is a range with a minimum and a maximum, because "
+                 + "the formulas behind them are estimates. Edit either bound.")
+        }
+    }
+
+    // MARK: AI
+
+    private var aiSection: some View {
+        Section {
+            ModelStatusRow(name: "Model A \u{2014} Recognition",
+                           filename: "\(ModelCatalogue.modelAName).mlmodelc",
+                           isAvailable: ModelCatalogue.isPresent(ModelCatalogue.modelAName))
+            ModelStatusRow(name: "Model B \u{2014} Portion & Nutrition",
+                           filename: "\(ModelCatalogue.modelBName).mlmodelc",
+                           isAvailable: ModelCatalogue.isPresent(ModelCatalogue.modelBName))
+
+            Toggle("Use remote AI if local models fail",
+                   isOn: Binding(
+                    get: { settings.remoteVisionFallbackEnabled },
+                    set: { settings.remoteVisionFallbackEnabled = $0; save() }))
+
+            APIKeyRow(title: "Remote vision API key", key: .remoteVisionAPIKey)
+        } header: {
+            Text("AI")
+        } footer: {
+            Text("Photo analysis runs on this device when a model is installed. "
+                 + "Portion estimates from one photo are approximate and always "
+                 + "editable before saving.")
+        }
+    }
+
+    private var assistantSection: some View {
+        Section {
+            Toggle("Allow the assistant to use my data",
+                   isOn: Binding(
+                    get: { settings.assistantDataSharingOptIn },
+                    set: { settings.assistantDataSharingOptIn = $0; save() }))
+
+            Picker("Provider", selection: Binding(
+                get: { settings.assistantProvider },
+                set: { settings.assistantProvider = $0; save() })) {
+                ForEach(AssistantProvider.allCases) { Text($0.displayName).tag($0) }
+            }
+
+            APIKeyRow(title: "Assistant API key", key: .assistantAPIKey)
+        } header: {
+            Text("AI Assistant")
+        } footer: {
+            Text(AssistantContextBuilder.dataSharingDisclosure
+                 + "\n\nUnlike the rest of the app, the assistant needs an "
+                 + "internet connection.")
+        }
+    }
+
+    // MARK: Data
+
+    private var dataSection: some View {
+        Section {
+            Toggle("Keep analysed photos",
+                   isOn: Binding(
+                    get: { settings.retainAnalysedImages },
+                    set: { newValue in
+                        settings.retainAnalysedImages = newValue
+                        if !newValue { ImageStore.deleteAll() }
+                        save()
+                    }))
+
+            Toggle("Keep my corrections for future training",
+                   isOn: Binding(
+                    get: { settings.storeCorrectionsForTraining },
+                    set: { settings.storeCorrectionsForTraining = $0; save() }))
+
+            Button("Export backup") { exportBackup() }
+
+            Button("Import backup") { isShowingImporter = true }
+
+            if let importSummary {
+                Text(importSummary).font(.caption).foregroundStyle(.secondary)
+            }
+
+            Button("Delete all data", role: .destructive) {
+                isConfirmingDeleteAll = true
+            }
+        } header: {
+            Text("Data")
+        } footer: {
+            Text("Everything is stored on this iPhone only. Deleting the app "
+                 + "removes its database, so export a backup if that matters. "
+                 + "Corrections and photos are never uploaded anywhere.")
+        }
+        .sheet(isPresented: $isShowingExporter) {
+            if let exportURL {
+                ShareSheet(url: exportURL)
+            }
+        }
+    }
+
+    // MARK: About
+
+    private var aboutSection: some View {
+        Section {
+            LabeledContent("Version", value: Self.versionString)
+            LabeledContent("Food reference rows",
+                           value: "\(LocalNutritionReference.shared.count)")
+            LabeledContent("Ontology entries", value: "\(FoodOntology.shared.count)")
+
+            NavigationLink("Data sources and licences") { AttributionView() }
+        } header: {
+            Text("About")
+        } footer: {
+            Text("Calculated targets and image-based nutrition estimates are "
+                 + "informational only and are not medical advice.")
+        }
+    }
+
+    static var versionString: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
+            as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
+    // MARK: Actions
+
+    private func save() {
+        try? context.save()
+    }
+
+    private func recalculateTargets() {
+        guard let profile else { return }
+        let breakdown = NutritionTargetCalculator.calculate(profile: profile)
+        if let target {
+            // Preserves bounds the user edited by hand.
+            target.apply(recalculated: breakdown.ranges)
+        } else {
+            context.insert(NutritionTarget(ranges: breakdown.ranges))
+        }
+        profile.markTargetsCalculated()
+        save()
+        Haptics.success()
+        alertMessage = "Targets recalculated. Any bound you edited by hand was kept."
+    }
+
+    private func exportBackup() {
+        do {
+            exportURL = try BackupService(context: context).exportToTemporaryFile()
+            isShowingExporter = true
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    private func handleImportSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            alertMessage = error.localizedDescription
+
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            // Security-scoped: the picker hands back a URL outside the sandbox.
+            let needsScope = url.startAccessingSecurityScopedResource()
+            defer { if needsScope { url.stopAccessingSecurityScopedResource() } }
+
+            guard let data = try? Data(contentsOf: url) else {
+                alertMessage = BackupError.unreadableFile.localizedDescription
+                return
+            }
+            do {
+                // Validated before anything touches the database.
+                isConfirmingImport = try BackupService.validate(data: data)
+            } catch {
+                alertMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func performImport(_ file: BackupFile, strategy: BackupService.ImportStrategy) {
+        do {
+            let summary = try BackupService(context: context)
+                .importBackup(file, strategy: strategy)
+            importSummary = "Imported \(summary.entriesImported) entries"
+                + (summary.entriesSkipped > 0
+                   ? ", skipped \(summary.entriesSkipped) already present" : "")
+                + "."
+            Haptics.success()
+        } catch {
+            alertMessage = error.localizedDescription
+            Haptics.error()
+        }
+    }
+
+    private func deleteAll() {
+        BackupService(context: context).deleteAllData(includingImages: true)
+        SecretStore.deleteAll()
+        let settings = context.loadAppSettings()
+        settings.hasCompletedOnboarding = false
+        settings.assistantDataSharingOptIn = false
+        save()
+        Haptics.success()
+        dismiss()
+    }
+}
+
+// MARK: - Rows
+
+struct ModelStatusRow: View {
+    let name: String
+    let filename: String
+    let isAvailable: Bool
+
+    var body: some View {
+        LabeledContent(name) {
+            HStack(spacing: 5) {
+                Image(systemName: isAvailable ? "checkmark.circle.fill" : "xmark.circle")
+                    .foregroundStyle(isAvailable ? .green : .secondary)
+                    .accessibilityHidden(true)
+                Text(isAvailable ? "Installed" : "Not installed")
+                    .font(.caption)
+            }
+        }
+        .accessibilityValue(isAvailable ? "Installed" : "Not installed. Expected \(filename)")
+    }
+}
+
+/// Keychain-backed key entry. The stored value is never displayed back, only
+/// whether one is present (spec section 39).
+struct APIKeyRow: View {
+    let title: String
+    let key: SecretStore.Key
+
+    @State private var draft = ""
+    @State private var isPresent = false
+    @State private var isEditing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.subheadline)
+                Spacer()
+                Text(isPresent ? "Saved" : "Not set")
+                    .font(.caption)
+                    .foregroundStyle(isPresent ? .green : .secondary)
+            }
+
+            if isEditing {
+                SecureField("Paste your API key", text: $draft)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textContentType(.password)
+
+                HStack(spacing: 10) {
+                    Button("Save") {
+                        _ = SecretStore.store(draft, for: key)
+                        draft = ""
+                        isEditing = false
+                        refresh()
+                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Cancel", role: .cancel) {
+                        draft = ""
+                        isEditing = false
+                    }
+                }
+                .font(.footnote)
+            } else {
+                HStack(spacing: 14) {
+                    Button(isPresent ? "Replace" : "Add key") { isEditing = true }
+                    if isPresent {
+                        Button("Delete", role: .destructive) {
+                            SecretStore.delete(key)
+                            refresh()
+                        }
+                    }
+                }
+                .font(.footnote)
+            }
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        isPresent = SecretStore.exists(key)
+    }
+}
+
+// MARK: - Editors
+
+struct ProfileEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+
+    @Bindable var profile: UserProfile
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Body") {
+                    DatePicker("Date of birth", selection: $profile.dateOfBirth,
+                               displayedComponents: .date)
+                    HStack {
+                        Text("Height")
+                        Spacer()
+                        TextField("cm", value: $profile.heightCm, format: .number)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                        Text("cm").foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Weight")
+                        Spacer()
+                        TextField("kg", value: $profile.weightKg, format: .number)
+                            .multilineTextAlignment(.trailing)
+                            .keyboardType(.decimalPad)
+                        Text("kg").foregroundStyle(.secondary)
+                    }
+                    Picker("Sex", selection: Binding(
+                        get: { profile.sex }, set: { profile.sex = $0 })) {
+                        ForEach(BiologicalSex.allCases) { Text($0.displayName).tag($0) }
+                    }
+                }
+
+                Section("Goal") {
+                    Picker("Goal", selection: Binding(
+                        get: { profile.goal }, set: { profile.goal = $0 })) {
+                        ForEach(FitnessGoal.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    Picker("Activity", selection: Binding(
+                        get: { profile.activity }, set: { profile.activity = $0 })) {
+                        ForEach(ActivityLevel.allCases) { Text($0.displayName).tag($0) }
+                    }
+                }
+
+                Section("Training") {
+                    Stepper("Strength: \(profile.strengthSessionsPerWeek)/week",
+                            value: $profile.strengthSessionsPerWeek, in: 0...14)
+                    Stepper("Cardio: \(profile.cardioSessionsPerWeek)/week",
+                            value: $profile.cardioSessionsPerWeek, in: 0...14)
+                }
+            }
+            .navigationTitle("Edit profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        try? context.save()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct TargetsEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+
+    let target: NutritionTarget
+    @State private var ranges = NutritionTargetRanges.zero
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("PREFERENCES").font(.caption.bold()).tracking(1.4).foregroundStyle(AppTheme.accent)
-                        Text("Make it yours").font(.largeTitle.bold())
-                    }.padding(.bottom, 4)
-
-                    SettingsSection("Profile", icon: "person.crop.circle") {
-                        if let profile = profiles.first {
-                            numberRow("Height", unit: "cm", value: Binding(get: { profile.heightCm }, set: { profile.heightCm = $0 }))
-                            numberRow("Weight", unit: "kg", value: Binding(get: { profile.weightKg }, set: { profile.weightKg = $0 }))
-                            Picker("Goal", selection: Binding(get: { profile.goal }, set: { profile.goalRaw = $0.rawValue })) {
-                                ForEach(FitnessGoal.allCases) { Text($0.title).tag($0) }
-                            }.tint(AppTheme.accent)
-                            Picker("Activity", selection: Binding(get: { profile.activity }, set: { profile.activityRaw = $0.rawValue })) {
-                                ForEach(ActivityLevel.allCases) { Text($0.title).tag($0) }
-                            }.tint(AppTheme.accent)
-                            Button("Recalculate targets") {
-                                targetDraft = NutritionTargetCalculator.calculate(profile: profile)
-                                message = "Review the new values and tap Save Targets."
-                            }.font(.subheadline.bold())
-                        }
+                VStack(spacing: AppTheme.pageSpacing) {
+                    ForEach(Nutrient.allCases) { nutrient in
+                        RangeEditorRow(nutrient: nutrient,
+                                       range: Binding(
+                                        get: { ranges[nutrient] },
+                                        set: { ranges[nutrient] = $0 }))
                     }
-
-                    SettingsSection("Daily Targets", icon: "scope") {
-                        NutritionEditor(nutrition: $targetDraft)
-                        Button("Save Targets") {
-                            guard targetDraft.isValid, targetDraft.calories > 0 else { message = "Enter valid targets."; return }
-                            targets.first?.update(targetDraft, manual: true)
-                            try? context.save()
-                        }.font(.subheadline.bold()).frame(maxWidth: .infinity).frame(minHeight: 44)
-                            .buttonStyle(.borderedProminent).tint(AppTheme.accent)
-                    }
-
-                    SettingsSection("AI", icon: "sparkles") {
-                        statusRow("Food recognition", value: modelStatus("FoodRecognition"))
-                        statusRow("Portion estimation", value: modelStatus("FoodPortion"))
-                        Text("REMOTE API KEY (OPTIONAL)").font(.caption.bold()).tracking(1)
-                            .foregroundStyle(.secondary)
-                        SecureField("Optional remote API key", text: $apiKey)
-                            .textContentType(.password).appInputBox()
-                        HStack {
-                            Button("Save Key") {
-                                message = SecretStore.save(apiKey) ? "Key stored in Keychain." : "Could not store key."
-                                apiKey = ""
-                            }.disabled(apiKey.isEmpty)
-                            Spacer()
-                            Button("Delete Key", role: .destructive) { SecretStore.delete(); message = "Key deleted." }
-                        }.font(.subheadline.bold())
-                        Toggle("Keep corrected AI results", isOn: $retainCorrections).tint(AppTheme.accent)
-                        Text("A key alone does not enable remote analysis; a provider must be configured.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-
-                    SettingsSection("Data & Privacy", icon: "externaldrive") {
-                        Toggle("Retain analysed images", isOn: $retainImages).tint(AppTheme.accent)
-                        Divider()
-                        Button { export() } label: { Label("Export Backup", systemImage: "square.and.arrow.up") }
-                        Button { showImport = true } label: { Label("Import Backup", systemImage: "square.and.arrow.down") }
-                        Button(role: .destructive) { showDelete = true } label: { Label("Delete All Data", systemImage: "trash") }
-                    }
-
-                    SettingsSection("About", icon: "info.circle") {
-                        Text("Nutrition and photo portions are estimates, not medical advice.")
-                            .font(.subheadline)
-                        Text("FoodSeg103, Nutrition5k, MyFCD, Open Food Facts, Malaysia Food-11, MF-150 and Roboflow Malaysian Food Recognition.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }.appPageContent()
+                }
+                .appPageContent()
             }
-            .scrollDismissesKeyboard(.interactively)
             .appPageSurface()
-            .navigationTitle("Settings")
+            .navigationTitle("Daily ranges")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
-                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Done") { AppKeyboard.dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        target.ranges = ranges
+                        try? context.save()
+                        Haptics.success()
+                        dismiss()
+                    }
+                }
             }
-            .onAppear { targetDraft = targets.first?.nutrition ?? .zero }
-            .fileExporter(isPresented: $showExport, document: document, contentType: .json,
-                          defaultFilename: "NutritionTracker-backup") { result in
-                if case .failure(let error) = result { message = error.localizedDescription }
-            }
-            .fileImporter(isPresented: $showImport, allowedContentTypes: [.json]) { result in
-                do {
-                    let url = try result.get()
-                    guard url.startAccessingSecurityScopedResource() else { throw CocoaError(.fileReadNoPermission) }
-                    defer { url.stopAccessingSecurityScopedResource() }
-                    restore(try BackupService.decode(Data(contentsOf: url)))
-                } catch { message = error.localizedDescription }
-            }
-            .confirmationDialog("Delete all nutrition data?", isPresented: $showDelete) {
-                Button("Delete All Data", role: .destructive) { deleteAll() }
-            }
-            .alert("Settings", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
-                Button("OK") { message = nil }
-            } message: { Text(message ?? "") }
-        }.tint(AppTheme.accent)
-    }
-
-    private func numberRow(_ title: String, unit: String, value: Binding<Double>) -> some View {
-        HStack {
-            Text(title).font(.subheadline)
-            Spacer()
-            NumericEntryField(value: value, unit: unit, hint: "Enter \(title.lowercased())")
-        }.frame(minHeight: 44)
-    }
-    private func statusRow(_ title: String, value: String) -> some View {
-        HStack {
-            Text(title).font(.subheadline)
-            Spacer()
-            Text(value).font(.caption.bold()).foregroundStyle(value == "Installed" ? AppTheme.accent : Color.secondary)
-        }.frame(minHeight: 36)
-    }
-    private func modelStatus(_ name: String) -> String {
-        Bundle.main.url(forResource: name, withExtension: "mlmodelc") == nil ? "Unavailable" : "Installed"
-    }
-    private func export() {
-        let backup = NutritionBackup(profile: profiles.first.map(ProfileBackup.init),
-                                     target: targets.first.map(TargetBackup.init),
-                                     foodEntries: entries.map(FoodBackup.init), barcodeCache: cache.map(BarcodeBackup.init))
-        do { document = BackupDocument(data: try BackupService.encode(backup)); showExport = true }
-        catch { message = error.localizedDescription }
-    }
-    private func restore(_ backup: NutritionBackup) {
-        deleteAll(save: false)
-        if let profile = backup.profile { context.insert(profile.model()) }
-        if let target = backup.target { context.insert(target.model()) }
-        backup.foodEntries.forEach { context.insert($0.model()) }
-        backup.barcodeCache.forEach { context.insert($0.model()) }
-        do { try context.save(); message = "Backup restored." }
-        catch { context.rollback(); message = "Restore failed: \(error.localizedDescription)" }
-    }
-    private func deleteAll(save: Bool = true) {
-        entries.forEach(context.delete); cache.forEach(context.delete)
-        targets.forEach(context.delete); profiles.forEach(context.delete)
-        if save { try? context.save() }
+            .onAppear { ranges = target.ranges }
+        }
     }
 }
+
+/// Attribution for every dataset and database the app relies on
+/// (spec sections 29, 38).
+struct AttributionView: View {
+    var body: some View {
+        List {
+            Section("Nutrition data") {
+                AttributionRow(
+                    title: "MyFCD \u{2014} Malaysian Food Composition Database",
+                    detail: "Ministry of Health Malaysia. Lab-measured values for "
+                        + "local foods, compiled by hand into the bundled reference "
+                        + "table. Check its terms before redistributing.")
+                AttributionRow(
+                    title: "Open Food Facts",
+                    detail: "Barcode product data, contributed by the community. "
+                        + "Product data under the Open Database Licence (ODbL).")
+            }
+
+            Section("Model training datasets") {
+                AttributionRow(
+                    title: "FoodSeg103",
+                    detail: "Food segmentation base training set for Model A. "
+                        + "Research use; check its licence before distribution.")
+                AttributionRow(
+                    title: "Nutrition5k",
+                    detail: "Google. Mass and nutrition labels for Model B. "
+                        + "Captured on a fixed overhead rig with depth sensing.")
+                AttributionRow(
+                    title: "Malaysia Food-11",
+                    detail: "Kaggle. Small 11-class Malaysian starter set, "
+                        + "used for fine-tuning.")
+                AttributionRow(
+                    title: "MF-150",
+                    detail: "IEEE DataPort. Multilabel Malaysian foods dataset for "
+                        + "ingredient detection.")
+                AttributionRow(
+                    title: "Malaysian Food Recognition 1 & 2",
+                    detail: "Roboflow Universe, CC BY 4.0. Community "
+                        + "object-detection sets.")
+            }
+
+            Section {
+                Text("Local-dish recognition starts weak: the public Malaysian "
+                     + "datasets are small, and Model B's portion estimates were "
+                     + "trained only on Nutrition5k, so its accuracy on local "
+                     + "food is unverified. Your own corrections are what "
+                     + "improve it over time.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Accuracy")
+            }
+        }
+        .navigationTitle("Data sources")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AttributionRow: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.weight(.medium))
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+#if canImport(UIKit)
+/// Native share sheet for the exported backup file.
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+#endif

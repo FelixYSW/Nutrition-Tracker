@@ -1,11 +1,20 @@
 name: NutritionTracker
+
 options:
   bundleIdPrefix: com.felix
+  deploymentTarget:
+    iOS: '17.0'
+  createIntermediateGroups: true
+
 settings:
   base:
     IPHONEOS_DEPLOYMENT_TARGET: '17.0'
     SWIFT_VERSION: '5.9'
+    # iPhone only (1). The spec targets a native iPhone app.
     TARGETED_DEVICE_FAMILY: '1'
+    DEVELOPMENT_TEAM: ''
+    CODE_SIGN_STYLE: Automatic
+
 targets:
   NutritionTracker:
     type: application
@@ -14,16 +23,21 @@ targets:
       - path: NutritionTracker
     settings:
       base:
+        # Must stay stable across CI builds: Sideloadly re-signs and reinstalls
+        # over the existing install, and changing this breaks that continuity.
         PRODUCT_BUNDLE_IDENTIFIER: com.felix.NutritionTracker
-        MARKETING_VERSION: 1.0
-        CURRENT_PROJECT_VERSION: 2
+        PRODUCT_NAME: NutritionTracker
+        MARKETING_VERSION: '2.0'
+        CURRENT_PROJECT_VERSION: '1'
+        GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Nutrition Tracker
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_NSCameraUsageDescription: Take food photos and scan product barcodes.
-        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Choose a food photo for analysis.
-        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Save an image you choose to retain.
-        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSCameraUsageDescription: Used to photograph food for nutrition analysis and to scan product barcodes.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Used to pick a single food photo to analyse.
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+
   NutritionTrackerTests:
     type: bundle.unit-test
     platform: iOS
@@ -31,6 +45,11 @@ targets:
       - path: NutritionTrackerTests
     dependencies:
       - target: NutritionTracker
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.felix.NutritionTrackerTests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   NutritionTracker:
     build:
@@ -38,7 +57,12 @@ schemes:
         NutritionTracker: all
         NutritionTrackerTests: [test]
     test:
+      gatherCoverageData: true
       targets:
         - NutritionTrackerTests
+    run:
+      config: Debug
+    archive:
+      config: Release
     management:
       shared: true

@@ -1,54 +1,115 @@
-"""Convert Nutrition5k dish metadata and official split ID lists to JSONL.
+#!/usr/bin/env python3
+"""Build the Model B manifest from Nutrition5k.
 
-Pass an image template relative to dataset root, e.g. a validated path containing
-{dish_id}; this avoids guessing which RGB view a particular download includes.
+Expected layout (a subset of gs://nutrition5k_dataset/nutrition5k_dataset):
+
+    <root>/metadata/dish_metadata_cafe1.csv
+    <root>/metadata/dish_metadata_cafe2.csv
+    <root>/dish_ids/splits/rgb_train_ids.txt
+    <root>/dish_ids/splits/rgb_test_ids.txt
+    <root>/imagery/realsense_overhead/dish_<id>/rgb.png
+    <root>/imagery/realsense_overhead/dish_<id>/depth_raw.png   (optional)
+
+Each metadata row is: dish_id, total_calories, total_mass, total_fat,
+total_carb, total_protein, then repeating groups of seven per ingredient
+(ingr_id, ingr_name, grams, calories, fat, carb, protein). Rows vary in length,
+so they are read with the csv module rather than a fixed-width table.
+
+Only overhead RGB dishes are used. Note the domain gap: these were shot from a
+fixed overhead rig with depth sensing, not a handheld phone (spec section 18).
+
+Usage:
+    python -m ml.scripts.prepare_nutrition5k --root ml/data/raw/nutrition5k_dataset
 """
+from __future__ import annotations
+
 import argparse
 import csv
 import json
-import random
+import math
 from pathlib import Path
 
+from ml.common import MANIFESTS, split_for
 
-def read_ids(path):
-    return {line.strip() for line in path.read_text().splitlines() if line.strip()}
+FIELDS = ["dish_id", "split", "image", "depth", "mass", "calories", "protein",
+          "carbs", "fat", "ingredients"]
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def parse_metadata(path: Path) -> dict[str, dict]:
+    dishes = {}
+    with path.open(encoding="utf-8", newline="") as handle:
+        for row in csv.reader(handle):
+            if len(row) < 6 or not row[0].startswith("dish_"):
+                continue
+            try:
+                calories, mass, fat, carbs, protein = (float(v) for v in row[1:6])
+            except ValueError:
+                continue
+            if not all(math.isfinite(v) and v >= 0 for v in (calories, mass, fat, carbs, protein)):
+                continue
+            ingredients = []
+            for start in range(6, len(row) - 6, 7):
+                group = row[start:start + 7]
+                try:
+                    ingredients.append({"id": group[0], "name": group[1], "grams": float(group[2])})
+                except (ValueError, IndexError):
+                    break
+            dishes[row[0]] = {"mass": mass, "calories": calories, "protein": protein,
+                              "carbs": carbs, "fat": fat, "ingredients": ingredients}
+    return dishes
+
+
+def read_ids(path: Path) -> set[str]:
+    return {line.strip() for line in path.read_text().splitlines() if line.strip()} if path.exists() else set()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--train-ids", type=Path, required=True)
-    parser.add_argument("--test-ids", type=Path, required=True)
-    parser.add_argument("--image-template", required=True, help="Relative path with {dish_id}")
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--out", type=Path, default=MANIFESTS / "nutrition5k.csv")
+    parser.add_argument("--max-calories", type=float, default=3000,
+                        help="drop implausible outliers (data-entry errors)")
     args = parser.parse_args()
-    train_ids, test_ids = read_ids(args.train_ids), read_ids(args.test_ids)
-    if train_ids & test_ids:
-        raise ValueError("Official train and test ID lists overlap")
-    train_list = sorted(train_ids); random.Random(42).shuffle(train_list)
-    validation = set(train_list[:max(1, len(train_list) // 10)])
-    rows = []; missing = 0
-    for file in sorted((args.root / "metadata").glob("dish_metadata_cafe*.csv")):
-        with file.open(newline="") as stream:
-            for fields in csv.reader(stream):
-                if len(fields) < 6 or not fields[0].startswith("dish_"):
-                    continue
-                dish_id = fields[0]
-                if dish_id not in train_ids | test_ids:
-                    continue
-                image = args.root / args.image_template.format(dish_id=dish_id)
-                if not image.is_file():
-                    missing += 1; continue
-                row = {"image": str(image.resolve()),
-                       "split": "test" if dish_id in test_ids else "val" if dish_id in validation else "train",
-                       "calories": float(fields[1]), "mass_g": float(fields[2]),
-                       "fat": float(fields[3]), "carbs": float(fields[4]), "protein": float(fields[5])}
-                rows.append(row)
-    if not rows:
-        raise ValueError("No image/metadata pairs; check image template and dataset layout")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
-    print(f"Prepared {len(rows)} dishes; {missing} missing images")
+
+    dishes: dict[str, dict] = {}
+    for name in ("dish_metadata_cafe1.csv", "dish_metadata_cafe2.csv"):
+        path = args.root / "metadata" / name
+        if path.exists():
+            dishes.update(parse_metadata(path))
+    if not dishes:
+        raise SystemExit("No dish metadata found under <root>/metadata/")
+
+    train_ids = read_ids(args.root / "dish_ids" / "splits" / "rgb_train_ids.txt")
+    test_ids = read_ids(args.root / "dish_ids" / "splits" / "rgb_test_ids.txt")
+
+    rows, skipped = [], 0
+    overhead = args.root / "imagery" / "realsense_overhead"
+    for index, (dish_id, info) in enumerate(sorted(dishes.items())):
+        image = overhead / dish_id / "rgb.png"
+        if not image.exists() or info["mass"] <= 0 or info["calories"] > args.max_calories:
+            skipped += 1
+            continue
+        if dish_id in test_ids:
+            split = "test"
+        elif dish_id in train_ids:
+            # Carve a validation set out of the official train split.
+            split = "val" if split_for(index, seed=5, val=0.1, test=0.0) == "val" else "train"
+        else:
+            split = split_for(index, seed=5)
+        depth = overhead / dish_id / "depth_raw.png"
+        rows.append({"dish_id": dish_id, "split": split, "image": str(image.resolve()),
+                     "depth": str(depth.resolve()) if depth.exists() else "",
+                     **{k: info[k] for k in ("mass", "calories", "protein", "carbs", "fat")},
+                     "ingredients": json.dumps(info["ingredients"])})
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with args.out.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    splits = {s: sum(r["split"] == s for r in rows) for s in ("train", "val", "test")}
+    print(f"Wrote {len(rows)} dishes to {args.out} {splits}; skipped {skipped}")
 
 
 if __name__ == "__main__":

@@ -1,107 +1,183 @@
-"""Train a mobile semantic segmenter from a prepared image/mask manifest.
+#!/usr/bin/env python3
+"""Train Model A (food / ingredient recognition and segmentation).
 
-Manifest JSONL: {"image":"...jpg", "mask":"...png", "split":"train|val|test"}.
-Mask pixels are integer class indices, 0 background, 255 ignore. Dataset adapters must
-map each source's labels through ml/config/ontology.json before producing this manifest.
+Two stages (spec section 19):
+
+  base       FoodSeg103 masks only.
+             python -m ml.ingredient_segmentation.train --stage base \
+                 --manifests ml/data/manifests/foodseg103.jsonl
+
+  malaysian  Fine-tune from the base checkpoint, adding Malaysian classes. Mix
+             FoodSeg103 back in at a low weight so the model does not forget it.
+             python -m ml.ingredient_segmentation.train --stage malaysian \
+                 --init ml/runs/model_a_base/best.pt \
+                 --manifests ml/data/manifests/foodseg103.jsonl \
+                             ml/data/manifests/roboflow_mfr.jsonl \
+                             ml/data/manifests/malaysia_food11.jsonl \
+                             ml/data/manifests/mf150.jsonl \
+                 --source-weight foodseg103=0.3
+
+Checkpoints and a metrics log go to ml/runs/<run-name>/ (gitignored).
 """
+from __future__ import annotations
+
 import argparse
 import json
-import random
+import math
+import time
+from collections import Counter
 from pathlib import Path
 
-import numpy as np
 import torch
-from PIL import Image
-from torch.utils.data import DataLoader, Dataset
-from torchvision.models.segmentation import deeplabv3_mobilenet_v3_large
-from torchvision.transforms import functional as TF
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from tqdm import tqdm
+
+from ml.common import RUNS, normalise, pick_device, read_jsonl, seed_everything
+from ml.ingredient_segmentation.dataset import IGNORE, IngredientDataset, collect_labels
+from ml.ingredient_segmentation.evaluate import evaluate
+from ml.ingredient_segmentation.model import IngredientSegmenter, expand_classes, load_checkpoint
 
 
-class SegmentationRows(Dataset):
-    def __init__(self, manifest, split, size=384):
-        self.rows = [json.loads(line) for line in Path(manifest).read_text().splitlines()]
-        self.rows = [row for row in self.rows if row["split"] == split]
-        self.size = size
-        self.augment = split == "train"
+def compute_loss(seg_logits, presence_logits, masks, presence, seg_weight, presence_weight):
+    # Segmentation: per-sample mean over valid pixels, weighted by how much the
+    # mask is trusted. Image-label samples have no valid pixels and weight 0.
+    ce = F.cross_entropy(seg_logits, masks, ignore_index=IGNORE, reduction="none")
+    valid = (masks != IGNORE).float()
+    per_sample = (ce * valid).sum(dim=(1, 2)) / valid.sum(dim=(1, 2)).clamp(min=1.0)
+    seg_loss = (per_sample * seg_weight).sum() / seg_weight.sum().clamp(min=1e-6)
 
-    def __len__(self):
-        return len(self.rows)
-
-    def __getitem__(self, index):
-        row = self.rows[index]
-        image = Image.open(row["image"]).convert("RGB").resize((self.size, self.size))
-        mask = Image.open(row["mask"]).resize((self.size, self.size), Image.Resampling.NEAREST)
-        if self.augment and random.random() < 0.5:
-            image = TF.hflip(image); mask = TF.hflip(mask)
-        if self.augment:
-            image = TF.adjust_brightness(image, random.uniform(0.85, 1.15))
-        return TF.to_tensor(image), torch.from_numpy(np.array(mask, dtype=np.int64))
+    # Presence: only classes whose status is known contribute.
+    known = (presence >= 0).float()
+    bce = F.binary_cross_entropy_with_logits(presence_logits, presence.clamp(min=0),
+                                             reduction="none")
+    presence_loss = (bce * known).sum() / known.sum().clamp(min=1.0)
+    return seg_loss + presence_weight * presence_loss, seg_loss.detach(), presence_loss.detach()
 
 
-def evaluate(model, loader, classes, device):
-    matrix = torch.zeros((classes, classes), dtype=torch.int64)
-    model.eval()
-    with torch.no_grad():
-        for images, masks in loader:
-            pred = model(images.to(device))["out"].argmax(1).cpu()
-            valid = (masks != 255) & (masks >= 0) & (masks < classes)
-            counts = torch.bincount((masks[valid] * classes + pred[valid]).reshape(-1), minlength=classes * classes)
-            matrix += counts.reshape(classes, classes)
-    tp = matrix.diag().float()
-    precision = tp / matrix.sum(0).clamp_min(1)
-    recall = tp / matrix.sum(1).clamp_min(1)
-    iou = tp / (matrix.sum(0) + matrix.sum(1) - tp).clamp_min(1)
-    return {"precision": precision.tolist(), "recall": recall.tolist(), "mask_iou": iou.tolist(),
-            "mean_mask_iou": iou.mean().item()}
+def make_sampler(records: list[dict], weights_arg: list[str]) -> WeightedRandomSampler | None:
+    if not weights_arg:
+        return None
+    source_weights = {}
+    for item in weights_arg:
+        name, value = item.split("=")
+        source_weights[name] = float(value)
+    counts = Counter(r["source"] for r in records)
+    weights = [source_weights.get(r["source"], 1.0) / counts[r["source"]] for r in records]
+    return WeightedRandomSampler(weights, num_samples=len(records), replacement=True)
 
 
-def load_for_expansion(model, checkpoint):
-    current = model.state_dict()
-    for key, old in checkpoint["model"].items():
-        if key not in current:
-            continue
-        if current[key].shape == old.shape:
-            current[key] = old
-        elif len(current[key].shape) == len(old.shape) and current[key].shape[1:] == old.shape[1:]:
-            # Ontology only appends classes; retain existing classifier channels.
-            count = min(current[key].shape[0], old.shape[0])
-            current[key][:count] = old[:count]
-    model.load_state_dict(current)
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--classes", type=int, required=True)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--checkpoint", default="ml/checkpoints/segmentation.pt")
-    parser.add_argument("--resume")
-    parser.add_argument("--eval-only", action="store_true")
-    parser.add_argument("--eval-split", choices=["val", "test"], default="test")
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--stage", choices=["base", "malaysian"], required=True)
+    parser.add_argument("--manifests", type=Path, nargs="+", required=True)
+    parser.add_argument("--init", type=Path, help="checkpoint to fine-tune from")
+    parser.add_argument("--run-name", default=None)
+    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--size", type=int, default=384)
+    parser.add_argument("--presence-weight", type=float, default=0.5)
+    parser.add_argument("--source-weight", nargs="*", default=[],
+                        help="per-source sampling weight, e.g. foodseg103=0.3")
+    parser.add_argument("--freeze-backbone-epochs", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = deeplabv3_mobilenet_v3_large(weights=None, weights_backbone=None, num_classes=args.classes).to(device)
-    if args.resume:
-        load_for_expansion(model, torch.load(args.resume, map_location=device, weights_only=True))
-    if args.eval_only:
-        if not args.resume:
-            raise ValueError("--eval-only requires --resume")
-        loader = DataLoader(SegmentationRows(args.manifest, args.eval_split), batch_size=args.batch_size)
-        print(json.dumps(evaluate(model, loader, args.classes, device))); return
-    train = DataLoader(SegmentationRows(args.manifest, "train"), batch_size=args.batch_size, shuffle=True)
-    val = DataLoader(SegmentationRows(args.manifest, "val"), batch_size=args.batch_size)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4)
-    Path(args.checkpoint).parent.mkdir(parents=True, exist_ok=True)
-    for epoch in range(args.epochs):
+
+    # Stage defaults: fine-tuning uses fewer epochs and a lower learning rate.
+    base = args.stage == "base"
+    epochs = args.epochs or (40 if base else 15)
+    lr = args.lr or (3e-4 if base else 1e-4)
+    freeze_epochs = args.freeze_backbone_epochs if args.freeze_backbone_epochs is not None else (0 if base else 3)
+    run_dir = RUNS / (args.run_name or f"model_a_{args.stage}")
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    seed_everything(args.seed)
+    device = pick_device()
+
+    records = [r for path in args.manifests for r in read_jsonl(path)]
+    train_records = [r for r in records if r["split"] == "train"]
+    val_records = [r for r in records if r["split"] == "val"]
+    if not train_records:
+        raise SystemExit("No training records found in the given manifests.")
+
+    if args.init:
+        model, checkpoint = load_checkpoint(args.init)
+        labels = collect_labels(records, existing=checkpoint["labels"])
+        model = expand_classes(model, checkpoint["labels"], labels)
+        added = len(labels) - len(checkpoint["labels"])
+        print(f"Fine-tuning from {args.init}: {len(labels)} classes ({added} new)")
+    else:
+        labels = collect_labels(records)
+        model = IngredientSegmenter(len(labels))
+        print(f"Training from ImageNet backbone: {len(labels)} classes")
+    model.to(device)
+
+    train_ds = IngredientDataset(train_records, labels, args.size, train=True)
+    val_ds = IngredientDataset(val_records, labels, args.size, train=False)
+    sampler = make_sampler(train_records, args.source_weight)
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=sampler is None,
+                              sampler=sampler, num_workers=args.workers, drop_last=True,
+                              pin_memory=device.type == "cuda")
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.workers)
+
+    optimiser = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    total_steps = epochs * max(1, len(train_loader))
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimiser, max_lr=lr, total_steps=total_steps,
+                                                    pct_start=0.1)
+    scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
+
+    best_score, history = -math.inf, []
+    for epoch in range(1, epochs + 1):
+        frozen = epoch <= freeze_epochs
+        for parameter in model.backbone.parameters():
+            parameter.requires_grad = not frozen
+
         model.train()
-        for images, masks in train:
-            output = model(images.to(device))["out"]
-            loss = torch.nn.functional.cross_entropy(output, masks.to(device), ignore_index=255)
-            optimizer.zero_grad(); loss.backward(); optimizer.step()
-        metrics = evaluate(model, val, args.classes, device)
-        print(json.dumps({"epoch": epoch + 1, **metrics}))
-        torch.save({"model": model.state_dict(), "classes": args.classes, "epoch": epoch + 1}, args.checkpoint)
+        totals = Counter()
+        started = time.time()
+        for images, masks, presence, seg_weight in tqdm(train_loader, desc=f"epoch {epoch}/{epochs}"):
+            images = normalise(images.to(device, non_blocking=True))
+            masks, presence = masks.to(device), presence.to(device)
+            seg_weight = seg_weight.to(device)
+
+            with torch.autocast(device_type=device.type, enabled=device.type == "cuda"):
+                seg_logits, presence_logits = model(images)
+            loss, seg_loss, pres_loss = compute_loss(seg_logits.float(), presence_logits.float(),
+                                                     masks, presence, seg_weight,
+                                                     args.presence_weight)
+            optimiser.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.step(optimiser)
+            scaler.update()
+            scheduler.step()
+            totals.update(loss=loss.item(), seg=seg_loss.item(), presence=pres_loss.item(), n=1)
+
+        metrics = evaluate(model, val_loader, labels, device) if val_records else {}
+        # Base stage ranks on mIoU; the Malaysian stage, where most supervision
+        # is image-level, ranks on presence mAP.
+        score = metrics.get("miou" if base else "presence_map", -totals["loss"])
+        entry = {"epoch": epoch, "seconds": round(time.time() - started),
+                 "train_loss": totals["loss"] / max(1, totals["n"]),
+                 "seg_loss": totals["seg"] / max(1, totals["n"]),
+                 "presence_loss": totals["presence"] / max(1, totals["n"]),
+                 **{k: v for k, v in metrics.items() if not isinstance(v, (list, dict))}}
+        history.append(entry)
+        print(json.dumps(entry))
+
+        checkpoint = {"model": model.state_dict(), "labels": labels, "size": args.size,
+                      "stage": args.stage, "epoch": epoch, "metrics": entry}
+        torch.save(checkpoint, run_dir / "last.pt")
+        if score > best_score:
+            best_score = score
+            torch.save(checkpoint, run_dir / "best.pt")
+            if metrics:
+                (run_dir / "best_metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    (run_dir / "history.json").write_text(json.dumps(history, indent=2))
+    (run_dir / "labels.json").write_text(json.dumps(labels, indent=2))
+    print(f"Done. Best checkpoint: {run_dir / 'best.pt'}")
 
 
 if __name__ == "__main__":
