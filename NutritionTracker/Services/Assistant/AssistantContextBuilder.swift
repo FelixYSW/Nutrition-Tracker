@@ -198,12 +198,12 @@ struct AssistantContextBuilder {
     an estimate.
     """
 
-    /// One-line disclosure shown before the first assistant use
-    /// (spec section 29A).
+    /// Plain disclosure shown in the assistant sheet. Informational only: there
+    /// is no setting to change, but the user should still know what is sent.
     nonisolated static let dataSharingDisclosure = """
-    To answer, this sends your profile basics, today's targets and food log, and \
-    a 14-day trend summary to your chosen AI provider. Nothing is sent until you \
-    turn this on, and your food photos are never uploaded.
+    To answer, the assistant sends your profile basics, today's targets and food \
+    log, and a 14-day trend summary to an AI service. Food photos are never sent, \
+    apart from a menu photo you attach yourself.
     """
 
     nonisolated static let systemPrompt = """

@@ -30,8 +30,7 @@ protocol PortionNutritionService: Sendable {
 struct PreparedImage: @unchecked Sendable {
     let pixelBuffer: CVPixelBuffer
     let pixelSize: CGSize
-    /// JPEG bytes, kept for an optional remote fallback request and for
-    /// retaining the image after saving.
+    /// JPEG bytes, kept for retaining the image after saving.
     let jpegData: Data
 
     static let targetEdge: CGFloat = 640

@@ -46,52 +46,39 @@ final class AssistantViewModel {
     private let service: AssistantServing
     private let executor: AssistantToolExecutor
     private let contextBuilder: AssistantContextBuilder
-    private let settings: AppSettings
 
     /// Guards against an unbounded tool loop if the model keeps calling tools.
     private static let maxToolRoundTrips = 5
 
     init(service: AssistantServing,
          executor: AssistantToolExecutor,
-         contextBuilder: AssistantContextBuilder,
-         settings: AppSettings) {
+         contextBuilder: AssistantContextBuilder) {
         self.service = service
         self.executor = executor
         self.contextBuilder = contextBuilder
-        self.settings = settings
     }
 
+    /// The assistant uses the app's built-in key; there is nothing for the
+    /// user to configure.
     @MainActor
-    static func make(context: ModelContext, settings: AppSettings) -> AssistantViewModel {
-        let service: AssistantServing = APIKeyResolver.hasKey(for: .assistantAPIKey)
-            ? AnthropicAssistantService()
+    static func make(context: ModelContext) -> AssistantViewModel {
+        let service: AssistantServing = BundledAPIKey.hasAssistantKey
+            ? OpenAICompatibleAssistantService()
             : UnconfiguredAssistantService()
 
         return AssistantViewModel(
             service: service,
             executor: AssistantToolExecutor(context: context),
-            contextBuilder: AssistantContextBuilder(context: context),
-            settings: settings)
+            contextBuilder: AssistantContextBuilder(context: context))
     }
 
     // MARK: Availability
 
-    enum Availability: Equatable {
-        case ready
-        case needsOptIn
-        case needsAPIKey
-
-        var isReady: Bool { self == .ready }
-    }
-
-    var availability: Availability {
-        if !settings.assistantDataSharingOptIn { return .needsOptIn }
-        if !service.isConfigured { return .needsAPIKey }
-        return .ready
-    }
+    /// Ready, or unavailable because this build has no assistant key.
+    var isAvailable: Bool { service.isConfigured }
 
     var canSend: Bool {
-        availability.isReady
+        isAvailable
             && !isSending
             && pendingWrite == nil
             && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -105,10 +92,8 @@ final class AssistantViewModel {
         let image = attachedImageData
         guard !text.isEmpty || image != nil else { return }
 
-        guard availability.isReady else {
-            append(.error(availability == .needsOptIn
-                ? AssistantServiceError.optInRequired.localizedDescription
-                : AssistantServiceError.notConfigured.localizedDescription))
+        guard isAvailable else {
+            append(.error(AssistantServiceError.notConfigured.localizedDescription))
             return
         }
 
@@ -156,13 +141,20 @@ final class AssistantViewModel {
                 append(.assistant(text))
             }
 
-            guard response.hasToolCalls else { return }
-
-            // Record the assistant turn verbatim so the provider sees its own
-            // tool_use blocks on the next round trip.
-            turns.append(AssistantTurn(role: .assistant, blocks: response.toolCalls.map {
+            // Record the whole assistant turn - its text as well as its tool
+            // calls - so the next request carries the full conversation.
+            // Without the text, a follow-up like "make it smaller" has nothing
+            // to refer to.
+            var assistantBlocks: [AssistantTurn.Block] = []
+            if let text = response.text { assistantBlocks.append(.text(text)) }
+            assistantBlocks += response.toolCalls.map {
                 .toolUse(id: $0.id, name: $0.tool.rawValue, input: $0.arguments)
-            }))
+            }
+            if !assistantBlocks.isEmpty {
+                turns.append(AssistantTurn(role: .assistant, blocks: assistantBlocks))
+            }
+
+            guard response.hasToolCalls else { return }
 
             var resultBlocks: [AssistantTurn.Block] = []
             var paused = false

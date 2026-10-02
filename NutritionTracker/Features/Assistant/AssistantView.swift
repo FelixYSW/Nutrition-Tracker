@@ -9,7 +9,6 @@ struct AssistantView: View {
 
     @State private var viewModel: AssistantViewModel?
     @State private var photoSelection: PhotosPickerItem?
-    @State private var isShowingSettings = false
 
     var body: some View {
         NavigationStack {
@@ -40,8 +39,7 @@ struct AssistantView: View {
         }
         .onAppear {
             if viewModel == nil {
-                let settings = context.loadAppSettings()
-                viewModel = AssistantViewModel.make(context: context, settings: settings)
+                viewModel = AssistantViewModel.make(context: context)
             }
         }
     }
@@ -49,40 +47,23 @@ struct AssistantView: View {
     @ViewBuilder
     private func content(viewModel: AssistantViewModel) -> some View {
         VStack(spacing: 0) {
-            switch viewModel.availability {
-            case .needsOptIn:
-                setupState(
-                    title: "Turn on the assistant",
-                    message: AssistantContextBuilder.dataSharingDisclosure,
-                    actionTitle: "Open Settings")
-
-            case .needsAPIKey:
-                setupState(
-                    title: "Add an API key",
-                    message: "The assistant needs an API key for your chosen provider. "
-                        + "Add one in Settings under AI.",
-                    actionTitle: "Open Settings")
-
-            case .ready:
+            if viewModel.isAvailable {
                 transcript(viewModel: viewModel)
                 composer(viewModel: viewModel)
+            } else {
+                // Nothing for the user to set up: just say it isn't available.
+                VStack {
+                    Spacer()
+                    EmptyStateView(
+                        title: "Assistant not available",
+                        message: "The assistant isn't available in this version of the "
+                            + "app. Everything else works as normal.",
+                        systemImage: "sparkles")
+                    Spacer()
+                }
             }
         }
         .background(AppTheme.background.ignoresSafeArea())
-        .sheet(isPresented: $isShowingSettings) { SettingsView() }
-    }
-
-    private func setupState(title: String, message: String, actionTitle: String) -> some View {
-        VStack {
-            Spacer()
-            EmptyStateView(title: title,
-                           message: message,
-                           systemImage: "sparkles",
-                           actionTitle: actionTitle) {
-                isShowingSettings = true
-            }
-            Spacer()
-        }
     }
 
     private func transcript(viewModel: AssistantViewModel) -> some View {
@@ -126,6 +107,10 @@ struct AssistantView: View {
             Text("The assistant can see today's targets and food log, and your "
                  + "recent trends. It always asks before changing anything.")
                 .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(AssistantContextBuilder.dataSharingDisclosure)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

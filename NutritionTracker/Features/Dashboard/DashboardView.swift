@@ -81,13 +81,13 @@ struct DashboardView: View {
             Button {
                 isShowingAssistant = true
             } label: {
-                Image(systemName: assistantIsReady ? "sparkles" : "sparkles.rectangle.stack")
+                Image(systemName: "sparkles")
                     .accessibilityLabel(assistantIsReady
                         ? "Open assistant"
-                        : "Assistant needs setup")
+                        : "Assistant not available")
             }
-            // Never a dead tap target: when unconfigured it still opens and
-            // explains what to do (spec section 29A).
+            // Never a dead tap target: when unavailable it still opens and says
+            // so (spec section 29A).
             .opacity(assistantIsReady ? 1 : 0.5)
 
             Button {
@@ -99,11 +99,7 @@ struct DashboardView: View {
         }
     }
 
-    private var assistantIsReady: Bool {
-        let settings = context.loadAppSettings()
-        return settings.assistantDataSharingOptIn
-            && APIKeyResolver.hasKey(for: .assistantAPIKey)
-    }
+    private var assistantIsReady: Bool { BundledAPIKey.hasAssistantKey }
 
     // MARK: Sections
 

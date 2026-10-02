@@ -12,6 +12,8 @@ struct AddMealView: View {
 
     @State private var drafts: [FoodEntryDraft] = []
     @State private var saveError: String?
+    /// Explanation handed over with scanned or photographed drafts.
+    @State private var notice: String?
 
     /// Default is now; changing it relabels the save button.
     private var isBackdated: Bool {
@@ -31,6 +33,29 @@ struct AddMealView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                    if let notice {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(AppTheme.accent)
+                                .accessibilityHidden(true)
+                            Text(notice)
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 4)
+                            Button {
+                                withAnimation(.snappy) { self.notice = nil }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, height: 28)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Dismiss")
+                        }
+                        .appCard()
+                    }
+
                     if drafts.contains(where: { $0.source == .photoAI }) {
                         EstimateDisclaimer()
                             .appCard()
@@ -134,8 +159,11 @@ struct AddMealView: View {
     /// Picks up drafts handed over by Scan or the assistant.
     private func collectPendingDrafts() {
         let pending = router.consumePendingDrafts()
-        guard !pending.isEmpty else { return }
-        drafts.append(contentsOf: pending)
+        guard !pending.drafts.isEmpty else { return }
+        // Newest first, so the card that was just filled in is at the top of the
+        // screen rather than below any foods already waiting to be saved.
+        drafts.insert(contentsOf: pending.drafts, at: 0)
+        notice = pending.notice
     }
 
     private func addCard() {
@@ -148,6 +176,7 @@ struct AddMealView: View {
 
     private func remove(id: UUID) {
         drafts.removeAll { $0.id == id }
+        if drafts.isEmpty { notice = nil }
         Haptics.selection()
     }
 
@@ -185,6 +214,7 @@ struct AddMealView: View {
         do {
             try context.save()
             drafts = []
+            notice = nil
             Haptics.success()
             router.selectedTab = .dashboard
         } catch {

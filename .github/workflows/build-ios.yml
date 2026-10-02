@@ -39,26 +39,46 @@ jobs:
       - name: Install XcodeGen and log formatter
         run: brew install xcodegen xcbeautify
 
-      - name: Resolve optional remote AI key
-        # Only used when the optional REMOTE_AI_API_KEY secret exists. The value
-        # is never echoed. It is passed to xcodebuild as an Info.plist key rather
-        # than a generated Swift source file, so the app compiles identically
-        # whether or not the secret is configured.
+      - name: Write assistant configuration
+        # The assistant uses one built-in key (users can't configure it):
+        #   ASSISTANT_API_KEY  secret, required for the assistant (e.g. a Gemini key)
+        #   ASSISTANT_MODEL    variable, optional; app default is a Gemini model
+        #   ASSISTANT_BASE_URL variable, optional; app default is Gemini's
+        #                      OpenAI-compatible endpoint
+        # They go into a temporary xcconfig outside the repo rather than onto the
+        # xcodebuild command line, which xcodebuild would echo into the log.
+        # Without the key the app still builds; the assistant says "not available".
         #
-        # WARNING: a key baked into an IPA can be extracted from the binary.
-        # This path is for private personal builds only - see the README.
+        # WARNING: anyone with the IPA can extract this key. The repo is public,
+        # and so are its artifacts to any signed-in GitHub user. Use a key with a
+        # spending cap or a free tier - see the README.
         env:
-          REMOTE_AI_API_KEY: ${{ secrets.REMOTE_AI_API_KEY }}
+          ASSISTANT_API_KEY: ${{ secrets.ASSISTANT_API_KEY }}
+          ASSISTANT_MODEL: ${{ vars.ASSISTANT_MODEL }}
+          ASSISTANT_BASE_URL: ${{ vars.ASSISTANT_BASE_URL }}
         run: |
           set -euo pipefail
-          if [ -n "${REMOTE_AI_API_KEY:-}" ]; then
-            echo "::add-mask::$REMOTE_AI_API_KEY"
-            echo "Remote AI key present; it will be injected (value not logged)."
-            echo "HAS_REMOTE_KEY=1" >> "$GITHUB_ENV"
+          CONFIG="$RUNNER_TEMP/assistant.xcconfig"
+          # In xcconfig files "//" starts a comment, so escape it as "/$()/",
+          # which Xcode expands back to "//" (needed for the https:// URL).
+          esc() { printf '%s' "$1" | sed 's|//|/$()/|g'; }
+          : > "$CONFIG"
+          if [ -n "${ASSISTANT_API_KEY:-}" ]; then
+            echo "::add-mask::$ASSISTANT_API_KEY"
+            echo "ASSISTANT_API_KEY = $(esc "$ASSISTANT_API_KEY")" >> "$CONFIG"
+            echo "Assistant key present; it will be built in (value not logged)."
           else
-            echo "No REMOTE_AI_API_KEY secret set; building without one."
-            echo "HAS_REMOTE_KEY=0" >> "$GITHUB_ENV"
+            echo "::warning::No ASSISTANT_API_KEY secret set; the assistant will show 'not available'."
           fi
+          if [ -n "${ASSISTANT_MODEL:-}" ]; then
+            echo "ASSISTANT_MODEL = $(esc "$ASSISTANT_MODEL")" >> "$CONFIG"
+            echo "Model override: $ASSISTANT_MODEL"
+          fi
+          if [ -n "${ASSISTANT_BASE_URL:-}" ]; then
+            echo "ASSISTANT_BASE_URL = $(esc "$ASSISTANT_BASE_URL")" >> "$CONFIG"
+            echo "Base URL override: $ASSISTANT_BASE_URL"
+          fi
+          echo "ASSISTANT_XCCONFIG=$CONFIG" >> "$GITHUB_ENV"
 
       - name: Fetch trained models (optional)
         # The repo is public, so model files are not committed. If the
@@ -124,18 +144,11 @@ jobs:
           if-no-files-found: ignore
 
       - name: Build Release for device (unsigned)
-        env:
-          REMOTE_AI_API_KEY: ${{ secrets.REMOTE_AI_API_KEY }}
         run: |
           set -euo pipefail
-          # macOS runners use bash 3.2, where "${arr[@]}" on an empty array is an
-          # "unbound variable" error under set -u. The ${arr[@]+...} form below
-          # expands to nothing when the array is empty.
-          EXTRA_SETTINGS=()
-          if [ "${HAS_REMOTE_KEY}" = "1" ]; then
-            EXTRA_SETTINGS+=("INFOPLIST_KEY_RemoteAIAPIKey=${REMOTE_AI_API_KEY}")
-          fi
+          # The xcconfig holds the assistant settings (possibly none).
           xcodebuild clean build \
+            -xcconfig "$ASSISTANT_XCCONFIG" \
             -project "$APP_NAME.xcodeproj" \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -145,7 +158,6 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
-            ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
             | xcbeautify
 
       - name: Locate built .app
@@ -160,6 +172,17 @@ jobs:
           fi
           echo "Found: $APP_PATH"
           echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Check assistant key is in the app
+        # Reports presence only; never prints the value.
+        run: |
+          PLIST="${{ steps.locate.outputs.app_path }}/Info.plist"
+          VALUE="$(/usr/libexec/PlistBuddy -c 'Print :AssistantAPIKey' "$PLIST" 2>/dev/null || true)"
+          if [ -n "$VALUE" ] && [ "${VALUE#\$(}" = "$VALUE" ]; then
+            echo "Assistant key is built into the app."
+          else
+            echo "::warning::The app has no assistant key, so the assistant will show 'not available'. Add the ASSISTANT_API_KEY secret."
+          fi
 
       - name: Package unsigned IPA
         run: |

@@ -117,39 +117,120 @@ final class AssistantArgumentParsingTests: XCTestCase {
 
 final class AssistantResponseDecodingTests: XCTestCase {
 
-    func testDecodesTextAndToolUse() throws {
-        let json = """
-        {"content": [
-          {"type": "text", "text": "I can log that."},
-          {"type": "tool_use", "id": "toolu_1", "name": "addFoodEntry",
-           "input": {"name": "Nasi Lemak", "calories": 650, "quantity": 1}}
-        ]}
-        """
-        let response = try AnthropicAssistantService.decode(data: Data(json.utf8))
+    private func decode(_ json: String) throws -> AssistantResponse {
+        try OpenAICompatibleAssistantService.decode(data: Data(json.utf8))
+    }
+
+    func testDecodesTextAndToolCall() throws {
+        let response = try decode("""
+        {"choices": [{"message": {"role": "assistant", "content": "I can log that.",
+          "tool_calls": [{"id": "call_1", "type": "function", "function": {
+            "name": "addFoodEntry",
+            "arguments": "{\\"name\\": \\"Nasi Lemak\\", \\"calories\\": 650, \\"quantity\\": 1}"}}]}}]}
+        """)
         XCTAssertEqual(response.text, "I can log that.")
         XCTAssertEqual(response.toolCalls.count, 1)
+        XCTAssertEqual(response.toolCalls[0].id, "call_1")
         XCTAssertEqual(response.toolCalls[0].tool, .addFoodEntry)
         XCTAssertEqual(response.toolCalls[0].arguments["calories"], .number(650))
     }
 
-    func testHallucinatedToolNameIsDropped() throws {
-        let json = """
-        {"content": [{"type": "tool_use", "id": "t", "name": "orderPizza", "input": {}}]}
-        """
-        XCTAssertTrue(try AnthropicAssistantService.decode(data: Data(json.utf8)).toolCalls.isEmpty)
+    func testArgumentsAsObjectAreAccepted() throws {
+        let response = try decode("""
+        {"choices": [{"message": {"tool_calls": [{"id": "c", "function": {
+          "name": "getTrends", "arguments": {"timeframe": "weekly"}}}]}}]}
+        """)
+        XCTAssertEqual(response.toolCalls.first?.arguments["timeframe"], .string("weekly"))
+        XCTAssertNil(response.text)
     }
 
-    func testToolUseMissingIdIsDropped() throws {
-        let json = #"{"content": [{"type": "tool_use", "name": "getTrends", "input": {}}]}"#
-        XCTAssertTrue(try AnthropicAssistantService.decode(data: Data(json.utf8)).toolCalls.isEmpty)
+    func testHallucinatedToolNameIsDropped() throws {
+        let response = try decode("""
+        {"choices": [{"message": {"tool_calls": [{"id": "t", "function": {
+          "name": "orderPizza", "arguments": "{}"}}]}}]}
+        """)
+        XCTAssertTrue(response.toolCalls.isEmpty)
+    }
+
+    /// Some compatible APIs omit tool call ids; one is generated so the result
+    /// can still be paired with its call.
+    func testMissingToolCallIdIsGenerated() throws {
+        let response = try decode("""
+        {"choices": [{"message": {"tool_calls": [{"function": {
+          "name": "queryEntries", "arguments": "{}"}}]}}]}
+        """)
+        XCTAssertEqual(response.toolCalls.count, 1)
+        XCTAssertFalse(response.toolCalls[0].id.isEmpty)
+    }
+
+    func testMalformedArgumentsBecomeEmpty() throws {
+        let response = try decode("""
+        {"choices": [{"message": {"tool_calls": [{"id": "c", "function": {
+          "name": "queryEntries", "arguments": "{not json"}}]}}]}
+        """)
+        XCTAssertEqual(response.toolCalls.first?.arguments, [:])
     }
 
     func testMalformedEnvelopeThrows() {
-        XCTAssertThrowsError(try AnthropicAssistantService.decode(data: Data("{\"nope\": 1}".utf8))) {
+        XCTAssertThrowsError(try decode("{\"nope\": 1}")) {
             guard case .malformedResponse = $0 as? AssistantServiceError else {
                 return XCTFail("expected malformedResponse")
             }
         }
+        XCTAssertThrowsError(try decode("{\"choices\": []}"))
+    }
+}
+
+final class AssistantRequestEncodingTests: XCTestCase {
+
+    func testToolResultsBecomeSeparateToolMessages() {
+        let turn = AssistantTurn(role: .user, blocks: [
+            .toolResult(id: "a", content: "{\"x\":1}", isError: false),
+            .toolResult(id: "b", content: "{\"y\":2}", isError: false)
+        ])
+        let messages = OpenAICompatibleAssistantService.encode(turn: turn)
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages[0]["role"] as? String, "tool")
+        XCTAssertEqual(messages[0]["tool_call_id"] as? String, "a")
+        XCTAssertEqual(messages[1]["tool_call_id"] as? String, "b")
+    }
+
+    func testAssistantToolCallsCarryJSONStringArguments() throws {
+        let turn = AssistantTurn(role: .assistant, blocks: [
+            .text("Logging it."),
+            .toolUse(id: "c1", name: "addFoodEntry", input: ["name": .string("Teh Tarik")])
+        ])
+        let messages = OpenAICompatibleAssistantService.encode(turn: turn)
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages[0]["content"] as? String, "Logging it.")
+        let calls = try XCTUnwrap(messages[0]["tool_calls"] as? [[String: Any]])
+        let function = try XCTUnwrap(calls.first?["function"] as? [String: Any])
+        let arguments = try XCTUnwrap(function["arguments"] as? String)
+        XCTAssertTrue(arguments.contains("Teh Tarik"))
+    }
+
+    func testMenuPhotoBecomesImagePart() throws {
+        let turn = AssistantTurn(role: .user, blocks: [.image(Data([1, 2, 3])), .text("What fits?")])
+        let messages = OpenAICompatibleAssistantService.encode(turn: turn)
+        let parts = try XCTUnwrap(messages.first?["content"] as? [[String: Any]])
+        XCTAssertEqual(parts.first?["type"] as? String, "image_url")
+        let url = (parts.first?["image_url"] as? [String: Any])?["url"] as? String
+        XCTAssertTrue(url?.hasPrefix("data:image/jpeg;base64,") == true)
+        XCTAssertEqual(parts.last?["text"] as? String, "What fits?")
+    }
+
+    func testBodyHasSystemContextAndFunctionTools() throws {
+        let body = OpenAICompatibleAssistantService.makeBody(
+            model: "test-model", turns: [.user("hi")], contextJSON: "{\"k\":1}",
+            tools: AssistantTool.allCases)
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
+        XCTAssertEqual(body["model"] as? String, "test-model")
+        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.first?["role"] as? String, "system")
+        XCTAssertTrue((messages.first?["content"] as? String)?.contains("{\"k\":1}") == true)
+        let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.count, AssistantTool.allCases.count)
+        XCTAssertEqual(tools.first?["type"] as? String, "function")
     }
 }
 
@@ -381,15 +462,11 @@ final class ScriptedAssistantService: AssistantServing, @unchecked Sendable {
 @MainActor
 final class AssistantViewModelTests: XCTestCase {
 
-    private func makeViewModel(_ service: AssistantServing,
-                               optIn: Bool = true) -> (AssistantViewModel, ModelContext) {
+    private func makeViewModel(_ service: AssistantServing) -> (AssistantViewModel, ModelContext) {
         let context = TestSupport.makeContext()
-        let settings = context.loadAppSettings()
-        settings.assistantDataSharingOptIn = optIn
         let viewModel = AssistantViewModel(service: service,
                                            executor: AssistantToolExecutor(context: context),
-                                           contextBuilder: AssistantContextBuilder(context: context),
-                                           settings: settings)
+                                           contextBuilder: AssistantContextBuilder(context: context))
         return (viewModel, context)
     }
 
@@ -446,6 +523,25 @@ final class AssistantViewModelTests: XCTestCase {
         })
     }
 
+    /// The assistant's own replies must be sent back on the next request, or
+    /// follow-up questions lose their context.
+    func testAssistantRepliesAreKeptInHistory() async throws {
+        let service = ScriptedAssistantService([
+            AssistantResponse(text: "Try the grilled chicken salad.", toolCalls: []),
+            AssistantResponse(text: "Sure.", toolCalls: [])
+        ])
+        let (viewModel, _) = makeViewModel(service)
+
+        viewModel.composerText = "what should I eat?"
+        await viewModel.send()
+        viewModel.composerText = "something lighter?"
+        await viewModel.send()
+
+        let second = try XCTUnwrap(service.receivedTurns.last)
+        XCTAssertEqual(second.map(\.role), [.user, .assistant, .user])
+        XCTAssertEqual(second[1].blocks, [.text("Try the grilled chicken salad.")])
+    }
+
     func testReadToolRunsWithoutConfirmation() async throws {
         let service = ScriptedAssistantService([
             AssistantResponse(text: nil, toolCalls: [
@@ -485,20 +581,25 @@ final class AssistantViewModelTests: XCTestCase {
         XCTAssertEqual(Set(ids), ["a", "b"], "every tool_use gets a result")
     }
 
-    func testRequiresOptInBeforeSendingAnything() async {
-        let service = ScriptedAssistantService([])
-        let (viewModel, _) = makeViewModel(service, optIn: false)
-
-        XCTAssertEqual(viewModel.availability, .needsOptIn)
+    /// A build without the assistant key: unavailable, and nothing is sent.
+    func testUnconfiguredServiceIsUnavailableAndSendsNothing() async {
+        let (viewModel, _) = makeViewModel(UnconfiguredAssistantService())
+        XCTAssertFalse(viewModel.isAvailable)
         viewModel.composerText = "hello"
+        XCTAssertFalse(viewModel.canSend)
+
         await viewModel.send()
-        XCTAssertTrue(service.receivedTurns.isEmpty, "no data sent without opt-in")
+        XCTAssertTrue(viewModel.messages.contains {
+            if case .error(let text) = $0.kind { return text.contains("isn't available") }
+            return false
+        })
     }
 
-    func testUnconfiguredServiceReportsNeedsKey() {
-        let (viewModel, _) = makeViewModel(UnconfiguredAssistantService())
-        XCTAssertEqual(viewModel.availability, .needsAPIKey)
-        XCTAssertFalse(viewModel.canSend)
+    func testConfiguredServiceIsAvailableWithoutAnySetup() {
+        let (viewModel, _) = makeViewModel(ScriptedAssistantService([]))
+        XCTAssertTrue(viewModel.isAvailable)
+        viewModel.composerText = "hello"
+        XCTAssertTrue(viewModel.canSend)
     }
 
     func testRunawayToolLoopIsBounded() async {

@@ -15,7 +15,7 @@ FoodEntry            One per logged food. Has a consumedAt timestamp and no meal
 BarcodeProductCache  Keyed by barcode. `isUserEntered` rows rank first and
                      never expire.
 CorrectionRecord     Prediction JSON and confirmed-draft JSON (opt-in, on-device only).
-AppSettings          1 row. Feature toggles and the assistant opt-in. Never
+AppSettings          1 row. Photo retention and correction toggles. Never
                      holds secrets.
 ```
 
@@ -49,10 +49,11 @@ UIImage
   → Model A (Core ML via Vision, .scaleFill)
         class_confidence[C], class_area[C], labels in model metadata
         (or a Vision object detector, if one is swapped in)
-      ↳ on failure or empty result: optional RemoteVisionService
+      ↳ unavailable: Scan says "Model not available" before a photo is taken
   → Model B (Core ML via Vision)
         mass, calories, protein, carbs, fat
-      ↳ on failure: split an assumed total mass by detected area
+      ↳ unavailable or failed: split an assumed total mass by detected area,
+        and Add Meal says the amounts are rough defaults
   → NutritionRepository.resolve
         local verified → MyFCD / generic table (by canonical ID, then by name via ontology)
         → leftover share of Model B's plate estimate for anything unmatched

@@ -11,8 +11,11 @@ import VisionKit
 /// Exactly three actions: Take Photo, Choose Photo, Scan Barcode
 /// (spec section 16).
 ///
-/// Only one photo is ever active. A new photo replaces the current one, with a
-/// confirmation once an analysed photo is already waiting.
+/// Every capture ends in Add Meal with a prefilled draft. The review step is
+/// Add Meal itself, so Scan never holds a result of its own: one photo or one
+/// barcode in, one draft out. When nothing could be filled in (no model
+/// installed, product unknown, offline), the user still lands in Add Meal with
+/// whatever is known and a note explaining why.
 struct ScanView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppRouter.self) private var router
@@ -20,35 +23,17 @@ struct ScanView: View {
     @State private var mode: Mode = .idle
     @State private var pipeline: PhotoAnalysisPipeline?
     @State private var photoSelection: PhotosPickerItem?
-
-    #if canImport(UIKit)
-    @State private var capturedImage: UIImage?
-    #endif
-
-    @State private var analysisResult: PhotoAnalysisResult?
+    @State private var photoPickerPresented = false
+    @State private var analysisTask: Task<Void, Never>?
     @State private var errorMessage: String?
-    @State private var recoverableError: AIServiceError?
-    @State private var replacementPending: ReplacementSource?
-    @State private var barcodeOutcome: BarcodeOutcome?
-    @State private var isLookingUpBarcode = false
+    @State private var isShowingModelUnavailable = false
 
     enum Mode: Equatable {
         case idle
         case camera
         case barcode
         case analysing
-        case reviewing
-    }
-
-    enum ReplacementSource: Identifiable {
-        case camera, library, barcode
-        var id: String { String(describing: self) }
-    }
-
-    enum BarcodeOutcome: Equatable {
-        case found(BarcodeProduct, fromCache: Bool)
-        case notFound(barcode: String)
-        case failed(String)
+        case lookingUpBarcode
     }
 
     var body: some View {
@@ -58,17 +43,11 @@ struct ScanView: View {
                     switch mode {
                     case .analysing:
                         analysingSection
-                    case .reviewing:
-                        reviewSection
+                    case .lookingUpBarcode:
+                        lookingUpSection
                     default:
                         actionsSection
                     }
-
-                    if let barcodeOutcome {
-                        barcodeSection(outcome: barcodeOutcome)
-                    }
-
-                    modelStatusSection
                 }
                 .appPageContent()
             }
@@ -93,20 +72,9 @@ struct ScanView: View {
             .photosPicker(isPresented: $photoPickerPresented,
                           selection: $photoSelection,
                           matching: .images)
-            .alert("Replace the current photo?",
-                   isPresented: Binding(get: { replacementPending != nil },
-                                        set: { if !$0 { replacementPending = nil } })) {
-                Button("Replace", role: .destructive) {
-                    if let source = replacementPending {
-                        clearCurrentPhoto()
-                        begin(source: source)
-                    }
-                    replacementPending = nil
-                }
-                Button("Keep current", role: .cancel) { replacementPending = nil }
-            } message: {
-                Text("Only one photo can be analysed at a time.")
-            }
+            // Only for failures where nothing was captured at all (camera
+            // could not start, unreadable file). Anything captured goes to
+            // Add Meal instead.
             .alert("Something went wrong",
                    isPresented: Binding(get: { errorMessage != nil },
                                         set: { if !$0 { errorMessage = nil } })) {
@@ -118,16 +86,22 @@ struct ScanView: View {
                 guard let newValue else { return }
                 Task { await loadFromLibrary(item: newValue) }
             }
+            .alert("Model not available", isPresented: $isShowingModelUnavailable) {
+                Button("Add by Hand") {
+                    router.present(drafts: [FoodEntryDraft()])
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Recognising food from photos isn't available in this version of "
+                     + "the app. You can still scan a barcode or add food by hand.")
+            }
             .onAppear {
                 if pipeline == nil {
-                    pipeline = PhotoAnalysisPipeline.make(
-                        context: context, settings: context.loadAppSettings())
+                    pipeline = PhotoAnalysisPipeline.make(context: context)
                 }
             }
         }
     }
-
-    @State private var photoPickerPresented = false
 
     // MARK: Sections
 
@@ -136,24 +110,25 @@ struct ScanView: View {
             ScanActionButton(title: "Take Photo",
                              detail: "Photograph a meal and estimate what is in it.",
                              systemImage: "camera.fill") {
-                request(source: .camera)
+                requirePhotoModel { mode = .camera }
             }
 
             ScanActionButton(title: "Choose Photo",
                              detail: "Pick one photo from your library.",
                              systemImage: "photo.on.rectangle") {
-                request(source: .library)
+                requirePhotoModel { photoPickerPresented = true }
             }
 
             ScanActionButton(title: "Scan Barcode",
                              detail: "Read a packaged product's label data.",
                              systemImage: "barcode.viewfinder") {
-                request(source: .barcode)
+                mode = .barcode
             }
 
             EstimateDisclaimer(
-                text: "Photo analysis gives a starting estimate from a single "
-                    + "photo. You will review and correct it before anything is saved.")
+                text: "Whatever you photograph or scan opens in Add Meal with the "
+                    + "details filled in. Photo estimates come from a single photo, "
+                    + "so check them before saving.")
                 .appCard()
         }
     }
@@ -169,150 +144,24 @@ struct ScanView: View {
         }
     }
 
-    @State private var analysisTask: Task<Void, Never>?
-
-    @ViewBuilder
-    private var reviewSection: some View {
-        if let result = analysisResult {
-            VStack(alignment: .leading, spacing: 14) {
-                if result.isEmpty {
-                    EmptyStateView(
-                        title: "No food recognised",
-                        message: "Nothing in that photo could be identified. "
-                            + "You can still add the meal by hand.",
-                        systemImage: "questionmark.circle",
-                        actionTitle: "Add by hand") {
-                        router.present(drafts: [FoodEntryDraft(source: .manual)])
-                        reset()
-                    }
-                    .appCard()
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        AppSectionHeading(title: "Detected",
-                                          trailing: "\(result.detections.count) items")
-                        ForEach(result.resolvedNutrition, id: \.detectionID) { item in
-                            HStack(spacing: 8) {
-                                Text(item.displayName)
-                                    .font(.subheadline)
-                                Spacer(minLength: 4)
-                                Text("\(AppFormatters.amount(item.grams)) g")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
-                                ConfidenceBadge(confidence: item.confidence)
-                            }
-                        }
-                        if result.usedRemoteFallback {
-                            Text("Identified using your configured remote AI provider.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        EstimateDisclaimer()
-                    }
-                    .appCard()
-
-                    Button {
-                        router.present(drafts: [result.makeDraft()])
-                        reset()
-                    } label: {
-                        Text("REVIEW IN ADD MEAL")
-                            .font(.subheadline.weight(.bold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-
-                Button("Discard photo", role: .destructive) {
-                    clearCurrentPhoto()
-                    reset()
-                }
-                .buttonStyle(.bordered)
-            }
+    private var lookingUpSection: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+            Text("Looking up product\u{2026}")
+                .font(.subheadline)
+            Spacer(minLength: 0)
         }
+        .appCard()
+        .accessibilityElement(children: .combine)
     }
 
-    @ViewBuilder
-    private func barcodeSection(outcome: BarcodeOutcome) -> some View {
-        switch outcome {
-        case .found(let product, let fromCache):
-            VStack(alignment: .leading, spacing: 12) {
-                AppSectionHeading(title: "Product found",
-                                  trailing: fromCache ? "From cache" : "Open Food Facts")
-                Text(product.name).font(.headline)
-                if let brand = product.brand {
-                    Text(brand).font(.caption).foregroundStyle(.secondary)
-                }
-                NutritionSummaryView(nutrition: product.nutritionPerServing)
-                Text("Per \(AppFormatters.amount(product.servingSize)) \(product.unit.shortLabel)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                Button {
-                    router.present(drafts: [product.makeDraft()])
-                    barcodeOutcome = nil
-                } label: {
-                    Text("REVIEW IN ADD MEAL")
-                        .font(.subheadline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .appCard()
-
-        case .notFound(let barcode):
-            VStack(alignment: .leading, spacing: 12) {
-                AppSectionHeading(title: "Product Not Found")
-                Text("Barcode \(barcode) is not in the product database.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button("Enter Product Manually") {
-                    // Prefilled with the barcode so the manual entry gets cached
-                    // against it for next time.
-                    router.present(drafts: [FoodEntryDraft(
-                        quantity: 100, servingSize: 100, unit: .gram,
-                        source: .barcode, barcode: barcode)])
-                    barcodeOutcome = nil
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button("Scan Another Barcode") {
-                    barcodeOutcome = nil
-                    request(source: .barcode)
-                }
-                .buttonStyle(.bordered)
-            }
-            .appCard()
-
-        case .failed(let message):
-            ErrorStateView(title: "Lookup failed", message: message) {
-                barcodeOutcome = nil
-                request(source: .barcode)
-            }
-            .appCard()
-        }
-    }
-
-    @ViewBuilder
-    private var modelStatusSection: some View {
-        if let pipeline, !pipeline.hasAnyAnalysisCapability {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "cpu")
-                        .accessibilityHidden(true)
-                    Text("Local model unavailable")
-                        .font(.subheadline.weight(.semibold))
-                }
-                Text("No on-device food model is installed in this build, and no "
-                     + "remote AI provider is configured. Barcode scanning and "
-                     + "manual entry work as normal.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .appCard()
+    /// Photo actions need Model A. Instead of showing model status anywhere,
+    /// the user is told it's unavailable at the moment they try to use it.
+    private func requirePhotoModel(then start: () -> Void) {
+        if pipeline?.canRecogniseFoods == true {
+            start()
+        } else {
+            isShowingModelUnavailable = true
         }
     }
 
@@ -334,8 +183,6 @@ struct ScanView: View {
             }
         } else {
             CameraPicker(onImage: { image in
-                capturedImage = image
-                mode = .idle
                 startAnalysis(image: image)
             }, onCancel: {
                 mode = .idle
@@ -351,7 +198,6 @@ struct ScanView: View {
         ZStack(alignment: .bottom) {
             if BarcodeScannerView.isSupported {
                 BarcodeScannerView(onBarcode: { value in
-                    mode = .idle
                     Task { await lookUp(barcode: value) }
                 }, onError: { message in
                     mode = .idle
@@ -378,28 +224,7 @@ struct ScanView: View {
     }
     #endif
 
-    // MARK: Flow
-
-    private func request(source: ReplacementSource) {
-        // Confirm before discarding a photo that has already been analysed.
-        if analysisResult != nil, source != .barcode {
-            replacementPending = source
-            return
-        }
-        begin(source: source)
-    }
-
-    private func begin(source: ReplacementSource) {
-        barcodeOutcome = nil
-        switch source {
-        case .camera:
-            mode = .camera
-        case .library:
-            photoPickerPresented = true
-        case .barcode:
-            mode = .barcode
-        }
-    }
+    // MARK: Photo flow
 
     private func loadFromLibrary(item: PhotosPickerItem) async {
         photoSelection = nil
@@ -409,87 +234,117 @@ struct ScanView: View {
             errorMessage = "That image could not be read. Try a different photo."
             return
         }
-        capturedImage = image
         startAnalysis(image: image)
         #endif
     }
 
     #if canImport(UIKit)
     private func startAnalysis(image: UIImage) {
-        guard let pipeline else { return }
+        guard let pipeline else {
+            mode = .idle
+            return
+        }
+        // Closes the camera cover and shows progress in one step.
         mode = .analysing
-        analysisResult = nil
 
         analysisTask = Task {
             let retain = context.loadAppSettings().retainAnalysedImages
             do {
                 let result = try await pipeline.analyse(image: image, retainImage: retain)
                 guard !Task.isCancelled else { return }
-                analysisResult = result
-                mode = .reviewing
-                Haptics.success()
+                handOver(photoResult: result)
             } catch is CancellationError {
                 mode = .idle
-            } catch let error as AIServiceError {
-                mode = .idle
-                Haptics.error()
-                if error.isRecoverableBySetup {
-                    // No model and no fallback: offer manual entry rather than
-                    // pretending analysis is possible (spec section 25).
-                    errorMessage = (error.errorDescription ?? "")
-                        + " You can add this meal by hand, or configure a remote "
-                        + "provider in Settings."
-                } else {
-                    errorMessage = error.errorDescription
-                }
             } catch {
+                guard !Task.isCancelled else { return }
+                // Analysis failed, but a photo was taken: open Add Meal anyway
+                // so the user can enter the meal by hand (spec section 25).
+                Haptics.warning()
+                router.present(drafts: [FoodEntryDraft(source: .manual)],
+                               notice: Self.photoFailureNotice(for: error))
                 mode = .idle
-                Haptics.error()
-                errorMessage = error.localizedDescription
             }
         }
     }
     #endif
 
+    private func handOver(photoResult result: PhotoAnalysisResult) {
+        if result.isEmpty {
+            Haptics.warning()
+            router.present(
+                drafts: [FoodEntryDraft(source: .photoAI, photoPath: result.photoPath)],
+                notice: "No food could be recognised in that photo. Enter the meal below.")
+        } else {
+            Haptics.success()
+            var notice = "Filled in from your photo. Portions and nutrition are "
+                + "estimates; check each amount before saving."
+            if result.detections.contains(where: \.isLowConfidence) {
+                notice += " Items marked with a percentage were hard to identify."
+            }
+            if !result.portionsEstimated {
+                // Model B missing: say so where it matters, on the amounts.
+                notice = "Foods recognised from your photo. The portion model isn't "
+                    + "available, so the amounts are rough defaults; set each one "
+                    + "before saving."
+            }
+            router.present(drafts: [result.makeDraft()], notice: notice)
+        }
+        mode = .idle
+    }
+
+    static func photoFailureNotice(for error: Error) -> String {
+        if let aiError = error as? AIServiceError, aiError.isModelUnavailable {
+            return "The food recognition model isn't available, so nothing could be "
+                + "recognised. Enter the meal below."
+        }
+        return "The photo couldn't be analysed (\(error.localizedDescription)). "
+            + "Enter the meal below."
+    }
+
+    // MARK: Barcode flow
+
     private func lookUp(barcode: String) async {
-        isLookingUpBarcode = true
-        defer { isLookingUpBarcode = false }
+        mode = .lookingUpBarcode
+        defer { mode = .idle }
 
         let service = BarcodeLookupService(context: context)
+        let outcome: BarcodeLookupService.Outcome
         do {
-            switch try await service.lookup(barcode: barcode) {
-            case .found(let product, let fromCache):
-                barcodeOutcome = .found(product, fromCache: fromCache)
-                Haptics.success()
-            case .notFound(let code):
-                barcodeOutcome = .notFound(barcode: code)
-                Haptics.warning()
-            }
-        } catch let error as BarcodeLookupError {
-            barcodeOutcome = .failed(error.localizedDescription)
-            Haptics.error()
+            outcome = try await service.lookup(barcode: barcode)
         } catch {
-            barcodeOutcome = .failed(error.localizedDescription)
-            Haptics.error()
+            // Offline or the database errored: still open Add Meal, keyed to the
+            // barcode, so whatever the user types is remembered for next time.
+            Haptics.warning()
+            router.present(drafts: [Self.manualBarcodeDraft(barcode)],
+                           notice: "Couldn't reach the product database for barcode "
+                               + "\(barcode). Enter the details from the label; they'll "
+                               + "be remembered for this barcode.")
+            return
+        }
+
+        switch outcome {
+        case .found(let product, let fromCache):
+            Haptics.success()
+            let source = fromCache ? "a product you've scanned before"
+                                   : "Open Food Facts"
+            router.present(drafts: [product.makeDraft()],
+                           notice: "Filled in from \(source), per "
+                               + "\(AppFormatters.amount(product.servingSize)) \(product.unit.shortLabel). "
+                               + "Check it against the label and set how much you had.")
+
+        case .notFound(let code):
+            Haptics.warning()
+            router.present(drafts: [Self.manualBarcodeDraft(code)],
+                           notice: "Barcode \(code) isn't in Open Food Facts yet. Enter "
+                               + "the details from the label; they'll be remembered for "
+                               + "next time.")
         }
     }
 
-    private func clearCurrentPhoto() {
-        if let path = analysisResult?.photoPath {
-            ImageStore.delete(relativePath: path)
-        }
-        #if canImport(UIKit)
-        capturedImage = nil
-        #endif
-        analysisResult = nil
-    }
-
-    private func reset() {
-        analysisResult = nil
-        #if canImport(UIKit)
-        capturedImage = nil
-        #endif
-        mode = .idle
+    /// A blank product keyed to the barcode, in grams per 100 g like a label.
+    static func manualBarcodeDraft(_ barcode: String) -> FoodEntryDraft {
+        FoodEntryDraft(quantity: 100, servingSize: 100, unit: .gram,
+                       source: .barcode, barcode: barcode)
     }
 }
 

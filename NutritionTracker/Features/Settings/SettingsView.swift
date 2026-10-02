@@ -31,8 +31,6 @@ struct SettingsView: View {
             Form {
                 profileSection
                 targetsSection
-                aiSection
-                assistantSection
                 dataSection
                 aboutSection
             }
@@ -151,55 +149,6 @@ struct SettingsView: View {
         } footer: {
             Text("Each nutrient is a range with a minimum and a maximum, because "
                  + "the formulas behind them are estimates. Edit either bound.")
-        }
-    }
-
-    // MARK: AI
-
-    private var aiSection: some View {
-        Section {
-            ModelStatusRow(name: "Model A \u{2014} Recognition",
-                           filename: "\(ModelCatalogue.modelAName).mlmodelc",
-                           isAvailable: ModelCatalogue.isPresent(ModelCatalogue.modelAName))
-            ModelStatusRow(name: "Model B \u{2014} Portion & Nutrition",
-                           filename: "\(ModelCatalogue.modelBName).mlmodelc",
-                           isAvailable: ModelCatalogue.isPresent(ModelCatalogue.modelBName))
-
-            Toggle("Use remote AI if local models fail",
-                   isOn: Binding(
-                    get: { settings.remoteVisionFallbackEnabled },
-                    set: { settings.remoteVisionFallbackEnabled = $0; save() }))
-
-            APIKeyRow(title: "Remote vision API key", key: .remoteVisionAPIKey)
-        } header: {
-            Text("AI")
-        } footer: {
-            Text("Photo analysis runs on this device when a model is installed. "
-                 + "Portion estimates from one photo are approximate and always "
-                 + "editable before saving.")
-        }
-    }
-
-    private var assistantSection: some View {
-        Section {
-            Toggle("Allow the assistant to use my data",
-                   isOn: Binding(
-                    get: { settings.assistantDataSharingOptIn },
-                    set: { settings.assistantDataSharingOptIn = $0; save() }))
-
-            Picker("Provider", selection: Binding(
-                get: { settings.assistantProvider },
-                set: { settings.assistantProvider = $0; save() })) {
-                ForEach(AssistantProvider.allCases) { Text($0.displayName).tag($0) }
-            }
-
-            APIKeyRow(title: "Assistant API key", key: .assistantAPIKey)
-        } header: {
-            Text("AI Assistant")
-        } footer: {
-            Text(AssistantContextBuilder.dataSharingDisclosure
-                 + "\n\nUnlike the rest of the app, the assistant needs an "
-                 + "internet connection.")
         }
     }
 
@@ -343,96 +292,12 @@ struct SettingsView: View {
 
     private func deleteAll() {
         BackupService(context: context).deleteAllData(includingImages: true)
-        SecretStore.deleteAll()
+        LegacySecretCleanup.deleteStoredKeys()
         let settings = context.loadAppSettings()
         settings.hasCompletedOnboarding = false
-        settings.assistantDataSharingOptIn = false
         save()
         Haptics.success()
         dismiss()
-    }
-}
-
-// MARK: - Rows
-
-struct ModelStatusRow: View {
-    let name: String
-    let filename: String
-    let isAvailable: Bool
-
-    var body: some View {
-        LabeledContent(name) {
-            HStack(spacing: 5) {
-                Image(systemName: isAvailable ? "checkmark.circle.fill" : "xmark.circle")
-                    .foregroundStyle(isAvailable ? .green : .secondary)
-                    .accessibilityHidden(true)
-                Text(isAvailable ? "Installed" : "Not installed")
-                    .font(.caption)
-            }
-        }
-        .accessibilityValue(isAvailable ? "Installed" : "Not installed. Expected \(filename)")
-    }
-}
-
-/// Keychain-backed key entry. The stored value is never displayed back, only
-/// whether one is present (spec section 39).
-struct APIKeyRow: View {
-    let title: String
-    let key: SecretStore.Key
-
-    @State private var draft = ""
-    @State private var isPresent = false
-    @State private var isEditing = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title).font(.subheadline)
-                Spacer()
-                Text(isPresent ? "Saved" : "Not set")
-                    .font(.caption)
-                    .foregroundStyle(isPresent ? .green : .secondary)
-            }
-
-            if isEditing {
-                SecureField("Paste your API key", text: $draft)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textContentType(.password)
-
-                HStack(spacing: 10) {
-                    Button("Save") {
-                        _ = SecretStore.store(draft, for: key)
-                        draft = ""
-                        isEditing = false
-                        refresh()
-                    }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                    Button("Cancel", role: .cancel) {
-                        draft = ""
-                        isEditing = false
-                    }
-                }
-                .font(.footnote)
-            } else {
-                HStack(spacing: 14) {
-                    Button(isPresent ? "Replace" : "Add key") { isEditing = true }
-                    if isPresent {
-                        Button("Delete", role: .destructive) {
-                            SecretStore.delete(key)
-                            refresh()
-                        }
-                    }
-                }
-                .font(.footnote)
-            }
-        }
-        .onAppear(perform: refresh)
-    }
-
-    private func refresh() {
-        isPresent = SecretStore.exists(key)
     }
 }
 

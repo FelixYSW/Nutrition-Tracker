@@ -14,6 +14,9 @@ import UIKit
 ///     -> per-ingredient nutrition, summed in Swift
 ///     -> Add Meal review (mandatory)
 ///
+/// Both models run on the device only. There is deliberately no remote
+/// fallback: if a model is missing, the user is told it is unavailable.
+///
 /// Nothing here writes to the database. The result becomes a draft the user must
 /// review and confirm, which is the only way an AI-derived entry can be saved.
 @MainActor
@@ -25,16 +28,13 @@ final class PhotoAnalysisPipeline {
 
     private let recognition: IngredientRecognitionService
     private let portion: PortionNutritionService
-    private let remote: RemoteVisionService
     private let repository: NutritionRepository
 
     init(recognition: IngredientRecognitionService,
          portion: PortionNutritionService,
-         remote: RemoteVisionService,
          repository: NutritionRepository) {
         self.recognition = recognition
         self.portion = portion
-        self.remote = remote
         self.repository = repository
     }
 
@@ -42,7 +42,7 @@ final class PhotoAnalysisPipeline {
     /// "unavailable" implementation when its model file is absent
     /// (spec section 37).
     @MainActor
-    static func make(context: ModelContext, settings: AppSettings) -> PhotoAnalysisPipeline {
+    static func make(context: ModelContext) -> PhotoAnalysisPipeline {
         let modelA: IngredientRecognitionService =
             ModelCatalogue.isPresent(ModelCatalogue.modelAName)
             ? CoreMLIngredientRecognitionService()
@@ -53,38 +53,21 @@ final class PhotoAnalysisPipeline {
             ? CoreMLPortionNutritionService()
             : UnavailablePortionNutritionService()
 
-        let remote: RemoteVisionService =
-            settings.remoteVisionFallbackEnabled
-                && APIKeyResolver.hasKey(for: .remoteVisionAPIKey)
-            ? AnthropicRemoteVisionService()
-            : DisabledRemoteVisionService()
-
         return PhotoAnalysisPipeline(recognition: modelA,
                                      portion: modelB,
-                                     remote: remote,
                                      repository: NutritionRepository(context: context))
     }
 
-    var modelAStatus: ModelStatus {
-        ModelStatus(name: ModelCatalogue.modelAName,
-                    identifier: recognition.modelIdentifier,
-                    isAvailable: recognition.isAvailable)
-    }
+    /// Model A. Photo analysis cannot run at all without it.
+    var canRecogniseFoods: Bool { recognition.isAvailable }
 
-    var modelBStatus: ModelStatus {
-        ModelStatus(name: ModelCatalogue.modelBName,
-                    identifier: portion.modelIdentifier,
-                    isAvailable: portion.isAvailable)
-    }
-
-    var hasAnyAnalysisCapability: Bool {
-        recognition.isAvailable || remote.isConfigured
-    }
+    /// Model B. Without it, foods are still recognised but amounts are defaults.
+    var canEstimatePortions: Bool { portion.isAvailable }
 
     // MARK: Run
 
     #if canImport(UIKit)
-    /// Analyses one image. Throws only when there is nothing usable at all; a
+    /// Analyses one image. Throws when Model A is unavailable or fails; a
     /// partial result (foods found, masses guessed) is returned rather than
     /// failing, because the user can correct it.
     func analyse(image: UIImage, retainImage: Bool) async throws -> PhotoAnalysisResult {
@@ -100,37 +83,22 @@ final class PhotoAnalysisPipeline {
 
         try Task.checkCancellation()
 
-        // --- Model A, with the optional remote fallback.
+        // --- Model A.
         stage = .identifyingFoods
-        var usedRemote = false
-        var recognitionOutput: IngredientRecognitionOutput
-
-        do {
-            recognitionOutput = try await recognition.recognise(image: prepared)
-            if recognitionOutput.detections.isEmpty, remote.isConfigured {
-                recognitionOutput = try await remote.identifyFoods(in: prepared)
-                usedRemote = true
-            }
-        } catch {
-            guard remote.isConfigured else {
-                // No local model and no fallback: surface the real reason so the
-                // UI can offer manual entry instead of pretending (section 25).
-                throw error
-            }
-            recognitionOutput = try await remote.identifyFoods(in: prepared)
-            usedRemote = true
-        }
+        let recognitionOutput = try await recognition.recognise(image: prepared)
 
         try Task.checkCancellation()
 
         // --- Model B. A failure here is not fatal: without masses the pipeline
-        //     still reports what was detected, with portions the user sets.
+        //     still reports what was detected, with default amounts the user sets.
         stage = .estimatingPortions
         var portionOutput: PortionNutritionOutput
+        var portionsEstimated = true
         do {
             portionOutput = try await portion.estimate(image: prepared,
                                                        detections: recognitionOutput.detections)
         } catch {
+            portionsEstimated = false
             portionOutput = PortionNutritionOutput(
                 portions: CoreMLPortionNutritionService.splitByArea(
                     totalMass: 0, detections: recognitionOutput.detections),
@@ -162,18 +130,10 @@ final class PhotoAnalysisPipeline {
                                    photoPath: photoPath,
                                    modelAIdentifier: recognitionOutput.modelIdentifier,
                                    modelBIdentifier: portionOutput.modelIdentifier,
-                                   usedRemoteFallback: usedRemote,
+                                   portionsEstimated: portionsEstimated,
                                    producedAt: .now)
     }
     #endif
-}
-
-struct ModelStatus: Equatable, Sendable {
-    let name: String
-    let identifier: String
-    let isAvailable: Bool
-
-    var statusText: String { isAvailable ? "Installed" : "Not installed" }
 }
 
 // MARK: - Result -> draft

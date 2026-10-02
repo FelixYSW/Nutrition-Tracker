@@ -1,21 +1,5 @@
 import Foundation
 
-/// LLM providers the assistant can talk to. Kept provider-agnostic at the
-/// protocol level even though only one implementation ships (spec section 29A).
-enum AssistantProvider: String, Codable, CaseIterable, Identifiable, Sendable {
-    case anthropic
-    case openAICompatible
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .anthropic: "Anthropic (Claude)"
-        case .openAICompatible: "OpenAI-compatible"
-        }
-    }
-}
-
 /// The five tools exposed to the model (spec section 29A).
 ///
 /// Read tools execute immediately. Write tools never commit on their own: they
@@ -135,7 +119,11 @@ enum AssistantTool: String, CaseIterable, Sendable {
     }
 
     private static func object(_ properties: [String: Any], required: [String]) -> [String: Any] {
-        ["type": "object", "properties": properties, "required": required]
+        var schema: [String: Any] = ["type": "object", "properties": properties]
+        // Omitted when empty: some providers (Gemini among them) are strict
+        // about function schemas, and an absent list means the same thing.
+        if !required.isEmpty { schema["required"] = required }
+        return schema
     }
 }
 

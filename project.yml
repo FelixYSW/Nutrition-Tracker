@@ -30,6 +30,13 @@ targets:
         MARKETING_VERSION: '2.0'
         CURRENT_PROJECT_VERSION: '1'
         GENERATE_INFOPLIST_FILE: YES
+        # Custom keys merged into the generated Info.plist (see the file).
+        INFOPLIST_FILE: Config/AppConfig-Info.plist
+        # Assistant configuration. Empty here on purpose; CI fills these from
+        # GitHub secrets/variables via an xcconfig. Never commit real values.
+        ASSISTANT_API_KEY: ''
+        ASSISTANT_MODEL: ''
+        ASSISTANT_BASE_URL: ''
         INFOPLIST_KEY_CFBundleDisplayName: Nutrition Tracker
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
