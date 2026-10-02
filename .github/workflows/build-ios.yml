@@ -60,6 +60,40 @@ jobs:
             echo "HAS_REMOTE_KEY=0" >> "$GITHUB_ENV"
           fi
 
+      - name: Fetch trained models (optional)
+        # The repo is public, so model files are not committed. If the
+        # MODELS_URL secret points at a zip containing IngredientSegmenter.mlpackage
+        # and/or NutritionEstimator.mlpackage (e.g. a Google Drive share link),
+        # they are bundled into the app. Must run before project generation,
+        # because XcodeGen only includes files that exist when it runs.
+        env:
+          MODELS_URL: ${{ secrets.MODELS_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MODELS_URL:-}" ]; then
+            echo "No MODELS_URL secret set; building without on-device models."
+            exit 0
+          fi
+          URL="$MODELS_URL"
+          # Turn a Drive "share" link into a direct download link.
+          if [[ "$URL" =~ drive\.google\.com/file/d/([^/]+) ]]; then
+            URL="https://drive.google.com/uc?export=download&id=${BASH_REMATCH[1]}"
+          fi
+          curl -fsSL "$URL" -o models.zip || { echo "::error::Could not download MODELS_URL. Is the file shared as 'Anyone with the link'?"; exit 1; }
+          if ! unzip -tq models.zip >/dev/null 2>&1; then
+            echo "::error::MODELS_URL did not return a zip file. Check the sharing setting."
+            exit 1
+          fi
+          unzip -q -o models.zip -d NutritionTracker/Resources
+          rm models.zip
+          for model in IngredientSegmenter NutritionEstimator; do
+            if [ -d "NutritionTracker/Resources/$model.mlpackage" ]; then
+              echo "Bundling $model.mlpackage"
+            else
+              echo "::warning::$model.mlpackage not in the zip; the app will show it as not installed."
+            fi
+          done
+
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
 

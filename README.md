@@ -124,7 +124,9 @@ python -m ml.nutrition_estimation.export   --checkpoint ml/runs/model_b_rgb_mobi
 - Recognition of Malaysian dishes starts weak, because the public datasets are small.
 - Model B has only been trained on Nutrition5k, so nobody has measured how well it handles local food.
 
-`.mlpackage` files are gitignored, so CI builds ship **without** models unless you change that. Models are large and depend on dataset licences, so decide deliberately before committing them or adding a CI step to download them.
+`.mlpackage` files are gitignored and never committed, because this repo is public. To get them into CI builds, set a **`MODELS_URL`** repository secret to a link to a zip holding the `.mlpackage` folders. The Colab notebook produces exactly this as `NutritionTrackerModels.zip`; a Google Drive "Anyone with the link" share link works. The workflow downloads the zip before generating the project. Without the secret, CI builds the app without models.
+
+Note: on a public repo, any signed-in GitHub user can download Actions artifacts, and the IPA contains the models.
 
 **How photo analysis works:**
 

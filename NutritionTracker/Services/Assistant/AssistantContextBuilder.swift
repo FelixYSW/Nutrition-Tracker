@@ -73,7 +73,7 @@ struct AssistantContextBuilder {
     private let calendar: Calendar
 
     /// How far back the trend summary looks.
-    static let trendWindowDays = 14
+    nonisolated static let trendWindowDays = 14
 
     init(context: ModelContext, calendar: Calendar = .autoupdatingCurrent) {
         self.context = context
@@ -191,7 +191,7 @@ struct AssistantContextBuilder {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static let note = """
+    nonisolated private static let note = """
     All figures above are the user's real logged data and calculated target \
     ranges. Targets are ranges, not single numbers. Do not invent nutrition \
     values for foods you were not given; if you need a figure, state that it is \
@@ -200,13 +200,13 @@ struct AssistantContextBuilder {
 
     /// One-line disclosure shown before the first assistant use
     /// (spec section 29A).
-    static let dataSharingDisclosure = """
+    nonisolated static let dataSharingDisclosure = """
     To answer, this sends your profile basics, today's targets and food log, and \
     a 14-day trend summary to your chosen AI provider. Nothing is sent until you \
     turn this on, and your food photos are never uploaded.
     """
 
-    static let systemPrompt = """
+    nonisolated static let systemPrompt = """
     You are the in-app nutrition assistant for a personal iPhone food-tracking \
     app. You help the user with four things:
 

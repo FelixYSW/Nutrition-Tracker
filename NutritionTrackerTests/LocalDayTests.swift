@@ -49,7 +49,7 @@ final class LocalDayTests: XCTestCase {
     func testEntriesSortedNewestFirst() {
         let morning = TestSupport.entry(name: "A", at: TestSupport.date(2026, 10, 2, 8, calendar: kl))
         let evening = TestSupport.entry(name: "B", at: TestSupport.date(2026, 10, 2, 19, calendar: kl))
-        let result = LocalDay.entries([morning, evening], on: morning, calendar: kl)
+        let result = LocalDay.entries([morning, evening], on: morning.consumedAt, calendar: kl)
         XCTAssertEqual(result.map(\.name), ["B", "A"])
     }
 
