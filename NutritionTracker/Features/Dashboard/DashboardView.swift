@@ -16,7 +16,6 @@ struct DashboardView: View {
     @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var allEntries: [FoodEntry]
 
     @State private var isShowingSettings = false
-    @State private var isShowingAssistant = false
     @State private var editingDraft: FoodEntryDraft?
     @State private var entryPendingDeletion: FoodEntry?
 
@@ -41,24 +40,21 @@ struct DashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
                     header
+                    CalorieHeroCard(consumed: consumed.calories, range: ranges.calories)
                     ringsCard
-                    fibreCard
                     statusMessages
                     entriesSection
                 }
                 .appPageContent()
             }
             .appPageSurface()
-            .navigationTitle("Today")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { toolbarContent }
+            .toolbar(.hidden, for: .navigationBar)
             .refreshable {
                 // Pull-to-refresh re-checks the local day, which also covers
                 // returning to the app after midnight.
                 dayObserver.refresh()
             }
             .sheet(isPresented: $isShowingSettings) { SettingsView() }
-            .sheet(isPresented: $isShowingAssistant) { AssistantView() }
             .sheet(item: $editingDraft) { draft in
                 EditEntrySheet(draft: draft)
             }
@@ -75,88 +71,42 @@ struct DashboardView: View {
         }
     }
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Button {
-                isShowingAssistant = true
-            } label: {
-                Image(systemName: assistantIsReady ? "sparkles" : "sparkles.rectangle.stack")
-                    .accessibilityLabel(assistantIsReady
-                        ? "Open assistant"
-                        : "Assistant needs setup")
-            }
-            // Never a dead tap target: when unconfigured it still opens and
-            // explains what to do (spec section 29A).
-            .opacity(assistantIsReady ? 1 : 0.5)
-
-            Button {
-                isShowingSettings = true
-            } label: {
-                Image(systemName: "gearshape.fill")
-                    .accessibilityLabel("Settings")
-            }
-        }
-    }
-
-    private var assistantIsReady: Bool {
-        let settings = context.loadAppSettings()
-        return settings.assistantDataSharingOptIn
-            && APIKeyResolver.hasKey(for: .assistantAPIKey)
-    }
-
     // MARK: Sections
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(AppFormatters.dayTitle.string(from: today).uppercased())
-                .font(.caption.weight(.semibold))
-                .tracking(1.2)
-                .foregroundStyle(AppTheme.accent)
-            Text("\(AppFormatters.amount(consumed.calories)) kcal so far")
-                .font(.largeTitle.bold())
-                .contentTransition(.numericText())
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(AppFormatters.weekdayName.string(from: today))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(AppFormatters.dayAndMonth.string(from: today))
+                    .font(.system(.title, design: .rounded).weight(.heavy))
+                    .contentTransition(.numericText())
+            }
+            Spacer()
+            GlassIconButton(systemImage: "person.crop.circle",
+                            label: "Settings") {
+                isShowingSettings = true
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var ringsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Adaptive grid: four rings across on a Pro Max, two on an SE,
-            // never a fixed four-column row that squashes.
-            let columns = [GridItem(.adaptive(minimum: 78, maximum: 150), spacing: 14)]
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(Nutrient.allCases.filter(\.isPrimary)) { nutrient in
-                    CircularNutritionProgress(nutrient: nutrient,
-                                              consumed: consumed[nutrient],
-                                              range: ranges[nutrient])
-                }
-            }
-
-            if ranges.calories.max <= 0 {
-                Text("No targets yet. Set them in Settings under Daily Targets.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        // Four small rings in one row: protein, carbs, fat and fibre. Calories
+        // get the hero card above.
+        HStack(alignment: .top, spacing: 4) {
+            ForEach([Nutrient.protein, .carbs, .fat, .fibre]) { nutrient in
+                CompactMacroRing(nutrient: nutrient,
+                                 consumed: consumed[nutrient],
+                                 range: ranges[nutrient])
             }
         }
-        .appCard()
-    }
-
-    private var fibreCard: some View {
-        // Fibre is secondary: a bar rather than a ring, so it does not compete
-        // with the four primary nutrients.
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Fibre").font(.subheadline.weight(.semibold))
-                Spacer()
-                Text("\(AppFormatters.amount(consumed.fibre)) of \(AppFormatters.range(ranges.fibre)) g")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            RangeBar(consumed: consumed.fibre, range: ranges.fibre, nutrient: .fibre)
-        }
-        .appCard()
+        .padding(.vertical, 16)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.cardBackground, in: RoundedRectangle(
+            cornerRadius: AppTheme.cornerRadius, style: .continuous))
     }
 
     @ViewBuilder

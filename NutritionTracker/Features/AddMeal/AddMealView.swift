@@ -59,7 +59,7 @@ struct AddMealView: View {
                             Label("Add another food", systemImage: "plus.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.appSecondary)
 
                         totalsCard
                     }
@@ -110,12 +110,9 @@ struct AddMealView: View {
             Button {
                 save()
             } label: {
-                Text(isBackdated ? "SAVE TO SELECTED DATE" : "ADD TO TODAY")
-                    .font(.subheadline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
+                Text(isBackdated ? "Save to selected date" : "Save to today")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.appPrimary)
             .disabled(!canSave)
 
             if !canSave {
@@ -124,9 +121,15 @@ struct AddMealView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, AppTheme.cardPadding)
-        .padding(.vertical, 12)
-        .background(.bar)
+        .padding(.horizontal, AppTheme.cardPadding + 4)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        // Fade the page out under the button rather than a hard bar.
+        .background(
+            LinearGradient(colors: [AppTheme.background.opacity(0),
+                                    AppTheme.background.opacity(0.95)],
+                           startPoint: .top, endPoint: .center)
+                .ignoresSafeArea(edges: .bottom))
     }
 
     // MARK: Actions
@@ -203,6 +206,9 @@ struct FoodDraftCard: View {
 
     @State private var isEditingDetails = false
     @State private var showRemovePrompt = false
+    /// Upper end of the portion slider. Captured when the card appears (and
+    /// when the unit changes) so the scale does not move while dragging.
+    @State private var portionCeiling: Double = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -223,6 +229,8 @@ struct FoodDraftCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            portionSlider
 
             NutritionSummaryView(nutrition: draft.total, showsFibre: false)
 
@@ -262,6 +270,39 @@ struct FoodDraftCard: View {
         } message: {
             Text("The quantity reached zero.")
         }
+    }
+
+    private var sliderRange: ClosedRange<Double> {
+        let lower = draft.unit.step
+        let upper = max(portionCeiling, lower * 20, draft.quantity)
+        return lower...upper
+    }
+
+    private var portionSlider: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Portion size")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(AppFormatters.quantity(draft.quantity, unit: draft.unit)) \(draft.unit.shortLabel)")
+                    .font(.footnote.weight(.bold))
+                    .monospacedDigit()
+            }
+            Slider(value: Binding(
+                get: { min(max(draft.quantity, sliderRange.lowerBound), sliderRange.upperBound) },
+                set: { draft.quantity = QuantityStepper.rounded($0, unit: draft.unit) }),
+                   in: sliderRange,
+                   step: draft.unit.step)
+                .tint(AppTheme.accentFill)
+                .accessibilityLabel("Portion size")
+        }
+        .onAppear { resetCeiling() }
+        .onChange(of: draft.unit) { _, _ in resetCeiling() }
+    }
+
+    private func resetCeiling() {
+        portionCeiling = max(draft.unit.step * 20, draft.quantity * 2)
     }
 
     private var header: some View {
