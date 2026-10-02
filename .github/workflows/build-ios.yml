@@ -128,6 +128,9 @@ jobs:
           REMOTE_AI_API_KEY: ${{ secrets.REMOTE_AI_API_KEY }}
         run: |
           set -euo pipefail
+          # macOS runners use bash 3.2, where "${arr[@]}" on an empty array is an
+          # "unbound variable" error under set -u. The ${arr[@]+...} form below
+          # expands to nothing when the array is empty.
           EXTRA_SETTINGS=()
           if [ "${HAS_REMOTE_KEY}" = "1" ]; then
             EXTRA_SETTINGS+=("INFOPLIST_KEY_RemoteAIAPIKey=${REMOTE_AI_API_KEY}")
@@ -142,7 +145,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
-            "${EXTRA_SETTINGS[@]}" \
+            ${EXTRA_SETTINGS[@]+"${EXTRA_SETTINGS[@]}"} \
             | xcbeautify
 
       - name: Locate built .app

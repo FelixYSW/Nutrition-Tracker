@@ -21,6 +21,14 @@ enum AppModelContainer {
     ]
 
     static func makeContainer() -> ModelContainer {
+        // The store lives in Application Support, which does not exist yet on a
+        // fresh install or a freshly booted simulator. CoreData recovers, but
+        // only after logging a "Failed to create file" error, so create it first.
+        if let support = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                  in: .userDomainMask).first {
+            try? FileManager.default.createDirectory(at: support,
+                                                     withIntermediateDirectories: true)
+        }
         let schema = Schema(models)
         let configuration = ModelConfiguration("NutritionTracker", schema: schema)
         do {
