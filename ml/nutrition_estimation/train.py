@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from ml.common import MANIFESTS, RUNS, pick_device, seed_everything
+from ml.common import MANIFESTS, RUNS, TimeBudget, pick_device, save_atomic, seed_everything
 from ml.nutrition_estimation.dataset import TARGETS, Nutrition5kDataset, read_manifest, target_stats
 from ml.nutrition_estimation.evaluate import evaluate
 from ml.nutrition_estimation.model import NutritionEstimator
@@ -58,6 +58,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--run-name", default=None)
+    parser.add_argument("--resume", action="store_true",
+                        help="continue from <run>/last.pt if it exists (e.g. after a Colab disconnect)")
+    parser.add_argument("--max-minutes", type=float, default=None,
+                        help="stop cleanly before this many minutes; resume later with --resume")
     args = parser.parse_args()
 
     inputs = tuple(part.strip() for part in args.inputs.split(",") if part.strip())
@@ -66,13 +70,22 @@ def main() -> None:
 
     run_dir = RUNS / (args.run_name or f"model_b_{'_'.join(inputs)}_{args.backbone}")
     run_dir.mkdir(parents=True, exist_ok=True)
+    last_path = run_dir / "last.pt"
     seed_everything(args.seed)
     device = pick_device()
+    budget = TimeBudget(args.max_minutes)
+
+    resume_state = None
+    if args.resume and last_path.exists():
+        resume_state = torch.load(last_path, map_location="cpu", weights_only=False)
+        print(f"Resuming {run_dir.name} after epoch {resume_state['epoch']}")
 
     rows = read_manifest(args.manifest)
     train_rows = [r for r in rows if r["split"] == "train"]
     val_rows = [r for r in rows if r["split"] == "val"]
-    stats = target_stats(train_rows)
+    # Target statistics are fixed by the run being resumed, so the model's
+    # output scale cannot shift between sessions.
+    stats = resume_state["stats"] if resume_state else target_stats(train_rows)
 
     def make(rows_, train):
         return Nutrition5kDataset(rows_, stats, args.size, train, inputs, args.seg_dir, args.depth_dir)
@@ -83,15 +96,30 @@ def main() -> None:
                               pin_memory=device.type == "cuda")
     val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.workers)
 
-    model = NutritionEstimator(args.backbone, train_ds.channels).to(device)
+    model = NutritionEstimator(args.backbone, train_ds.channels,
+                               pretrained=resume_state is None).to(device)
     optimiser = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimiser, max_lr=args.lr, total_steps=args.epochs * max(1, len(train_loader)), pct_start=0.1)
     weights = torch.tensor([TASK_WEIGHTS[t] for t in TARGETS], device=device)
     scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
 
-    best, history = math.inf, []
-    for epoch in range(1, args.epochs + 1):
+    best, history, start_epoch = math.inf, [], 1
+    if resume_state:
+        model.load_state_dict(resume_state["model"])
+        optimiser.load_state_dict(resume_state["optimiser"])
+        scheduler.load_state_dict(resume_state["scheduler"])
+        scaler.load_state_dict(resume_state["scaler"])
+        best, history = resume_state["best"], resume_state["history"]
+        start_epoch = resume_state["epoch"] + 1
+
+    finished = True
+    for epoch in range(start_epoch, args.epochs + 1):
+        if not budget.another_epoch_fits():
+            finished = False
+            print(f"Time budget reached before epoch {epoch}. Re-run with --resume to continue.")
+            break
+
         model.train()
         started, running, batches = time.time(), 0.0, 0
         for x, target, _ in tqdm(train_loader, desc=f"epoch {epoch}/{args.epochs}"):
@@ -107,6 +135,7 @@ def main() -> None:
             running, batches = running + loss.item(), batches + 1
 
         metrics = evaluate(model, val_loader, stats, device, normalise_input)
+        budget.record(time.time() - started)
         entry = {"epoch": epoch, "seconds": round(time.time() - started),
                  "train_loss": running / max(1, batches), **metrics}
         history.append(entry)
@@ -115,13 +144,16 @@ def main() -> None:
         checkpoint = {"model": model.state_dict(), "stats": stats, "inputs": inputs,
                       "channels": train_ds.channels, "backbone": args.backbone,
                       "size": args.size, "epoch": epoch, "metrics": metrics}
-        torch.save(checkpoint, run_dir / "last.pt")
         if metrics["calories_mae"] < best:
             best = metrics["calories_mae"]
-            torch.save(checkpoint, run_dir / "best.pt")
+            save_atomic(checkpoint, run_dir / "best.pt")
+        save_atomic({**checkpoint, "optimiser": optimiser.state_dict(),
+                     "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
+                     "best": best, "history": history}, last_path)
 
     (run_dir / "history.json").write_text(json.dumps(history, indent=2))
-    print(f"Done. Best calorie MAE {best:.1f} kcal -> {run_dir / 'best.pt'}")
+    if finished:
+        print(f"Done. Best calorie MAE {best:.1f} kcal -> {run_dir / 'best.pt'}")
 
 
 if __name__ == "__main__":

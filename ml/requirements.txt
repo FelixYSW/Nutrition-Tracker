@@ -1,9 +1,10 @@
 # Training and export toolchain for Model A and Model B.
-# Python 3.10-3.11 recommended (coremltools wheels lag newer Pythons).
+# Python 3.10-3.12. On Google Colab use ml/colab/train_on_colab.ipynb instead,
+# which keeps Colab's preinstalled torch/numpy and only adds coremltools.
 torch>=2.2
 torchvision>=0.17
-coremltools>=7.2
-numpy>=1.24,<2.0
+coremltools>=8.0
+numpy>=1.24
 pillow>=10.0
 tqdm>=4.66
 

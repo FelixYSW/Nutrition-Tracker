@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 import json
+import os
 import random
+import time
 from pathlib import Path
 
 import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "ml" / "data"
+
+# Overridable so data can sit on fast local disk while checkpoints go to
+# persistent storage - e.g. on Colab, data in /content and runs on Google Drive.
+DATA = Path(os.environ.get("NT_DATA_DIR", ROOT / "ml" / "data"))
 MANIFESTS = DATA / "manifests"
-RUNS = ROOT / "ml" / "runs"
+RUNS = Path(os.environ.get("NT_RUNS_DIR", ROOT / "ml" / "runs"))
 
 # ImageNet statistics. Normalisation happens *inside* the exported Core ML
 # model, so the app only ever feeds raw 0-255 pixels.
@@ -55,6 +60,34 @@ def split_for(index: int, seed: int = 0, val: float = 0.1, test: float = 0.1) ->
     if roll < test + val:
         return "val"
     return "train"
+
+
+class TimeBudget:
+    """Stops training cleanly before a hosted session (e.g. free Colab) is cut off.
+
+    After each epoch, training asks whether another epoch of the same length
+    still fits. If not, it saves and exits, and `--resume` continues later.
+    """
+
+    def __init__(self, max_minutes: float | None) -> None:
+        self.deadline = time.time() + max_minutes * 60 if max_minutes else None
+        self.longest_epoch = 0.0
+
+    def record(self, epoch_seconds: float) -> None:
+        self.longest_epoch = max(self.longest_epoch, epoch_seconds)
+
+    def another_epoch_fits(self) -> bool:
+        if self.deadline is None:
+            return True
+        return time.time() + self.longest_epoch * 1.1 < self.deadline
+
+
+def save_atomic(state: dict, path: Path) -> None:
+    """Writes a checkpoint via a temp file, so a disconnect mid-write (common
+    on Colab with Google Drive) cannot leave a corrupt last.pt behind."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(state, tmp)
+    os.replace(tmp, path)
 
 
 def normalise(images: torch.Tensor) -> torch.Tensor:

@@ -33,7 +33,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
-from ml.common import RUNS, normalise, pick_device, read_jsonl, seed_everything
+from ml.common import (RUNS, TimeBudget, normalise, pick_device, read_jsonl, save_atomic,
+                       seed_everything)
 from ml.ingredient_segmentation.dataset import IGNORE, IngredientDataset, collect_labels
 from ml.ingredient_segmentation.evaluate import evaluate
 from ml.ingredient_segmentation.model import IngredientSegmenter, expand_classes, load_checkpoint
@@ -83,6 +84,10 @@ def main() -> None:
     parser.add_argument("--freeze-backbone-epochs", type=int, default=None)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--resume", action="store_true",
+                        help="continue from <run>/last.pt if it exists (e.g. after a Colab disconnect)")
+    parser.add_argument("--max-minutes", type=float, default=None,
+                        help="stop cleanly before this many minutes; resume later with --resume")
     args = parser.parse_args()
 
     # Stage defaults: fine-tuning uses fewer epochs and a lower learning rate.
@@ -92,9 +97,11 @@ def main() -> None:
     freeze_epochs = args.freeze_backbone_epochs if args.freeze_backbone_epochs is not None else (0 if base else 3)
     run_dir = RUNS / (args.run_name or f"model_a_{args.stage}")
     run_dir.mkdir(parents=True, exist_ok=True)
+    last_path = run_dir / "last.pt"
 
     seed_everything(args.seed)
     device = pick_device()
+    budget = TimeBudget(args.max_minutes)
 
     records = [r for path in args.manifests for r in read_jsonl(path)]
     train_records = [r for r in records if r["split"] == "train"]
@@ -102,7 +109,15 @@ def main() -> None:
     if not train_records:
         raise SystemExit("No training records found in the given manifests.")
 
-    if args.init:
+    resume_state = None
+    if args.resume and last_path.exists():
+        resume_state = torch.load(last_path, map_location="cpu", weights_only=False)
+        # The label space is fixed by the run being resumed, never re-derived.
+        labels = resume_state["labels"]
+        model = IngredientSegmenter(len(labels), pretrained_backbone=False)
+        model.load_state_dict(resume_state["model"])
+        print(f"Resuming {run_dir.name} after epoch {resume_state['epoch']}")
+    elif args.init:
         model, checkpoint = load_checkpoint(args.init)
         labels = collect_labels(records, existing=checkpoint["labels"])
         model = expand_classes(model, checkpoint["labels"], labels)
@@ -128,8 +143,22 @@ def main() -> None:
                                                     pct_start=0.1)
     scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda")
 
-    best_score, history = -math.inf, []
-    for epoch in range(1, epochs + 1):
+    best_score, history, start_epoch = -math.inf, [], 1
+    if resume_state:
+        optimiser.load_state_dict(resume_state["optimiser"])
+        scheduler.load_state_dict(resume_state["scheduler"])
+        scaler.load_state_dict(resume_state["scaler"])
+        best_score = resume_state["best_score"]
+        history = resume_state["history"]
+        start_epoch = resume_state["epoch"] + 1
+
+    finished = True
+    for epoch in range(start_epoch, epochs + 1):
+        if not budget.another_epoch_fits():
+            finished = False
+            print(f"Time budget reached before epoch {epoch}. Re-run with --resume to continue.")
+            break
+
         frozen = epoch <= freeze_epochs
         for parameter in model.backbone.parameters():
             parameter.requires_grad = not frozen
@@ -155,6 +184,7 @@ def main() -> None:
             totals.update(loss=loss.item(), seg=seg_loss.item(), presence=pres_loss.item(), n=1)
 
         metrics = evaluate(model, val_loader, labels, device) if val_records else {}
+        budget.record(time.time() - started)
         # Base stage ranks on mIoU; the Malaysian stage, where most supervision
         # is image-level, ranks on presence mAP.
         score = metrics.get("miou" if base else "presence_map", -totals["loss"])
@@ -168,16 +198,20 @@ def main() -> None:
 
         checkpoint = {"model": model.state_dict(), "labels": labels, "size": args.size,
                       "stage": args.stage, "epoch": epoch, "metrics": entry}
-        torch.save(checkpoint, run_dir / "last.pt")
         if score > best_score:
             best_score = score
-            torch.save(checkpoint, run_dir / "best.pt")
+            save_atomic(checkpoint, run_dir / "best.pt")
             if metrics:
                 (run_dir / "best_metrics.json").write_text(json.dumps(metrics, indent=2))
+        # last.pt carries optimiser state too, so a resumed run continues exactly.
+        save_atomic({**checkpoint, "optimiser": optimiser.state_dict(),
+                     "scheduler": scheduler.state_dict(), "scaler": scaler.state_dict(),
+                     "best_score": best_score, "history": history}, last_path)
 
     (run_dir / "history.json").write_text(json.dumps(history, indent=2))
     (run_dir / "labels.json").write_text(json.dumps(labels, indent=2))
-    print(f"Done. Best checkpoint: {run_dir / 'best.pt'}")
+    if finished:
+        print(f"Done. Best checkpoint: {run_dir / 'best.pt'}")
 
 
 if __name__ == "__main__":

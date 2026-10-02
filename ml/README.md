@@ -3,6 +3,8 @@
 Training, evaluation and Core ML export for the app's two on-device models,
 plus the nutrition reference table.
 
+> **No GPU?** Use [`colab/train_on_colab.ipynb`](colab/train_on_colab.ipynb) on free Google Colab. It saves checkpoints to Google Drive and resumes after Colab disconnects you.
+
 | | Model A: recognition | Model B: portion and nutrition |
 |---|---|---|
 | Folder | `ingredient_segmentation/` | `nutrition_estimation/` |

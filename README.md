@@ -72,7 +72,7 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and run
 
-Requires macOS, Xcode 15.3+ (iOS 17 SDK) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
+Requires macOS, Xcode 16+ (current XcodeGen writes a project format Xcode 15 cannot open) and [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ```bash
 brew install xcodegen
@@ -185,7 +185,7 @@ Workflow: [`.github/workflows/build-ios.yml`](.github/workflows/build-ios.yml). 
 What it does:
 
 1. Installs XcodeGen and generates the Xcode project.
-2. Runs the unit tests on an iPhone 15 simulator.
+2. Runs the unit tests on whichever iPhone simulator the runner has (Xcode 16, `macos-15`).
 3. Builds Release for `iphoneos` with signing turned off.
 4. Packages the build as `Payload/NutritionTracker.app` and zips it into `NutritionTracker-unsigned.ipa`.
 5. Uploads the IPA as an artifact.
