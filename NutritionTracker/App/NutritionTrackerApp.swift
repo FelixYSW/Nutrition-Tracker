@@ -34,10 +34,15 @@ final class AppRouter {
     /// picks this up, shows it for review, and clears it.
     var pendingDrafts: [FoodEntryDraft] = []
 
+    /// One-line explanation shown above the handed-over drafts, e.g. where the
+    /// figures came from or why nothing could be filled in.
+    var pendingNotice: String?
+
     /// Date the Calendar tab should show. Set when the user taps a point in Trends.
     var calendarRequestedDate: Date?
 
-    func present(drafts: [FoodEntryDraft]) {
+    func present(drafts: [FoodEntryDraft], notice: String? = nil) {
+        pendingNotice = notice
         pendingDrafts = drafts
         selectedTab = .addMeal
     }
@@ -47,9 +52,10 @@ final class AppRouter {
         selectedTab = .calendar
     }
 
-    func consumePendingDrafts() -> [FoodEntryDraft] {
-        let drafts = pendingDrafts
+    func consumePendingDrafts() -> (drafts: [FoodEntryDraft], notice: String?) {
+        let handover = (pendingDrafts, pendingNotice)
         pendingDrafts = []
-        return drafts
+        pendingNotice = nil
+        return handover
     }
 }

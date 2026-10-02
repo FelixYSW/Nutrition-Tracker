@@ -29,8 +29,8 @@ struct AssistantResponse: Equatable, Sendable {
 }
 
 enum AssistantServiceError: LocalizedError, Equatable {
+    /// The build has no assistant key. Not something the user can fix.
     case notConfigured
-    case optInRequired
     case offline
     case requestFailed(detail: String)
     case malformedResponse(detail: String)
@@ -39,9 +39,7 @@ enum AssistantServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            "Add an API key in Settings to use the assistant."
-        case .optInRequired:
-            "Turn on assistant data sharing in Settings to use the assistant."
+            "The assistant isn't available in this version of the app."
         case .offline:
             "The assistant needs an internet connection."
         case .requestFailed(let detail):
@@ -51,10 +49,6 @@ enum AssistantServiceError: LocalizedError, Equatable {
         case .rateLimited:
             "The AI provider is rate limiting requests. Try again shortly."
         }
-    }
-
-    var isSetupIssue: Bool {
-        self == .notConfigured || self == .optInRequired
     }
 }
 
@@ -69,7 +63,7 @@ protocol AssistantServing: Sendable {
               tools: [AssistantTool]) async throws -> AssistantResponse
 }
 
-/// Reports unconfigured. Used so the UI can render a "needs setup" state without
+/// Reports unconfigured. Used so the UI can render an "unavailable" state without
 /// branching on an optional service.
 struct UnconfiguredAssistantService: AssistantServing {
     var isConfigured: Bool { false }
@@ -80,10 +74,21 @@ struct UnconfiguredAssistantService: AssistantServing {
     }
 }
 
-/// Anthropic Messages API implementation with tool use.
-struct AnthropicAssistantService: AssistantServing {
+/// Chat Completions client for any OpenAI-compatible API, with tool calling.
+///
+/// Defaults to Google Gemini's OpenAI-compatible endpoint. Pointing it at
+/// another compatible provider (DeepSeek, Groq, OpenRouter, ...) only needs a
+/// different base URL and model name, both of which can be set at build time
+/// without code changes (see `BundledAPIKey`).
+struct OpenAICompatibleAssistantService: AssistantServing {
+
+    static let defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+    /// Overridable with the ASSISTANT_MODEL repository variable, because model
+    /// names get retired. Check Google AI Studio for current names.
+    static let defaultModel = "gemini-2.5-flash"
 
     private let session: URLSession
+    private let baseURL: String
     private let model: String
 
     init(session: URLSession = {
@@ -92,30 +97,34 @@ struct AnthropicAssistantService: AssistantServing {
         configuration.timeoutIntervalForResource = 90
         return URLSession(configuration: configuration)
     }(),
-         model: String = "claude-sonnet-5-5") {
+         baseURL: String = BundledAPIKey.assistantBaseURL ?? Self.defaultBaseURL,
+         model: String = BundledAPIKey.assistantModel ?? Self.defaultModel) {
         self.session = session
+        self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         self.model = model
     }
 
     var isConfigured: Bool {
-        APIKeyResolver.hasKey(for: .assistantAPIKey)
+        BundledAPIKey.hasAssistantKey
     }
 
     func send(turns: [AssistantTurn],
               contextJSON: String,
               tools: [AssistantTool]) async throws -> AssistantResponse {
 
-        guard let apiKey = APIKeyResolver.key(for: .assistantAPIKey), !apiKey.isEmpty else {
+        guard let apiKey = BundledAPIKey.assistant else {
             throw AssistantServiceError.notConfigured
         }
+        guard let url = URL(string: "\(baseURL)/chat/completions"), url.scheme == "https" else {
+            throw AssistantServiceError.requestFailed(detail: "invalid assistant URL")
+        }
 
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
-        let body = makeBody(turns: turns, contextJSON: contextJSON, tools: tools)
+        let body = Self.makeBody(model: model, turns: turns, contextJSON: contextJSON, tools: tools)
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         } catch {
@@ -134,6 +143,7 @@ struct AnthropicAssistantService: AssistantServing {
         }
 
         if let http = response as? HTTPURLResponse {
+            // Free tiers rate-limit; this is the expected error under load.
             if http.statusCode == 429 { throw AssistantServiceError.rateLimited }
             guard (200..<300).contains(http.statusCode) else {
                 // Never include the body: it can echo the request, which holds
@@ -145,71 +155,95 @@ struct AnthropicAssistantService: AssistantServing {
         return try Self.decode(data: data)
     }
 
-    private func makeBody(turns: [AssistantTurn],
-                          contextJSON: String,
-                          tools: [AssistantTool]) -> [String: Any] {
-        var system: [[String: Any]] = [
-            ["type": "text", "text": AssistantContextBuilder.systemPrompt]
-        ]
-        // The context goes in the system block, rebuilt per request rather than
-        // accumulated as server-side "memory".
-        system.append(["type": "text",
-                       "text": "Current user context as JSON:\n\(contextJSON)"])
+    // MARK: Request
+
+    static func makeBody(model: String,
+                         turns: [AssistantTurn],
+                         contextJSON: String,
+                         tools: [AssistantTool]) -> [String: Any] {
+        // The context is rebuilt per request rather than kept as server-side
+        // "memory", and travels in the system message.
+        var messages: [[String: Any]] = [[
+            "role": "system",
+            "content": AssistantContextBuilder.systemPrompt
+                + "\n\nCurrent user context as JSON:\n\(contextJSON)"
+        ]]
+        for turn in turns {
+            messages.append(contentsOf: encode(turn: turn))
+        }
 
         return [
             "model": model,
-            "max_tokens": 1536,
-            "system": system,
+            "messages": messages,
             "tools": tools.map { tool in
                 [
-                    "name": tool.rawValue,
-                    "description": tool.description,
-                    "input_schema": tool.inputSchema
+                    "type": "function",
+                    "function": [
+                        "name": tool.rawValue,
+                        "description": tool.description,
+                        "parameters": tool.inputSchema
+                    ] as [String: Any]
                 ] as [String: Any]
-            },
-            "messages": turns.map(Self.encode(turn:))
+            }
         ]
     }
 
-    private static func encode(turn: AssistantTurn) -> [String: Any] {
-        var content: [[String: Any]] = []
+    /// One app turn can become several Chat Completions messages: each tool
+    /// result is its own "tool" message, and tool calls ride on the assistant
+    /// message.
+    static func encode(turn: AssistantTurn) -> [[String: Any]] {
+        var messages: [[String: Any]] = []
+        var texts: [String] = []
+        var images: [Data] = []
+        var toolCalls: [[String: Any]] = []
+
         for block in turn.blocks {
             switch block {
             case .text(let text):
-                content.append(["type": "text", "text": text])
-
+                texts.append(text)
             case .image(let data):
-                content.append([
-                    "type": "image",
-                    "source": [
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": data.base64EncodedString()
-                    ]
-                ])
-
+                images.append(data)
             case .toolUse(let id, let name, let input):
-                content.append([
-                    "type": "tool_use",
+                let arguments = (try? JSONSerialization.data(withJSONObject: unwrap(input)))
+                    .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                toolCalls.append([
                     "id": id,
-                    "name": name,
-                    "input": unwrap(input)
+                    "type": "function",
+                    "function": ["name": name, "arguments": arguments]
                 ])
-
-            case .toolResult(let id, let resultContent, let isError):
-                content.append([
-                    "type": "tool_result",
-                    "tool_use_id": id,
-                    "content": resultContent,
-                    "is_error": isError
-                ])
+            case .toolResult(let id, let content, _):
+                messages.append(["role": "tool", "tool_call_id": id, "content": content])
             }
         }
-        return ["role": turn.role.rawValue, "content": content]
+
+        let text = texts.joined(separator: "\n\n")
+        switch turn.role {
+        case .assistant:
+            guard !text.isEmpty || !toolCalls.isEmpty else { break }
+            var message: [String: Any] = ["role": "assistant"]
+            // Omitted rather than null when empty: not every compatible API
+            // accepts a null content alongside tool calls.
+            if !text.isEmpty { message["content"] = text }
+            if !toolCalls.isEmpty { message["tool_calls"] = toolCalls }
+            messages.append(message)
+
+        case .user:
+            if !images.isEmpty {
+                var parts: [[String: Any]] = images.map { data in
+                    ["type": "image_url",
+                     "image_url": ["url": "data:image/jpeg;base64,\(data.base64EncodedString())"]]
+                }
+                if !text.isEmpty { parts.append(["type": "text", "text": text]) }
+                messages.append(["role": "user", "content": parts])
+            } else if !text.isEmpty {
+                messages.append(["role": "user", "content": text])
+            }
+        }
+        return messages
     }
 
     /// `JSONValue` -> plain Foundation objects for JSONSerialization.
-    private static func unwrap(_ input: [String: JSONValue]) -> [String: Any] {
+    static func unwrap(_ input: [String: JSONValue]) -> [String: Any] {
         input.mapValues(unwrap(value:))
     }
 
@@ -224,16 +258,26 @@ struct AnthropicAssistantService: AssistantServing {
         }
     }
 
+    // MARK: Response
+
     static func decode(data: Data) throws -> AssistantResponse {
         struct Body: Decodable {
-            let content: [Block]
-            struct Block: Decodable {
-                let type: String
-                let text: String?
-                let id: String?
-                let name: String?
-                let input: [String: JSONValue]?
+            struct Choice: Decodable { let message: Message }
+            struct Message: Decodable {
+                let content: String?
+                let tool_calls: [ToolCall]?
             }
+            struct ToolCall: Decodable {
+                let id: String?
+                let function: Function
+            }
+            struct Function: Decodable {
+                let name: String
+                /// Normally a JSON-encoded string; some compatible APIs send an
+                /// object instead, so both are accepted.
+                let arguments: JSONValue?
+            }
+            let choices: [Choice]
         }
 
         let body: Body
@@ -242,32 +286,33 @@ struct AnthropicAssistantService: AssistantServing {
         } catch {
             throw AssistantServiceError.malformedResponse(detail: "unreadable envelope")
         }
-
-        var text: [String] = []
-        var calls: [AssistantToolCall] = []
-
-        for block in body.content {
-            switch block.type {
-            case "text":
-                if let value = block.text, !value.isEmpty { text.append(value) }
-
-            case "tool_use":
-                // A hallucinated tool name is dropped here rather than being
-                // passed down to the executor (spec section 34).
-                guard let id = block.id,
-                      let name = block.name,
-                      let tool = AssistantTool(rawValue: name) else {
-                    continue
-                }
-                calls.append(AssistantToolCall(id: id, tool: tool,
-                                               arguments: block.input ?? [:]))
-
-            default:
-                continue
-            }
+        guard let message = body.choices.first?.message else {
+            throw AssistantServiceError.malformedResponse(detail: "no choices")
         }
 
-        return AssistantResponse(text: text.isEmpty ? nil : text.joined(separator: "\n\n"),
-                                 toolCalls: calls)
+        var calls: [AssistantToolCall] = []
+        for (index, call) in (message.tool_calls ?? []).enumerated() {
+            // A hallucinated tool name is dropped here rather than being passed
+            // down to the executor (spec section 34).
+            guard let tool = AssistantTool(rawValue: call.function.name) else { continue }
+
+            let arguments: [String: JSONValue]
+            switch call.function.arguments {
+            case .string(let json):
+                arguments = (try? JSONDecoder().decode([String: JSONValue].self,
+                                                       from: Data(json.utf8))) ?? [:]
+            case .object(let object):
+                arguments = object
+            default:
+                arguments = [:]
+            }
+
+            // Some compatible APIs omit ids; one is needed to pair the result.
+            let id = (call.id?.isEmpty == false) ? call.id! : "call_\(index)_\(UUID().uuidString.prefix(8))"
+            calls.append(AssistantToolCall(id: id, tool: tool, arguments: arguments))
+        }
+
+        let text = message.content?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return AssistantResponse(text: (text?.isEmpty ?? true) ? nil : text, toolCalls: calls)
     }
 }

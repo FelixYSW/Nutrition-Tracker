@@ -88,7 +88,7 @@ enum ImageStore {
 enum ImagePreparer {
 
     /// Resizes so the longest edge is `targetEdge`, then produces both a
-    /// pixel buffer for Core ML and JPEG bytes for storage/remote fallback.
+    /// pixel buffer for Core ML and JPEG bytes for storage.
     static func prepare(image: UIImage,
                         targetEdge: CGFloat = PreparedImage.targetEdge,
                         jpegQuality: CGFloat = 0.8) throws -> PreparedImage {

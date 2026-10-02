@@ -122,7 +122,9 @@ struct PhotoAnalysisResult: Codable, Equatable, Sendable {
     var photoPath: String?
     var modelAIdentifier: String
     var modelBIdentifier: String
-    var usedRemoteFallback: Bool
+    /// False when Model B was unavailable, so the amounts are defaults rather
+    /// than estimates and the UI says so.
+    var portionsEstimated: Bool
     var producedAt: Date
 
     /// True when nothing usable was found, so the UI offers manual entry
@@ -152,8 +154,6 @@ enum AIServiceError: LocalizedError, Equatable {
     case invalidImage
     case unsupportedModelOutput(detail: String)
     case inferenceFailed(detail: String)
-    case remoteFallbackNotConfigured
-    case remoteRequestFailed(detail: String)
     case cancelled
 
     var errorDescription: String? {
@@ -166,20 +166,13 @@ enum AIServiceError: LocalizedError, Equatable {
             "The model returned output this app cannot read (\(detail))."
         case .inferenceFailed(let detail):
             "Analysis failed: \(detail)"
-        case .remoteFallbackNotConfigured:
-            "No remote AI provider is configured."
-        case .remoteRequestFailed(let detail):
-            "The remote AI request failed: \(detail)"
         case .cancelled:
             "Analysis was cancelled."
         }
     }
 
-    /// Whether the user can reasonably fix this by changing a setting.
-    var isRecoverableBySetup: Bool {
-        switch self {
-        case .modelUnavailable, .remoteFallbackNotConfigured: true
-        default: false
-        }
+    var isModelUnavailable: Bool {
+        if case .modelUnavailable = self { return true }
+        return false
     }
 }

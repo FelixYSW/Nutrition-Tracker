@@ -355,42 +355,35 @@ final class CorrectionRecord {
 // MARK: - AppSettings
 
 /// Small single-row settings record. Lives in SwiftData rather than UserDefaults
-/// so it travels with export/import. Never holds secrets - those go to the
-/// Keychain (spec sections 26 and 39).
+/// so it travels with export/import. Never holds secrets.
 @Model
 final class AppSettings {
     @Attribute(.unique) var id: String
     var retainAnalysedImages: Bool
     var storeCorrectionsForTraining: Bool
-    /// Explicit opt-in required before the assistant sends any personal
-    /// nutrition data to a third-party LLM (spec section 29A).
+    var hasCompletedOnboarding: Bool
+
+    // Unused since the assistant and AI models stopped being user-configurable.
+    // Kept so the stored schema is unchanged and existing databases open
+    // without a migration. Remove only alongside a versioned schema bump.
     var assistantDataSharingOptIn: Bool
     var assistantProviderRaw: String
     var remoteVisionFallbackEnabled: Bool
-    var hasCompletedOnboarding: Bool
 
     init(id: String = AppSettings.singletonID,
          retainAnalysedImages: Bool = true,
          storeCorrectionsForTraining: Bool = false,
-         assistantDataSharingOptIn: Bool = false,
-         assistantProvider: AssistantProvider = .anthropic,
-         remoteVisionFallbackEnabled: Bool = false,
          hasCompletedOnboarding: Bool = false) {
         self.id = id
         self.retainAnalysedImages = retainAnalysedImages
         self.storeCorrectionsForTraining = storeCorrectionsForTraining
-        self.assistantDataSharingOptIn = assistantDataSharingOptIn
-        self.assistantProviderRaw = assistantProvider.rawValue
-        self.remoteVisionFallbackEnabled = remoteVisionFallbackEnabled
         self.hasCompletedOnboarding = hasCompletedOnboarding
+        self.assistantDataSharingOptIn = false
+        self.assistantProviderRaw = "anthropic"
+        self.remoteVisionFallbackEnabled = false
     }
 
     static let singletonID = "app-settings"
-
-    var assistantProvider: AssistantProvider {
-        get { AssistantProvider(rawValue: assistantProviderRaw) ?? .anthropic }
-        set { assistantProviderRaw = newValue.rawValue }
-    }
 }
 
 // MARK: - Shared math

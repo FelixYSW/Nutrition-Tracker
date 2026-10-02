@@ -11,7 +11,7 @@ A native iPhone app for tracking calories and macros. It sets daily targets as r
 - [Build and run](#build-and-run)
 - [On-device models](#on-device-models)
 - [Nutrition data](#nutrition-data)
-- [Remote AI and API keys](#remote-ai-and-api-keys)
+- [AI assistant (Google Gemini)](#ai-assistant-google-gemini)
 - [CI: unsigned IPA from GitHub Actions](#ci-unsigned-ipa-from-github-actions)
 - [Installing with Sideloadly (and the 7-day limit)](#installing-with-sideloadly-and-the-7-day-limit)
 - [Backup and your data](#backup-and-your-data)
@@ -31,7 +31,7 @@ A native iPhone app for tracking calories and macros. It sets daily targets as r
 - **Scan** has three actions: Take Photo, Choose Photo, Scan Barcode. Photos go through two on-device models. Barcodes are looked up in a local cache, then Open Food Facts.
 - **Calendar** shows any day's food log. A **Trends** view charts daily, weekly and monthly calories and macros against your target band.
 - **Assistant** (optional, from the Dashboard nav bar) suggests what to eat with the room you have left. It can also log, edit and delete food, or summarise your trends. **Every change it proposes waits for you to confirm it.**
-- **Settings** (gear icon on the Dashboard) covers profile, ranges, AI configuration, backup and restore, and data deletion.
+- **Settings** (gear icon on the Dashboard) covers profile, ranges, backup and restore, and data deletion. Neither the AI assistant nor the photo models have settings.
 
 The app has four tabs: Dashboard, Scan, Add Meal, Calendar. Settings and the assistant open as sheets from the Dashboard.
 
@@ -46,11 +46,11 @@ NutritionTracker/
   Persistence/  ModelContainer + versioned migration plan, fetch helpers
   Services/
     Nutrition/  NutritionTargetCalculator, NutritionRepository, FoodOntology
-    AI/         Model A/B protocols, Core ML adapters, pipeline, remote fallback
+    AI/         Model A/B protocols, Core ML adapters, pipeline
     Assistant/  provider-agnostic service, context builder, tools, executor
     Barcode/    Open Food Facts client, cache-first lookup
     Backup/     versioned JSON export/import
-    Keychain/   API key storage
+    Keychain/   built-in assistant key reader, legacy key cleanup
     Images/     photo storage and preparation
   Features/     Onboarding, Dashboard, Scan, AddMeal, Calendar, Settings, Assistant
   Components/   rings, steppers, cards, shared views, theme
@@ -96,7 +96,7 @@ The bundle identifier is `com.felix.NutritionTracker`. Don't change it: Sideload
 
 ## On-device models
 
-The app **builds and runs without any model files**. If they're missing, Scan says "Local model unavailable", and barcode scanning, manual entry and the optional remote fallback still work.
+The app **builds and runs without any model files**. Model status isn't shown anywhere. If the recognition model is missing, tapping Take Photo or Choose Photo says "Model not available"; if only the portion model is missing, photos still work but Add Meal says the amounts are rough defaults. Barcode scanning and manual entry always work.
 
 | Model | Expected file in the app bundle | Produces |
 |---|---|---|
@@ -159,26 +159,45 @@ python ml/scripts/compile_reference.py
 
 > **Current state:** the 14 MyFCD rows are **blank placeholders** waiting for real values. The 19 generic rows are typical reference figures entered by hand; spot-check them. Until MyFCD is filled in, Malaysian dishes rely on manual entry or Model B.
 
-## Remote AI and API keys
+## AI assistant (Google Gemini)
 
-Both are optional. The app compiles and runs with neither configured.
+The assistant has **no user settings**. It uses one API key built into the app at build time, and talks to Google Gemini through Gemini's OpenAI-compatible endpoint.
 
-| Feature | Where to configure | Keychain slot |
+### Turn it on
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey), sign in, and choose **Create API key**. Make a new key just for this app.
+2. On GitHub, open the repo, then **Settings → Secrets and variables → Actions → Secrets → New repository secret**:
+   - **Name:** `ASSISTANT_API_KEY`
+   - **Secret:** paste the key
+3. Push a commit, or start the workflow from the Actions tab. The **"Check assistant key is in the app"** step should say *"Assistant key is built into the app."*
+4. Sideload the new IPA. The ✨ icon on the Dashboard opens the assistant.
+
+Without the secret, the app still builds, and the assistant says it isn't available.
+
+### Optional: change model or provider (no code changes)
+
+Add these under **Settings → Secrets and variables → Actions → Variables**. They're variables, not secrets.
+
+| Variable | Default | Example |
 |---|---|---|
-| Remote vision fallback (used when local models are missing or find nothing) | Settings → AI | `remote-vision-api-key` |
-| AI assistant | Settings → AI Assistant | `assistant-api-key` |
+| `ASSISTANT_MODEL` | `gemini-2.5-flash` | a newer Gemini model name from AI Studio |
+| `ASSISTANT_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | any OpenAI-compatible API, e.g. `https://api.deepseek.com` |
 
-- Keys live **only in the iOS Keychain**, stored device-only and readable only while the phone is unlocked. They never go in SwiftData, UserDefaults, backups or logs.
-- Both features ship with an Anthropic implementation, behind provider-agnostic protocols (`RemoteVisionService`, `AssistantServing`).
-- **The assistant needs you to opt in first.** It sends your profile basics, today's targets and food log, and a 14-day trend summary to the provider. It never sends photos (apart from a menu photo you attach yourself), your date of birth, your body-fat percentage or your target weight.
+Google retires model names over time. If the assistant starts failing with an HTTP 404, set `ASSISTANT_MODEL` to a current one.
 
-### Build-time key via a GitHub secret (private builds only)
+### How it gets into the app
 
-If you add a repository secret named `REMOTE_AI_API_KEY`, CI writes it into the app's Info.plist as `RemoteAIAPIKey`. A key saved in the Keychain at runtime always takes priority over this one.
+`Config/AppConfig-Info.plist` maps the `ASSISTANT_*` build settings into the app's Info.plist. They're empty in `project.yml`, and CI fills them from the secret and variables through a temporary xcconfig file outside the repo, never via the command line. Xcode's `INFOPLIST_KEY_*` settings only cover keys Apple recognises, which is why the extra plist file is needed.
 
-> **Warning:** anyone with the IPA can extract a key compiled into it, just by unzipping the file. Use this only for builds you install on your own phone. Never distribute such an IPA.
+### Risks to be aware of
 
-To add it: GitHub repo → Settings → Secrets and variables → Actions → New repository secret → `REMOTE_AI_API_KEY`. The workflow masks the value and never prints it.
+- **The key isn't secret once it's in the app.** Anyone with the IPA can read it by unzipping the file. On a public repo, **any signed-in GitHub user can download Actions artifacts**. A free-tier Gemini key limits the damage: someone who takes it hits rate limits, not a bill. **Don't turn on billing for this key.**
+- **On the free tier, Google may use what you send to improve its products.** That includes your profile basics, today's targets and food log, and a 14-day trend summary. A short note in the assistant sheet says this. The assistant never sends photos (apart from a menu photo you attach yourself), your date of birth, your body-fat percentage or your target weight.
+- **Free tiers are rate-limited.** When the limit is hit, the assistant says the provider is rate limiting and to try again shortly.
+
+The only real fix for the key exposure is a small proxy server that holds the key, so the app never contains it.
+
+The two photo models have **no remote fallback**. If a model isn't available, the app says so when you try to use a photo feature.
 
 ## CI: unsigned IPA from GitHub Actions
 

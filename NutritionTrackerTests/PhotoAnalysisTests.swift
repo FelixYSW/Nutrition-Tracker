@@ -201,7 +201,7 @@ final class PhotoAnalysisResultTests: XCTestCase {
         return PhotoAnalysisResult(detections: detections, portions: [],
                                    wholePlateNutrition: nil, resolvedNutrition: resolved,
                                    photoPath: "abc.jpg", modelAIdentifier: "A",
-                                   modelBIdentifier: "B", usedRemoteFallback: false,
+                                   modelBIdentifier: "B", portionsEstimated: true,
                                    producedAt: .now)
     }
 
@@ -285,9 +285,9 @@ final class PhotoAnalysisResultTests: XCTestCase {
         XCTAssertTrue(detections.isEmpty)
     }
 
-    func testRemoteFallbackJSONExtraction() {
-        let fenced = "Here you go:\n```json\n{\"foods\": []}\n```"
-        XCTAssertEqual(AnthropicRemoteVisionService.extractJSON(from: fenced), "{\"foods\": []}")
+    func testModelUnavailableErrorIsIdentifiable() {
+        XCTAssertTrue(AIServiceError.modelUnavailable(name: "X").isModelUnavailable)
+        XCTAssertFalse(AIServiceError.invalidImage.isModelUnavailable)
     }
 
     func testUnavailableModelsReportHonestly() async {

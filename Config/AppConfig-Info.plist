@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Custom Info.plist keys, merged with the keys Xcode generates
+  (GENERATE_INFOPLIST_FILE). Values come from build settings, which CI sets
+  from GitHub secrets/variables. Never put a real key in this file.
+  Xcode's INFOPLIST_KEY_* settings only cover keys Apple recognises, which is
+  why custom keys need this file.
+-->
+<plist version="1.0">
+<dict>
+	<key>AssistantAPIKey</key>
+	<string>$(ASSISTANT_API_KEY)</string>
+	<key>AssistantModel</key>
+	<string>$(ASSISTANT_MODEL)</string>
+	<key>AssistantBaseURL</key>
+	<string>$(ASSISTANT_BASE_URL)</string>
+</dict>
+</plist>
