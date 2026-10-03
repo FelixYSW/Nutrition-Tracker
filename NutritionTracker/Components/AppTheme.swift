@@ -231,11 +231,14 @@ struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(.body, design: .rounded).weight(.bold))
-            .foregroundStyle(AppTheme.onAccent)
+            .foregroundStyle(isEnabled ? AppTheme.onAccent : Color.secondary)
             .frame(maxWidth: .infinity, minHeight: 52)
             .padding(.horizontal, 20)
-            .background(AppTheme.accentFill.opacity(isEnabled ? 1 : 0.35), in: Capsule())
-            .opacity(configuration.isPressed ? 0.85 : 1)
+            // Solid in both states. Fading the fill to show "disabled" made
+            // the content behind the button show through it.
+            .background(isEnabled ? AppTheme.accentFill : AppTheme.subtleFill, in: Capsule())
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
             .contentShape(Capsule())
     }
 }

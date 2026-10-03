@@ -12,8 +12,8 @@ concurrency:
 jobs:
   build:
     name: Build NutritionTracker
-    # macos-15 ships Xcode 16, which can open the project format that current
-    # XcodeGen writes (objectVersion 77). Xcode 15 on macos-14 cannot.
+    # macos-15 ships Xcode 26 (needed for Liquid Glass) alongside older Xcodes;
+    # the step below selects it.
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -25,9 +25,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Select Xcode 16
+      - name: Select Xcode 26
+        # Liquid Glass (the iOS 26 tab bar, sliders, switches and glass effects)
+        # comes from the iOS 26 SDK. An app built with an older Xcode runs in
+        # compatibility mode on iOS 26 and keeps the old look. Newest stable
+        # Xcode 26 is picked; betas are skipped.
         run: |
-          XCODE="$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          set -euo pipefail
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -vi beta | sort -V | tail -1 || true)"
+          if [ -z "$XCODE" ]; then
+            echo "::error::No stable Xcode 26 on this runner, so the app can't use Liquid Glass. Installed:"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
           echo "Using $XCODE"
           sudo xcode-select -s "$XCODE/Contents/Developer"
 
@@ -78,6 +88,10 @@ jobs:
             echo "ASSISTANT_BASE_URL = $(esc "$ASSISTANT_BASE_URL")" >> "$CONFIG"
             echo "Base URL override: $ASSISTANT_BASE_URL"
           fi
+          # Stamp the GitHub run number as the build number, so Settings > About >
+          # Version shows exactly which build is installed (e.g. "2.0 (42)").
+          echo "CURRENT_PROJECT_VERSION = ${GITHUB_RUN_NUMBER}" >> "$CONFIG"
+          echo "Build number: ${GITHUB_RUN_NUMBER}"
           echo "ASSISTANT_XCCONFIG=$CONFIG" >> "$GITHUB_ENV"
 
       - name: Fetch trained models (optional)

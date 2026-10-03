@@ -275,3 +275,47 @@ struct SliderEntryRow: View {
         }
     }
 }
+
+// MARK: - Keyboard
+
+extension View {
+    /// A "Done" button above the keyboard - number pads have no return key, so
+    /// without it there is no way to close them - and a downward scroll that
+    /// closes it too. Apply inside a NavigationStack, once per screen.
+    func keyboardDismissControls() -> some View {
+        self
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { dismissKeyboard() }
+                        .fontWeight(.semibold)
+                }
+            }
+    }
+}
+
+/// Closes whatever keyboard is open, wherever the focused field is.
+@MainActor
+func dismissKeyboard() {
+    #if canImport(UIKit)
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                    to: nil, from: nil, for: nil)
+    #endif
+}
+
+// MARK: - Text input box
+
+extension View {
+    /// Draws a text field as a visible box - fill plus a hairline border - so
+    /// it reads as something to type into rather than a plain label.
+    /// `fill` lets a field sit on a card or on a tinted row with enough contrast.
+    func inputBox(fill: Color = AppTheme.subtleFill) -> some View {
+        self
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(fill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+    }
+}

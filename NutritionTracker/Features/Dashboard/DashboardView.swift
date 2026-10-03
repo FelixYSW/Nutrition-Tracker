@@ -194,6 +194,7 @@ struct EditEntrySheet: View {
             }
             .appPageSurface()
             .navigationTitle("Edit food")
+            .keyboardDismissControls()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

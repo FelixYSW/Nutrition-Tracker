@@ -9,6 +9,7 @@ struct AssistantView: View {
 
     @State private var viewModel: AssistantViewModel?
     @State private var photoSelection: PhotosPickerItem?
+    @State private var viewingPhoto: ViewedPhoto?
 
     var body: some View {
         NavigationStack {
@@ -20,7 +21,11 @@ struct AssistantView: View {
                 }
             }
             .navigationTitle("Assistant")
+            .keyboardDismissControls()
             .navigationBarTitleDisplayMode(.inline)
+            .fullScreenCover(item: $viewingPhoto) { photo in
+                PhotoViewer(data: photo.data)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -147,18 +152,34 @@ struct AssistantView: View {
     private func messageRow(message: AssistantChatMessage,
                             viewModel: AssistantViewModel) -> some View {
         switch message.kind {
-        case .user(let text):
-            HStack {
-                Spacer(minLength: 40)
-                Text(text)
-                    .font(.subheadline)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(AppTheme.accentFill, in: RoundedRectangle(
-                        cornerRadius: 20, style: .continuous))
-                    .foregroundStyle(AppTheme.onAccent)
-                    .fixedSize(horizontal: false, vertical: true)
+        case .user(let text, let image):
+            // Photo above the text bubble, both right-aligned, like Claude and
+            // ChatGPT. Tapping the photo opens it full screen.
+            VStack(alignment: .trailing, spacing: 6) {
+                if let image {
+                    Button {
+                        viewingPhoto = ViewedPhoto(data: image)
+                    } label: {
+                        AttachmentImage(data: image)
+                            .frame(maxWidth: 220, maxHeight: 280)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Attached photo. Opens full screen.")
+                }
+                if !text.isEmpty {
+                    Text(text)
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(AppTheme.accentFill, in: RoundedRectangle(
+                            cornerRadius: 20, style: .continuous))
+                        .foregroundStyle(AppTheme.onAccent)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .padding(.leading, 40)
+            .frame(maxWidth: .infinity, alignment: .trailing)
 
         case .assistant(let text):
             Text(text)
@@ -215,21 +236,11 @@ struct AssistantView: View {
         }
     }
 
+    /// One rounded box holding the attached photo's thumbnail and the text,
+    /// with attach on the left and send on the right - the layout Claude and
+    /// ChatGPT use.
     private func composer(viewModel: AssistantViewModel) -> some View {
         VStack(spacing: 8) {
-            if viewModel.attachedImageData != nil {
-                HStack(spacing: 6) {
-                    Image(systemName: "paperclip")
-                        .accessibilityHidden(true)
-                    Text("Menu photo attached")
-                        .font(.caption)
-                    Spacer()
-                    Button("Remove") { viewModel.attachedImageData = nil }
-                        .font(.caption)
-                }
-                .foregroundStyle(.secondary)
-            }
-
             if viewModel.pendingWrite != nil {
                 Text("Respond to the confirmation above to carry on.")
                     .font(.caption)
@@ -237,38 +248,69 @@ struct AssistantView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack(spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
                 PhotosPicker(selection: $photoSelection, matching: .images) {
-                    Image(systemName: "photo")
-                        .frame(width: AppTheme.minimumTapTarget,
-                               height: AppTheme.minimumTapTarget)
+                    Image(systemName: "plus")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 38, height: 38)
+                        .background(AppTheme.subtleFill, in: Circle())
                 }
-                .accessibilityLabel("Attach a menu photo")
+                .padding(.bottom, 3)
+                .accessibilityLabel("Attach a photo")
 
-                TextField("Ask anything about your nutrition",
-                          text: Binding(get: { viewModel.composerText },
-                                        set: { viewModel.composerText = $0 }),
-                          axis: .vertical)
-                    .lineLimit(1...4)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(AppTheme.subtleFill, in: Capsule())
+                VStack(alignment: .leading, spacing: 8) {
+                    if let image = viewModel.attachedImageData {
+                        ZStack(alignment: .topTrailing) {
+                            AttachmentImage(data: image)
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            Button {
+                                withAnimation(.snappy) { viewModel.attachedImageData = nil }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 20))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(AppTheme.onAccent, AppTheme.accentFill)
+                            }
+                            .buttonStyle(.plain)
+                            .offset(x: 7, y: -7)
+                            .accessibilityLabel("Remove photo")
+                        }
+                        .padding(.top, 4)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+
+                    TextField(viewModel.attachedImageData == nil
+                                ? "Ask anything about your nutrition"
+                                : "Ask about this photo",
+                              text: Binding(get: { viewModel.composerText },
+                                            set: { viewModel.composerText = $0 }),
+                              axis: .vertical)
+                        .lineLimit(1...5)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppTheme.cardBackground,
+                            in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(AppTheme.subtleFill, lineWidth: 1))
 
                 Button {
+                    dismissKeyboard()
                     Task { await viewModel.send() }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .frame(width: AppTheme.minimumTapTarget,
-                               height: AppTheme.minimumTapTarget)
+                        .font(.system(size: 34))
                 }
+                .padding(.bottom, 2)
                 .disabled(!viewModel.canSend)
                 .accessibilityLabel("Send")
             }
         }
         .padding(.horizontal, AppTheme.cardPadding)
         .padding(.vertical, 10)
-        .background(.bar)
+        .background(AppTheme.background)
         .onChange(of: photoSelection) { _, newValue in
             guard let newValue else { return }
             Task {
@@ -373,6 +415,85 @@ struct AssistantConfirmationCard: View {
             Text("Figures are estimates. You can edit this entry afterwards.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Photo attachments
+
+/// A photo from the chat, filling its frame.
+struct AttachmentImage: View {
+    let data: Data
+
+    var body: some View {
+        #if canImport(UIKit)
+        if let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+        } else {
+            placeholder
+        }
+        #else
+        placeholder
+        #endif
+    }
+
+    private var placeholder: some View {
+        Rectangle()
+            .fill(AppTheme.subtleFill)
+            .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+    }
+}
+
+/// Identifiable wrapper so a sent photo can drive `fullScreenCover(item:)`.
+struct ViewedPhoto: Identifiable {
+    let id = UUID()
+    let data: Data
+}
+
+/// Full-screen view of a sent photo, with pinch to zoom.
+struct PhotoViewer: View {
+    let data: Data
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            #if canImport(UIKit)
+            if let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(scale * pinch)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .gesture(
+                        MagnifyGesture()
+                            .updating($pinch) { value, state, _ in state = value.magnification }
+                            .onEnded { value in
+                                scale = min(max(scale * value.magnification, 1), 4)
+                            })
+                    .onTapGesture(count: 2) {
+                        withAnimation(.snappy) { scale = scale > 1 ? 1 : 2 }
+                    }
+                    .accessibilityLabel("Attached photo")
+            }
+            #endif
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .padding()
+            .accessibilityLabel("Close")
         }
     }
 }

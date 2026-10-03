@@ -41,8 +41,8 @@ enum AssistantServiceError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .modelUnavailable:
-            "The assistant's AI model isn't available right now. Try again later."
+        case .modelUnavailable(let model):
+            "The AI model \"\(model)\" isn't available (HTTP 404)."
         case .notConfigured:
             "The assistant isn't available in this version of the app."
         case .offline:
@@ -140,13 +140,25 @@ struct OpenAICompatibleAssistantService: AssistantServing {
 
         // 404 means the model name no longer exists. Unless it was pinned on
         // purpose, find a current one, remember it, and retry once.
-        if status == 404, pinnedModel == nil,
-           let replacement = try await discoverModel(apiKey: apiKey, excluding: model) {
-            defaults.set(replacement, forKey: Self.discoveredModelKey)
+        if status == 404 {
+            if pinnedModel != nil {
+                throw AssistantServiceError.requestFailed(
+                    detail: "the model \"\(model)\" was not found (HTTP 404). It is set by "
+                        + "the ASSISTANT_MODEL variable: change it to a current model name, "
+                        + "or delete the variable so the app picks one itself.")
+            }
+            guard let replacement = try await discoverModel(apiKey: apiKey, excluding: model) else {
+                throw AssistantServiceError.requestFailed(
+                    detail: "the model \"\(model)\" was not found (HTTP 404), and the "
+                        + "provider's model list offered no replacement.")
+            }
             let (retryData, retryStatus) = try await postChat(model: replacement, apiKey: apiKey,
                                                               turns: turns, contextJSON: contextJSON,
                                                               tools: tools)
             try Self.check(status: retryStatus, model: replacement)
+            // Remembered only once it has actually worked, so a bad pick is
+            // never stuck as the starting model.
+            defaults.set(replacement, forKey: Self.discoveredModelKey)
             return try Self.decode(data: retryData)
         }
 

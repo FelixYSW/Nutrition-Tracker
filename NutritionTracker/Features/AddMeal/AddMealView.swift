@@ -85,6 +85,7 @@ struct AddMealView: View {
             }
             .appPageSurface()
             .navigationTitle("Add Meal")
+            .keyboardDismissControls()
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) { saveBar }
             .alert("Could not save",
@@ -143,12 +144,11 @@ struct AddMealView: View {
         .padding(.horizontal, AppTheme.cardPadding + 4)
         .padding(.top, 12)
         .padding(.bottom, 8)
-        // Fade the page out under the button rather than a hard bar.
-        .background(
-            LinearGradient(colors: [AppTheme.background.opacity(0),
-                                    AppTheme.background.opacity(0.95)],
-                           startPoint: .top, endPoint: .center)
-                .ignoresSafeArea(edges: .bottom))
+        // A solid bar, so cards scrolling underneath never show through the
+        // button. A thin line marks where the page ends.
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.background)
+        .overlay(alignment: .top) { Divider() }
     }
 
     // MARK: Actions
@@ -300,6 +300,7 @@ struct FoodDraftCard: View {
                 TextField("Food name", text: $draft.name)
                     .font(.title3.weight(.semibold))
                     .textInputAutocapitalization(.words)
+                    .inputBox()
 
                 // Only worth showing when it didn't come from typing it in.
                 if draft.source != .manual || draft.hasLowConfidenceItems {
@@ -345,6 +346,7 @@ struct FoodDraftCard: View {
             Text(draft.isComposite ? "Servings" : "Amount")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             Spacer(minLength: 4)
             QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
                 if onDelete != nil {
@@ -355,11 +357,7 @@ struct FoodDraftCard: View {
                 }
             }
             if !draft.isComposite {
-                Picker("Unit", selection: $draft.unit) {
-                    ForEach(ServingUnit.allCases) { Text($0.shortLabel).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
+                UnitPicker(unit: $draft.unit)
             }
         }
     }

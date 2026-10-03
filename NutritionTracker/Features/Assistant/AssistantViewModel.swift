@@ -5,7 +5,8 @@ import Observation
 /// A message as shown in the chat transcript.
 struct AssistantChatMessage: Identifiable, Equatable {
     enum Kind: Equatable {
-        case user(String)
+        /// Text may be empty when only a photo was sent.
+        case user(text: String, image: Data?)
         case assistant(String)
         /// A write awaiting confirmation, rendered as a card.
         case proposal(PendingAssistantWrite)
@@ -49,6 +50,10 @@ final class AssistantViewModel {
 
     /// Guards against an unbounded tool loop if the model keeps calling tools.
     private static let maxToolRoundTrips = 5
+
+    /// Sent to the model when the user attaches a photo without typing anything.
+    static let photoOnlyPrompt = "What would you suggest from this, given what I have "
+        + "left in my ranges today?"
 
     init(service: AssistantServing,
          executor: AssistantToolExecutor,
@@ -102,10 +107,12 @@ final class AssistantViewModel {
 
         var blocks: [AssistantTurn.Block] = []
         if let image { blocks.append(.image(image)) }
-        if !text.isEmpty { blocks.append(.text(text)) }
+        // A photo sent on its own still needs a question for the model; the
+        // chat shows just the photo, as Claude and ChatGPT do.
+        blocks.append(.text(text.isEmpty ? Self.photoOnlyPrompt : text))
         turns.append(AssistantTurn(role: .user, blocks: blocks))
 
-        append(.user(text.isEmpty ? "[menu photo]" : text))
+        append(.user(text: text, image: image))
         await runLoop()
     }
 

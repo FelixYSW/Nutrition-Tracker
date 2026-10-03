@@ -143,28 +143,28 @@ struct IngredientRow: View {
                 TextField("Ingredient", text: $draft.name)
                     .textInputAutocapitalization(.words)
                     .font(.subheadline.weight(.semibold))
+                    // On the tinted ingredient row, a card-coloured box stands out.
+                    .inputBox(fill: AppTheme.cardBackground)
 
                 if draft.isLowConfidence {
                     ConfidenceBadge(confidence: draft.confidence)
                 }
 
-                Text("\(AppFormatters.amount(draft.total.calories)) kcal")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+                // Red so it reads as tappable; the food's total line already
+                // carries the calories, so the row doesn't repeat them.
+                Button("Remove", role: .destructive, action: onDelete)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.red)
+                    .buttonStyle(.plain)
                     .fixedSize()
+                    .accessibilityLabel("Remove \(draft.name.isEmpty ? "ingredient" : draft.name)")
             }
 
             HStack(spacing: 8) {
                 QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
                     showRemovePrompt = true
                 }
-                Picker("Unit", selection: $draft.unit) {
-                    ForEach(ServingUnit.allCases) { Text($0.shortLabel).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
+                UnitPicker(unit: $draft.unit)
 
                 Spacer(minLength: 0)
 
@@ -172,7 +172,7 @@ struct IngredientRow: View {
                     withAnimation(.snappy) { isExpanded.toggle() }
                 } label: {
                     Image(systemName: "chevron.down")
-                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        .rotationEffect(.degrees(isExpanded ? 0 : 180))
                         .frame(width: AppTheme.minimumTapTarget,
                                height: AppTheme.minimumTapTarget)
                         .contentShape(Rectangle())
@@ -187,15 +187,10 @@ struct IngredientRow: View {
                                 servingSize: $draft.servingSize,
                                 unit: draft.unit)
 
-                HStack {
-                    if draft.provenance != .manual {
-                        Text("Values from \(draft.provenance.displayName)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Remove", role: .destructive, action: onDelete)
-                        .font(.footnote)
+                if draft.provenance != .manual {
+                    Text("Values from \(draft.provenance.displayName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
