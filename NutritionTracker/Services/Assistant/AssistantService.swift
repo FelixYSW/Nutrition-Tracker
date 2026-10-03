@@ -100,7 +100,9 @@ struct OpenAICompatibleAssistantService: AssistantServing {
     private let baseURL: String
     /// Set when ASSISTANT_MODEL was provided at build time; never overridden.
     private let pinnedModel: String?
-    private let defaults: UserDefaults
+    /// Looked up when needed rather than stored: UserDefaults is thread-safe
+    /// but not marked Sendable, and this struct must be (Swift 6).
+    private var defaults: UserDefaults { .standard }
 
     init(session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -109,12 +111,10 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         return URLSession(configuration: configuration)
     }(),
          baseURL: String = BundledAPIKey.assistantBaseURL ?? Self.defaultBaseURL,
-         pinnedModel: String? = BundledAPIKey.assistantModel,
-         defaults: UserDefaults = .standard) {
+         pinnedModel: String? = BundledAPIKey.assistantModel) {
         self.session = session
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         self.pinnedModel = pinnedModel
-        self.defaults = defaults
     }
 
     var isConfigured: Bool {
