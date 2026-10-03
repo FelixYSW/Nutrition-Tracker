@@ -180,10 +180,10 @@ Add these under **Settings → Secrets and variables → Actions → Variables**
 
 | Variable | Default | Example |
 |---|---|---|
-| `ASSISTANT_MODEL` | `gemini-2.5-flash` | a newer Gemini model name from AI Studio |
+| `ASSISTANT_MODEL` | `gemini-3.5-flash-lite` | a newer Gemini model name from AI Studio |
 | `ASSISTANT_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | any OpenAI-compatible API, e.g. `https://api.deepseek.com` |
 
-Google retires model names over time. If the model returns HTTP 404, the app looks up the current list of models, switches to the newest stable Gemini Flash model, and remembers it on that phone. If you set `ASSISTANT_MODEL`, that model is always used and never auto-switched.
+The app uses **Gemini 3.5 Flash-Lite** by default, chosen for its much higher free daily limit (every install shares one key). Google retires model names over time; if the model returns HTTP 404, the app looks up the current list of models, switches to the newest stable Flash-Lite, and remembers it on that phone. If you set `ASSISTANT_MODEL`, that model is always used and never auto-switched.
 
 ### How it gets into the app
 

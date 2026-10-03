@@ -407,10 +407,26 @@ struct AssistantConfirmationCard: View {
             }
             NutritionSummaryView(nutrition: draft.total, showsFibre: false)
             if !draft.ingredients.isEmpty {
-                Text(draft.ingredients.map(\.name).joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The breakdown the total is built from, so a wrong amount is
+                // easy to spot before saving.
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(draft.ingredients) { item in
+                        HStack(spacing: 6) {
+                            Text(item.name)
+                            Spacer(minLength: 4)
+                            Text("\(AppFormatters.amount(item.quantity)) g \u{00B7} "
+                                 + "\(AppFormatters.amount(item.total.calories)) kcal")
+                                .monospacedDigit()
+                            if item.provenance.isEstimate {
+                                Text("est.")
+                                    .foregroundStyle(.orange)
+                                    .accessibilityLabel("estimate")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
             }
             Text("Figures are estimates. You can edit this entry afterwards.")
                 .font(.caption2)

@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Empty state that always says what happened and what to do next
 /// (spec section 33).
@@ -279,19 +282,12 @@ struct SliderEntryRow: View {
 // MARK: - Keyboard
 
 extension View {
-    /// A "Done" button above the keyboard - number pads have no return key, so
-    /// without it there is no way to close them - and a downward scroll that
-    /// closes it too. Apply inside a NavigationStack, once per screen.
+    /// Sliding the page down closes the keyboard. Taps outside a text field
+    /// close it too, via `TapToDismissKeyboard` installed once at the root.
+    /// There is deliberately no "Done" bar above the keyboard: it slid in and
+    /// out with the keyboard and made closing it jumpy.
     func keyboardDismissControls() -> some View {
-        self
-            .scrollDismissesKeyboard(.interactively)
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { dismissKeyboard() }
-                        .fontWeight(.semibold)
-                }
-            }
+        self.scrollDismissesKeyboard(.interactively)
     }
 }
 
@@ -303,6 +299,58 @@ func dismissKeyboard() {
                                     to: nil, from: nil, for: nil)
     #endif
 }
+
+#if canImport(UIKit)
+/// Closes the keyboard when the user taps anywhere that isn't a text field.
+///
+/// Installed once as a background of the root view. It adds one tap recogniser
+/// to the app's window, which also covers sheets and full-screen covers. The
+/// recogniser never cancels touches, so buttons, steppers and menus still work
+/// normally. Taps on another text field are ignored, so moving between fields
+/// keeps the keyboard up instead of closing and reopening it. The keyboard
+/// itself lives in a separate window, so typing is never interrupted.
+struct TapToDismissKeyboard: UIViewRepresentable {
+    func makeUIView(context: Context) -> InstallerView { InstallerView() }
+    func updateUIView(_ uiView: InstallerView, context: Context) {}
+
+    final class InstallerView: UIView, UIGestureRecognizerDelegate {
+        private weak var installedWindow: UIWindow?
+        private var recogniser: UITapGestureRecognizer?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let window, window !== installedWindow else { return }
+            if let recogniser { installedWindow?.removeGestureRecognizer(recogniser) }
+
+            let tap = UITapGestureRecognizer(target: self, action: #selector(closeKeyboard))
+            tap.cancelsTouchesInView = false
+            tap.delegate = self
+            window.addGestureRecognizer(tap)
+            recogniser = tap
+            installedWindow = window
+        }
+
+        @objc private func closeKeyboard() {
+            installedWindow?.endEditing(true)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldReceive touch: UITouch) -> Bool {
+            var view = touch.view
+            while let current = view {
+                if current is UITextField || current is UITextView { return false }
+                view = current.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+}
+#endif
 
 // MARK: - Text input box
 

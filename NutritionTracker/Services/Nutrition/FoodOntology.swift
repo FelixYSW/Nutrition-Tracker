@@ -82,7 +82,27 @@ struct FoodOntology: Sendable {
         // Try a normalised form so "fried_egg" matches an alias of "fried egg".
         let normalised = key.replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
-        return aliasIndex[normalised]
+        if let match = aliasIndex[normalised] { return match }
+        // Typed or AI-written names are often plural: "eggs", "tomatoes".
+        for singular in Self.singularForms(of: normalised) {
+            if let match = aliasIndex[singular] { return match }
+        }
+        return nil
+    }
+
+    /// Candidate singulars for the last word: "tomatoes" -> "tomato",
+    /// "berries" -> "berry", "eggs" -> "egg", "konjac knots" -> "konjac knot".
+    static func singularForms(of phrase: String) -> [String] {
+        var words = phrase.split(separator: " ").map(String.init)
+        guard let last = words.popLast(), last.count > 3, last.hasSuffix("s") else { return [] }
+        var stems: [String] = []
+        if last.hasSuffix("ies") { stems.append(String(last.dropLast(3)) + "y") }
+        if last.hasSuffix("oes") || last.hasSuffix("shes") || last.hasSuffix("ches") {
+            stems.append(String(last.dropLast(2)))
+        }
+        if !last.hasSuffix("ss") { stems.append(String(last.dropLast())) }
+        let prefix = words.isEmpty ? "" : words.joined(separator: " ") + " "
+        return stems.map { prefix + $0 }
     }
 
     func entry(canonicalID: String) -> Entry? { canonicalIndex[canonicalID] }

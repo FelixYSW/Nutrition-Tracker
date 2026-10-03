@@ -146,6 +146,18 @@
       "sodium": 61
     },
     {
+      "canonicalID": "gen.konjac",
+      "displayName": "Konjac (Shirataki)",
+      "calories": 9,
+      "protein": 0.2,
+      "carbs": 3,
+      "fat": 0.1,
+      "source": "generic",
+      "fibre": 2.9,
+      "sugar": 0,
+      "sodium": 3
+    },
+    {
       "canonicalID": "gen.lettuce",
       "displayName": "Lettuce",
       "calories": 15,
@@ -168,6 +180,18 @@
       "fibre": 1.2,
       "sugar": 0.4,
       "sodium": 5
+    },
+    {
+      "canonicalID": "gen.oil.cooking",
+      "displayName": "Cooking Oil",
+      "calories": 884,
+      "protein": 0,
+      "carbs": 0,
+      "fat": 100,
+      "source": "generic",
+      "fibre": 0,
+      "sugar": 0,
+      "sodium": 0
     },
     {
       "canonicalID": "gen.peanut.roasted",

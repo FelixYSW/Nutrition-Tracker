@@ -6,78 +6,102 @@ import SwiftData
 
 final class AssistantArgumentParsingTests: XCTestCase {
 
-    func testValidAddParses() throws {
+    private func item(_ name: String, grams: JSONValue,
+                      kcal: Double? = nil, protein: Double? = nil,
+                      carbs: Double? = nil, fat: Double? = nil) -> JSONValue {
+        var object: [String: JSONValue] = ["name": .string(name), "grams": grams]
+        if let kcal { object["kcalPer100g"] = .number(kcal) }
+        if let protein { object["proteinPer100g"] = .number(protein) }
+        if let carbs { object["carbsPer100g"] = .number(carbs) }
+        if let fat { object["fatPer100g"] = .number(fat) }
+        return .object(object)
+    }
+
+    func testSingleItemBecomesGramBasedSimpleFood() throws {
         let draft = try AssistantArgumentParser.parseAdd(arguments: [
-            "name": .string("Grilled Chicken Salad"),
-            "quantity": .number(1),
-            "servingSize": .number(1),
-            "unit": .string("serving"),
-            "calories": .number(380),
-            "protein": .number(35),
-            "carbs": .number(12),
-            "fat": .number(20)
+            "name": .string("Grilled Chicken"),
+            "items": .array([item("chicken breast", grams: .number(150),
+                                  kcal: 165, protein: 31, carbs: 0, fat: 3.6)])
         ])
-        XCTAssertEqual(draft.name, "Grilled Chicken Salad")
+        XCTAssertFalse(draft.isComposite)
         XCTAssertEqual(draft.source, .assistant)
-        XCTAssertEqual(draft.total.calories, 380)
-        XCTAssertEqual(draft.total.protein, 35)
+        XCTAssertEqual(draft.unit, .gram)
+        XCTAssertEqual(draft.quantity, 150)
+        XCTAssertEqual(draft.servingSize, 100)
+        XCTAssertEqual(draft.total.calories, 247.5, accuracy: 0.5)
     }
 
-    func testNumbersAsStringsTolerated() throws {
-        let draft = try AssistantArgumentParser.parseAdd(arguments: [
-            "name": .string("Eggs"), "quantity": .string("2"), "unit": .string("piece"),
-            "calories": .string("78"), "protein": .string("6,3")
-        ])
-        XCTAssertEqual(draft.quantity, 2)
-        XCTAssertEqual(draft.unit, .piece)
-        XCTAssertEqual(draft.total.calories, 156)
-        XCTAssertEqual(draft.nutritionPerServing.protein, 6.3, accuracy: 0.001)
-    }
-
-    func testMissingNameRejected() {
-        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: ["calories": .number(100)]))
-        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: ["name": .string("   ")]))
-    }
-
-    func testNonPositiveQuantityRejected() {
-        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: [
-            "name": .string("X"), "quantity": .number(-2)]))
-        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: [
-            "name": .string("X"), "servingSize": .number(0)]))
-    }
-
-    func testHallucinatedUnitFallsBackToServing() throws {
-        let draft = try AssistantArgumentParser.parseAdd(arguments: [
-            "name": .string("Soup"), "unit": .string("bowlful")])
-        XCTAssertEqual(draft.unit, .serving)
-    }
-
-    func testNegativeAndNaNNutritionSanitised() throws {
-        let draft = try AssistantArgumentParser.parseAdd(arguments: [
-            "name": .string("X"), "calories": .number(-50), "protein": .string("NaN")])
-        XCTAssertTrue(draft.nutritionPerServing.isValid)
-        XCTAssertEqual(draft.nutritionPerServing.calories, 0)
-    }
-
-    func testCompositeAddClearsParentNutritionToAvoidDoubleCounting() throws {
+    func testSeveralItemsBecomeCompositeWithNoParentTotal() throws {
         let draft = try AssistantArgumentParser.parseAdd(arguments: [
             "name": .string("Nasi Lemak"),
-            "calories": .number(9999),
-            "ingredients": .array([
-                .object(["name": .string("Coconut rice"), "quantity": .number(200),
-                         "servingSize": .number(100), "unit": .string("gram"),
-                         "calories": .number(180)]),
-                .object(["name": .string("Egg"), "quantity": .number(1),
-                         "servingSize": .number(1), "unit": .string("piece"),
-                         "calories": .number(90)]),
-                .object(["name": .string(""), "quantity": .number(5)]),   // dropped
-                .object(["name": .string("Bad"), "quantity": .number(0)]) // dropped
+            "items": .array([
+                item("coconut rice", grams: .number(200), kcal: 180, protein: 3, carbs: 28, fat: 6),
+                item("fried egg", grams: .number(50), kcal: 196, protein: 13.6, carbs: 0.8, fat: 15.3),
+                item("", grams: .number(5)),                 // dropped: no name
+                item("sambal", grams: .number(0), kcal: 100) // dropped: no grams
             ])
         ])
         XCTAssertTrue(draft.isComposite)
         XCTAssertEqual(draft.ingredients.count, 2)
-        XCTAssertEqual(draft.nutritionPerServing, .zero)
-        XCTAssertEqual(draft.total.calories, 450, accuracy: 0.001)
+        XCTAssertEqual(draft.nutritionPerServing, .zero, "totals come only from the items")
+        XCTAssertTrue(draft.ingredients.allSatisfy { $0.unit == .gram && $0.servingSize == 100 })
+        XCTAssertTrue(draft.ingredients.allSatisfy { $0.provenance == .modelEstimate })
+    }
+
+    func testNumbersAsStringsTolerated() throws {
+        let draft = try AssistantArgumentParser.parseAdd(arguments: [
+            "name": .string("Eggs"),
+            "items": .array([.object(["name": .string("egg"), "grams": .string("100"),
+                                      "proteinPer100g": .string("12,6")])])
+        ])
+        XCTAssertEqual(draft.quantity, 100)
+        XCTAssertEqual(draft.nutritionPerServing.protein, 12.6, accuracy: 0.001)
+    }
+
+    func testMissingNameOrItemsRejected() {
+        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: [
+            "items": .array([item("egg", grams: .number(50))])]))
+        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: ["name": .string("   ")]))
+        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: ["name": .string("Lunch")]),
+                             "a meal with no components is rejected")
+    }
+
+    func testImplausibleGramsDropped() throws {
+        XCTAssertThrowsError(try AssistantArgumentParser.parseAdd(arguments: [
+            "name": .string("X"),
+            "items": .array([item("a", grams: .number(-20)),
+                             item("b", grams: .number(5000))])]))
+    }
+
+    /// The model's per-100 g guesses are repaired when they can't be right.
+    func testPlausibilityRepairsEstimates() {
+        // Calories far from what the macros imply: macros win.
+        let mismatched = AssistantArgumentParser.plausiblePer100g(
+            Nutrition(calories: 400, protein: 0.2, carbs: 3, fat: 0.1))
+        XCTAssertEqual(mismatched.calories, (0.2 * 4 + 3 * 4 + 0.1 * 9).rounded())
+
+        // Close enough: the stated figure is kept.
+        let close = AssistantArgumentParser.plausiblePer100g(
+            Nutrition(calories: 160, protein: 13, carbs: 1, fat: 11))
+        XCTAssertEqual(close.calories, 160)
+
+        // Nothing is denser than pure fat; negatives and NaN are cleaned.
+        let absurd = AssistantArgumentParser.plausiblePer100g(Nutrition(calories: 5000))
+        XCTAssertEqual(absurd.calories, 900)
+        let broken = AssistantArgumentParser.plausiblePer100g(Nutrition(calories: -50, protein: .nan))
+        XCTAssertTrue(broken.isValid)
+    }
+
+    func testResolverIsAppliedToEveryItem() throws {
+        let draft = try AssistantArgumentParser.parseAdd(arguments: [
+            "name": .string("Plate"),
+            "items": .array([item("a", grams: .number(100)), item("b", grams: .number(100))])
+        ]) { item in
+            var resolved = item
+            resolved.provenance = .genericDatabase
+            return resolved
+        }
+        XCTAssertTrue(draft.ingredients.allSatisfy { $0.provenance == .genericDatabase })
     }
 
     func testDateParsingAcceptsISOAndBareDate() {
@@ -185,16 +209,31 @@ final class AssistantResponseDecodingTests: XCTestCase {
 /// provider's model list instead of failing with HTTP 404.
 final class AssistantModelDiscoveryTests: XCTestCase {
 
-    func testPrefersNewestStableFlash() {
+    /// Flash-Lite first, for its much higher free daily limit on the shared key.
+    func testPrefersNewestStableFlashLite() {
+        let picked = OpenAICompatibleAssistantService.pickModel(from: [
+            "models/gemini-3.8-flash",
+            "models/gemini-3.0-flash-lite",
+            "models/gemini-3.5-flash-lite",
+            "models/gemini-3.9-flash-lite-preview",
+            "models/gemini-3.0-pro",
+            "models/text-embedding-004"
+        ], excluding: "gemini-2.5-flash-lite")
+        XCTAssertEqual(picked, "gemini-3.5-flash-lite")
+    }
+
+    func testFallsBackToNewestStableFlashWithoutLite() {
         let picked = OpenAICompatibleAssistantService.pickModel(from: [
             "models/gemini-2.5-flash",
             "models/gemini-3.0-flash",
             "models/gemini-3.1-flash-preview",
-            "models/gemini-3.0-flash-lite",
-            "models/gemini-3.0-pro",
-            "models/text-embedding-004"
-        ], excluding: "gemini-2.5-flash")
+            "models/gemini-3.0-pro"
+        ], excluding: "x")
         XCTAssertEqual(picked, "gemini-3.0-flash")
+    }
+
+    func testDefaultIsFlashLite() {
+        XCTAssertTrue(OpenAICompatibleAssistantService.defaultModel.contains("flash-lite"))
     }
 
     func testNeverReturnsTheModelThatJustFailed() {
@@ -223,7 +262,66 @@ final class AssistantModelDiscoveryTests: XCTestCase {
         XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 429, model: "m")) {
             XCTAssertEqual($0 as? AssistantServiceError, .rateLimited)
         }
+        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 503, model: "m")) {
+            XCTAssertEqual($0 as? AssistantServiceError, .providerBusy(status: 503))
+        }
         XCTAssertNoThrow(try OpenAICompatibleAssistantService.check(status: 200, model: "m"))
+    }
+
+    /// Overloaded-server responses are retried; client errors are not.
+    func testOnlyServerOverloadIsRetried() {
+        for status in [500, 502, 503, 504] {
+            XCTAssertTrue(OpenAICompatibleAssistantService.isTransient(status), "\(status)")
+        }
+        for status in [200, 400, 401, 404, 429] {
+            XCTAssertFalse(OpenAICompatibleAssistantService.isTransient(status), "\(status)")
+        }
+    }
+}
+
+/// Gemini attaches a thought signature to each tool call and rejects the
+/// follow-up request (HTTP 400) unless it is sent back unchanged.
+final class AssistantThoughtSignatureTests: XCTestCase {
+
+    func testSignatureIsKeptWhenDecoding() throws {
+        let response = try OpenAICompatibleAssistantService.decode(data: Data("""
+        {"choices": [{"message": {"tool_calls": [{"id": "c1", "type": "function",
+          "function": {"name": "addFoodEntry", "arguments": "{\\"name\\": \\"Teh Tarik\\"}"},
+          "extra_content": {"google": {"thought_signature": "SIG123"}}}]}}]}
+        """.utf8))
+        XCTAssertEqual(response.toolCalls.first?.extra,
+                       .object(["google": .object(["thought_signature": .string("SIG123")])]))
+    }
+
+    func testSignatureIsSentBackWithTheToolCall() throws {
+        let extra: JSONValue = .object(["google": .object(["thought_signature": .string("SIG123")])])
+        let turn = AssistantTurn(role: .assistant, blocks: [
+            .toolUse(id: "c1", name: "addFoodEntry", input: [:], extra: extra)
+        ])
+        let message = try XCTUnwrap(OpenAICompatibleAssistantService.encode(turn: turn).first)
+        let call = try XCTUnwrap((message["tool_calls"] as? [[String: Any]])?.first)
+        let google = (call["extra_content"] as? [String: Any])?["google"] as? [String: Any]
+        XCTAssertEqual(google?["thought_signature"] as? String, "SIG123")
+    }
+
+    func testNoSignatureMeansNoExtraField() throws {
+        let turn = AssistantTurn(role: .assistant, blocks: [
+            .toolUse(id: "c1", name: "getTrends", input: [:])
+        ])
+        let message = try XCTUnwrap(OpenAICompatibleAssistantService.encode(turn: turn).first)
+        let call = try XCTUnwrap((message["tool_calls"] as? [[String: Any]])?.first)
+        XCTAssertNil(call["extra_content"])
+    }
+
+    func testProviderErrorMessageIsExtractedAndShort() {
+        let body = Data(#"[{"error": {"code": 400, "message": "Function call is missing a thought_signature.\nMore detail here."}}]"#.utf8)
+        XCTAssertEqual(OpenAICompatibleAssistantService.providerErrorMessage(from: body),
+                       "Function call is missing a thought_signature.")
+        XCTAssertNil(OpenAICompatibleAssistantService.providerErrorMessage(from: Data("oops".utf8)))
+        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 400, model: "m", body: body)) {
+            XCTAssertEqual($0 as? AssistantServiceError,
+                           .requestFailed(detail: "HTTP 400 - Function call is missing a thought_signature."))
+        }
     }
 }
 
@@ -285,6 +383,49 @@ final class AssistantRequestEncodingTests: XCTestCase {
 @MainActor
 final class AssistantToolExecutorTests: XCTestCase {
 
+    static let tehTarikArguments: [String: JSONValue] = [
+        "name": .string("Teh Tarik"),
+        "items": .array([.object(["name": .string("teh tarik"), "grams": .number(250),
+                                  "kcalPer100g": .number(60)])])
+    ]
+
+    static let tinyArguments: [String: JSONValue] = [
+        "name": .string("X"),
+        "items": .array([.object(["name": .string("x"), "grams": .number(10),
+                                  "kcalPer100g": .number(10)])])
+    ]
+
+    /// The reported bug: a ~300 kcal konjac, tomato and egg plate logged at
+    /// 1,000 kcal. Even with a wildly wrong guess for the konjac, the
+    /// database values replace it and the total comes out realistic.
+    func testKonjacTomatoEggPlateUsesDatabaseNotGuess() throws {
+        let context = TestSupport.makeContext()
+        let executor = AssistantToolExecutor(context: context)
+        let outcome = executor.execute(AssistantToolCall(
+            id: "k", tool: .addFoodEntry,
+            arguments: [
+                "name": .string("Tomato egg with konjac"),
+                "items": .array([
+                    .object(["name": .string("konjac knots"), "grams": .number(150),
+                             "kcalPer100g": .number(400)]),   // badly wrong guess
+                    .object(["name": .string("eggs"), "grams": .number(100)]),
+                    .object(["name": .string("tomatoes"), "grams": .number(120)]),
+                    .object(["name": .string("cooking oil"), "grams": .number(10)])
+                ])
+            ]))
+        guard case .awaitingConfirmation(let write) = outcome,
+              case .add(let draft) = write.action else {
+            return XCTFail("expected an add proposal")
+        }
+        XCTAssertLessThan(draft.total.calories, 400, "was ~1,000 before the fix")
+        XCTAssertGreaterThan(draft.total.calories, 150)
+        let konjac = try XCTUnwrap(draft.ingredients.first { $0.name == "konjac knots" })
+        XCTAssertEqual(konjac.provenance, .genericDatabase, "database replaced the guess")
+        XCTAssertEqual(konjac.canonicalID, "gen.konjac")
+        XCTAssertTrue(draft.ingredients.allSatisfy { !$0.provenance.isEstimate },
+                      "plurals and oil all matched the database")
+    }
+
     private func count(_ context: ModelContext) -> Int {
         (try? context.fetchCount(FetchDescriptor<FoodEntry>())) ?? -1
     }
@@ -294,7 +435,7 @@ final class AssistantToolExecutorTests: XCTestCase {
         let executor = AssistantToolExecutor(context: context)
         let outcome = executor.execute(AssistantToolCall(
             id: "1", tool: .addFoodEntry,
-            arguments: ["name": .string("Teh Tarik"), "calories": .number(150)]))
+            arguments: AssistantToolExecutorTests.tehTarikArguments))
 
         XCTAssertTrue(outcome.isWriteProposal)
         XCTAssertEqual(count(context), 0, "nothing written before confirmation")
@@ -305,7 +446,7 @@ final class AssistantToolExecutorTests: XCTestCase {
         let executor = AssistantToolExecutor(context: context)
         guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
             id: "1", tool: .addFoodEntry,
-            arguments: ["name": .string("Teh Tarik"), "calories": .number(150)])) else {
+            arguments: AssistantToolExecutorTests.tehTarikArguments)) else {
             return XCTFail("expected a proposal")
         }
         let result = try executor.commit(write)
@@ -318,7 +459,7 @@ final class AssistantToolExecutorTests: XCTestCase {
         let context = TestSupport.makeContext()
         let executor = AssistantToolExecutor(context: context)
         guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
-            id: "1", tool: .addFoodEntry, arguments: ["name": .string("X"), "calories": .number(1)]))
+            id: "1", tool: .addFoodEntry, arguments: AssistantToolExecutorTests.tinyArguments))
         else { return XCTFail() }
 
         let result = executor.declinedResult(for: write)
@@ -520,8 +661,10 @@ final class AssistantViewModelTests: XCTestCase {
         text: "Proposing that now.",
         toolCalls: [AssistantToolCall(id: "toolu_add", tool: .addFoodEntry,
                                       arguments: ["name": .string("Grilled Chicken Salad"),
-                                                  "calories": .number(380),
-                                                  "protein": .number(35)])])
+                                                  "items": .array([.object([
+                                                      "name": .string("grilled chicken salad"),
+                                                      "grams": .number(300),
+                                                      "kcalPer100g": .number(127)])])])])
 
     /// Flow J: propose -> confirmation card -> confirm -> saved.
     func testConfirmedWriteIsSaved() async throws {
@@ -611,7 +754,7 @@ final class AssistantViewModelTests: XCTestCase {
         let service = ScriptedAssistantService([
             AssistantResponse(text: nil, toolCalls: [
                 AssistantToolCall(id: "a", tool: .addFoodEntry,
-                                  arguments: ["name": .string("X"), "calories": .number(1)]),
+                                  arguments: AssistantToolExecutorTests.tinyArguments),
                 AssistantToolCall(id: "b", tool: .getTrends, arguments: [:])
             ])
         ])

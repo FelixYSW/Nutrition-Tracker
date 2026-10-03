@@ -8,7 +8,9 @@ struct AssistantTurn: Equatable, Sendable {
         case text(String)
         /// JPEG bytes, for the menu-photo flow.
         case image(Data)
-        case toolUse(id: String, name: String, input: [String: JSONValue])
+        /// `extra` is provider data that must be sent back unchanged with the
+        /// call - for Gemini, the thought signature.
+        case toolUse(id: String, name: String, input: [String: JSONValue], extra: JSONValue? = nil)
         case toolResult(id: String, content: String, isError: Bool)
     }
 
@@ -35,6 +37,8 @@ enum AssistantServiceError: LocalizedError, Equatable {
     case requestFailed(detail: String)
     case malformedResponse(detail: String)
     case rateLimited
+    /// 500/502/503/504 that persisted through the automatic retries.
+    case providerBusy(status: Int)
     /// HTTP 404: the configured model name doesn't exist (retired or mistyped),
     /// and no replacement could be found automatically.
     case modelUnavailable(model: String)
@@ -53,6 +57,9 @@ enum AssistantServiceError: LocalizedError, Equatable {
             "The assistant sent a reply this app could not read: \(detail)"
         case .rateLimited:
             "The AI provider is rate limiting requests. Try again shortly."
+        case .providerBusy(let status):
+            "Gemini is overloaded right now (HTTP \(status)). This is on Google's side "
+                + "and usually clears within a minute - try again shortly."
         }
     }
 }
@@ -88,13 +95,17 @@ struct UnconfiguredAssistantService: AssistantServing {
 struct OpenAICompatibleAssistantService: AssistantServing {
 
     static let defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
-    /// Starting guess only. Google retires model names, so when this (or a
-    /// remembered model) returns 404 the service looks up a current model and
-    /// switches to it automatically. ASSISTANT_MODEL pins one explicitly.
-    static let defaultModel = "gemini-2.5-flash"
+    /// Starting model for every install: Flash-Lite, chosen for its much higher
+    /// free-tier daily limit (the app shares one key). Google retires model
+    /// names, so if this (or a remembered model) returns 404, the service looks
+    /// up the current list and switches to the newest Flash-Lite automatically.
+    /// ASSISTANT_MODEL, if set, pins a model instead.
+    static let defaultModel = "gemini-3.5-flash-lite"
 
-    /// Where an auto-discovered model is remembered between launches.
-    static let discoveredModelKey = "assistant.discoveredModel"
+    /// Where an auto-discovered model is remembered between launches. The "v2"
+    /// suffix makes installs forget a model remembered before the switch to
+    /// Flash-Lite (e.g. a full Flash model with a 20-a-day limit).
+    static let discoveredModelKey = "assistant.discoveredModel.v2"
 
     private let session: URLSession
     private let baseURL: String
@@ -155,14 +166,14 @@ struct OpenAICompatibleAssistantService: AssistantServing {
             let (retryData, retryStatus) = try await postChat(model: replacement, apiKey: apiKey,
                                                               turns: turns, contextJSON: contextJSON,
                                                               tools: tools)
-            try Self.check(status: retryStatus, model: replacement)
+            try Self.check(status: retryStatus, model: replacement, body: retryData)
             // Remembered only once it has actually worked, so a bad pick is
             // never stuck as the starting model.
             defaults.set(replacement, forKey: Self.discoveredModelKey)
             return try Self.decode(data: retryData)
         }
 
-        try Self.check(status: status, model: model)
+        try Self.check(status: status, model: model, body: data)
         return try Self.decode(data: data)
     }
 
@@ -182,7 +193,26 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         } catch {
             throw AssistantServiceError.requestFailed(detail: "could not encode the request")
         }
-        return try await perform(request)
+
+        // 500/502/503/504 mean the provider is briefly overloaded (Gemini's free
+        // tier sends 503 "model is overloaded" at busy times). These usually
+        // clear within seconds, so retry a couple of times with a growing pause
+        // before giving up. The request was never processed, so a retry can't
+        // log anything twice.
+        var result = try await perform(request)
+        for delay in Self.busyRetryDelays where Self.isTransient(result.1) {
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            result = try await perform(request)
+        }
+        return result
+    }
+
+    /// Pauses before each retry of a busy response, in seconds: three tries in
+    /// about 6 seconds in all, short enough that the chat doesn't seem stuck.
+    static let busyRetryDelays: [Double] = [1.5, 4]
+
+    static func isTransient(_ status: Int) -> Bool {
+        [500, 502, 503, 504].contains(status)
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, Int) {
@@ -197,15 +227,30 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         }
     }
 
-    static func check(status: Int, model: String) throws {
+    static func check(status: Int, model: String, body: Data? = nil) throws {
         // Free tiers rate-limit; this is the expected error under load.
         if status == 429 { throw AssistantServiceError.rateLimited }
+        if isTransient(status) { throw AssistantServiceError.providerBusy(status: status) }
         if status == 404 { throw AssistantServiceError.modelUnavailable(model: model) }
         guard (200..<300).contains(status) else {
-            // Never include the body: it can echo the request, which holds
-            // the user's nutrition context (spec section 39).
-            throw AssistantServiceError.requestFailed(detail: "HTTP \(status)")
+            // Only the provider's short error message is shown, never the raw
+            // body, which could echo the user's nutrition context (spec 39).
+            let reason = providerErrorMessage(from: body).map { " - \($0)" } ?? ""
+            throw AssistantServiceError.requestFailed(detail: "HTTP \(status)\(reason)")
         }
+    }
+
+    /// `{"error": {"message": "..."}}` (OpenAI and Gemini) or a top-level
+    /// array of such objects, trimmed to one short line.
+    static func providerErrorMessage(from body: Data?) -> String? {
+        guard let body,
+              let json = try? JSONDecoder().decode(JSONValue.self, from: body) else { return nil }
+        let root = json.arrayValue?.first ?? json
+        guard let message = root.objectValue?["error"]?.objectValue?["message"]?.stringValue else {
+            return nil
+        }
+        let line = message.split(whereSeparator: \.isNewline).first.map(String.init) ?? message
+        return line.count > 160 ? String(line.prefix(160)) + "\u{2026}" : line
     }
 
     // MARK: Model discovery
@@ -228,8 +273,8 @@ struct OpenAICompatibleAssistantService: AssistantServing {
 
     /// Chooses the best general chat model from a provider's model list.
     ///
-    /// Prefers Gemini Flash models (fast, and on the free tier), stable over
-    /// preview, newest version first, full over "lite". Specialised models
+    /// Prefers Gemini Flash-Lite (highest free daily limit), then Flash, stable over
+    /// preview, newest version first. Specialised models
     /// (embedding, image, audio, TTS, live) are skipped.
     static func pickModel(from ids: [String], excluding failed: String) -> String? {
         let skip = ["embed", "image", "tts", "audio", "live", "vision", "aqa", "imagen", "veo", "learnlm", "gemma"]
@@ -251,13 +296,18 @@ struct OpenAICompatibleAssistantService: AssistantServing {
             return lower.contains("preview") || lower.contains("exp")
         }
 
+        /// 0 Flash-Lite (highest free daily limit), 1 Flash, 2 anything else.
+        func family(_ id: String) -> Int {
+            let lower = id.lowercased()
+            if lower.contains("flash-lite") || lower.contains("flash_lite") { return 0 }
+            if lower.contains("flash") { return 1 }
+            return 2
+        }
+
         let ranked = candidates.sorted { lhs, rhs in
-            let lFlash = lhs.contains("flash"), rFlash = rhs.contains("flash")
-            if lFlash != rFlash { return lFlash }
+            if family(lhs) != family(rhs) { return family(lhs) < family(rhs) }
             if isPreview(lhs) != isPreview(rhs) { return !isPreview(lhs) }
             if version(lhs) != version(rhs) { return version(lhs) > version(rhs) }
-            let lLite = lhs.contains("lite"), rLite = rhs.contains("lite")
-            if lLite != rLite { return !lLite }
             return lhs < rhs
         }
         return ranked.first
@@ -311,14 +361,17 @@ struct OpenAICompatibleAssistantService: AssistantServing {
                 texts.append(text)
             case .image(let data):
                 images.append(data)
-            case .toolUse(let id, let name, let input):
+            case .toolUse(let id, let name, let input, let extra):
                 let arguments = (try? JSONSerialization.data(withJSONObject: unwrap(input)))
                     .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
-                toolCalls.append([
+                var call: [String: Any] = [
                     "id": id,
                     "type": "function",
                     "function": ["name": name, "arguments": arguments]
-                ])
+                ]
+                // Gemini's thought signature, sent back exactly as received.
+                if let extra { call["extra_content"] = unwrap(value: extra) }
+                toolCalls.append(call)
             case .toolResult(let id, let content, _):
                 messages.append(["role": "tool", "tool_call_id": id, "content": content])
             }
@@ -378,6 +431,8 @@ struct OpenAICompatibleAssistantService: AssistantServing {
             struct ToolCall: Decodable {
                 let id: String?
                 let function: Function
+                /// Gemini: `{"google": {"thought_signature": "..."}}`.
+                let extra_content: JSONValue?
             }
             struct Function: Decodable {
                 let name: String
@@ -417,7 +472,8 @@ struct OpenAICompatibleAssistantService: AssistantServing {
 
             // Some compatible APIs omit ids; one is needed to pair the result.
             let id = (call.id?.isEmpty == false) ? call.id! : "call_\(index)_\(UUID().uuidString.prefix(8))"
-            calls.append(AssistantToolCall(id: id, tool: tool, arguments: arguments))
+            calls.append(AssistantToolCall(id: id, tool: tool, arguments: arguments,
+                                           extra: call.extra_content))
         }
 
         let text = message.content?.trimmingCharacters(in: .whitespacesAndNewlines)

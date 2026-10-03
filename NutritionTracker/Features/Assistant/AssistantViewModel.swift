@@ -1,6 +1,9 @@
 import Foundation
 import SwiftData
 import Observation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// A message as shown in the chat transcript.
 struct AssistantChatMessage: Identifiable, Equatable {
@@ -55,12 +58,20 @@ final class AssistantViewModel {
     static let photoOnlyPrompt = "What would you suggest from this, given what I have "
         + "left in my ranges today?"
 
+    /// Runs an attached photo through the on-device models (A then B) and
+    /// describes what they found, for the model to log from. Nil when the food
+    /// recognition model isn't installed: the photo then goes to the LLM alone.
+    typealias PhotoAnalyser = @MainActor (Data) async -> String?
+    private let photoAnalyser: PhotoAnalyser?
+
     init(service: AssistantServing,
          executor: AssistantToolExecutor,
-         contextBuilder: AssistantContextBuilder) {
+         contextBuilder: AssistantContextBuilder,
+         photoAnalyser: PhotoAnalyser? = nil) {
         self.service = service
         self.executor = executor
         self.contextBuilder = contextBuilder
+        self.photoAnalyser = photoAnalyser
     }
 
     /// The assistant uses the app's built-in key; there is nothing for the
@@ -71,10 +82,43 @@ final class AssistantViewModel {
             ? OpenAICompatibleAssistantService()
             : UnconfiguredAssistantService()
 
+        let pipeline = PhotoAnalysisPipeline.make(context: context)
+        let analyser: PhotoAnalyser? = pipeline.canRecogniseFoods
+            ? { data in await describePhoto(data, using: pipeline) }
+            : nil
+
         return AssistantViewModel(
             service: service,
             executor: AssistantToolExecutor(context: context),
-            contextBuilder: AssistantContextBuilder(context: context))
+            contextBuilder: AssistantContextBuilder(context: context),
+            photoAnalyser: analyser)
+    }
+
+    /// Plain-text summary of the on-device photo analysis: each food with its
+    /// estimated grams and the calories the app calculated for it.
+    @MainActor
+    static func describePhoto(_ data: Data, using pipeline: PhotoAnalysisPipeline) async -> String? {
+        #if canImport(UIKit)
+        guard let image = UIImage(data: data),
+              let result = try? await pipeline.analyse(image: image, retainImage: false),
+              !result.isEmpty else { return nil }
+
+        var lines = ["On-device photo analysis (the app's own food recognition and "
+                     + "portion models):"]
+        for item in result.resolvedNutrition {
+            let source = item.provenance.isEstimate ? "estimate" : item.provenance.displayName
+            lines.append("- \(item.displayName): \(AppFormatters.amount(item.grams)) g, "
+                         + "\(AppFormatters.amount(item.total.calories)) kcal (\(source))")
+        }
+        let total = result.resolvedNutrition.reduce(Nutrition.zero) { $0 + $1.total }
+        lines.append("Total about \(AppFormatters.amount(total.calories)) kcal. "
+                     + (result.portionsEstimated
+                        ? "Portions are estimates from one photo."
+                        : "Portion sizes are defaults; ask the user to confirm them."))
+        return lines.joined(separator: "\n")
+        #else
+        return nil
+        #endif
     }
 
     // MARK: Availability
@@ -105,14 +149,27 @@ final class AssistantViewModel {
         composerText = ""
         attachedImageData = nil
 
+        // Show the message straight away; the photo analysis below can take a moment.
+        append(.user(text: text, image: image))
+
         var blocks: [AssistantTurn.Block] = []
-        if let image { blocks.append(.image(image)) }
+        if let image {
+            blocks.append(.image(image))
+            // With the food models installed, the app's own recognition and
+            // portion estimate go along with the photo, so logging uses those
+            // grams and the app's nutrition data rather than an LLM's guess.
+            if let photoAnalyser {
+                isSending = true
+                if let analysis = await photoAnalyser(image) {
+                    blocks.append(.text(analysis))
+                }
+            }
+        }
         // A photo sent on its own still needs a question for the model; the
         // chat shows just the photo, as Claude and ChatGPT do.
         blocks.append(.text(text.isEmpty ? Self.photoOnlyPrompt : text))
         turns.append(AssistantTurn(role: .user, blocks: blocks))
 
-        append(.user(text: text, image: image))
         await runLoop()
     }
 
@@ -155,7 +212,7 @@ final class AssistantViewModel {
             var assistantBlocks: [AssistantTurn.Block] = []
             if let text = response.text { assistantBlocks.append(.text(text)) }
             assistantBlocks += response.toolCalls.map {
-                .toolUse(id: $0.id, name: $0.tool.rawValue, input: $0.arguments)
+                .toolUse(id: $0.id, name: $0.tool.rawValue, input: $0.arguments, extra: $0.extra)
             }
             if !assistantBlocks.isEmpty {
                 turns.append(AssistantTurn(role: .assistant, blocks: assistantBlocks))

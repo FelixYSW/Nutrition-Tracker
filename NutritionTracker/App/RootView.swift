@@ -31,6 +31,10 @@ struct RootView: View {
         // its own colour. `.secondary` and `.tertiary` derive from this.
         .foregroundStyle(AppTheme.ink)
         .onAppear { _ = context.loadAppSettings() }
+        #if canImport(UIKit)
+        // Tap anywhere outside a text field to close the keyboard.
+        .background(TapToDismissKeyboard().allowsHitTesting(false))
+        #endif
     }
 }
 

@@ -23,8 +23,12 @@ enum AssistantTool: String, CaseIterable, Sendable {
     var description: String {
         switch self {
         case .addFoodEntry:
-            "Propose adding a food entry to the user's log. Requires the user to "
-                + "confirm before it is saved. Provide nutrition per serving."
+            "Propose logging a food. Requires the user to confirm before it is saved. "
+                + "List every component separately with the grams actually eaten - "
+                + "including cooking oil, sauces and drinks - and never give a total for "
+                + "the whole dish: the app works out the totals itself from its nutrition "
+                + "database. For each component also give your best per-100 g estimate; "
+                + "it is only used when the database has no match."
         case .editFoodEntry:
             "Propose changing an existing food entry, identified by its id. "
                 + "Requires user confirmation."
@@ -45,32 +49,24 @@ enum AssistantTool: String, CaseIterable, Sendable {
         let units = ServingUnit.allCases.map(\.rawValue)
         switch self {
         case .addFoodEntry:
-            let ingredient = Self.object([
-                "name": Self.field("string"),
-                "quantity": Self.field("number"),
-                "servingSize": Self.field("number"),
-                "unit": Self.field("string", allowed: units),
-                "calories": Self.field("number"),
-                "protein": Self.field("number"),
-                "carbs": Self.field("number"),
-                "fat": Self.field("number"),
-                "fibre": Self.field("number")
-            ], required: ["name", "quantity"])
+            let item = Self.object([
+                "name": Self.field("string", "One component, e.g. \"konjac knots\", \"egg\", "
+                                   + "\"cooking oil\". Plain food names match the database best."),
+                "grams": Self.field("number", "Grams of this component actually eaten. "
+                                    + "Convert pieces to grams (e.g. 2 eggs = 100)."),
+                "kcalPer100g": Self.field("number", "Your estimate, per 100 g of this component."),
+                "proteinPer100g": Self.field("number", "Your estimate, per 100 g."),
+                "carbsPer100g": Self.field("number", "Your estimate, per 100 g."),
+                "fatPer100g": Self.field("number", "Your estimate, per 100 g."),
+                "fibrePer100g": Self.field("number", "Your estimate, per 100 g.")
+            ], required: ["name", "grams"])
 
             return Self.object([
-                "name": Self.field("string", "Descriptive food name, e.g. \"Nasi Lemak\"."),
-                "quantity": Self.field("number", "How much was eaten."),
-                "servingSize": Self.field("number", "Serving size the nutrition refers to."),
-                "unit": Self.field("string", allowed: units),
-                "calories": Self.field("number", "Kilocalories per serving."),
-                "protein": Self.field("number", "Grams per serving."),
-                "carbs": Self.field("number", "Grams per serving."),
-                "fat": Self.field("number", "Grams per serving."),
-                "fibre": Self.field("number", "Grams per serving."),
-                "consumedAt": Self.field("string", "ISO 8601 timestamp. Omit for now."),
-                "ingredients": Self.array(of: ingredient,
-                                          "Optional ingredient breakdown for a composite food.")
-            ], required: ["name"])
+                "name": Self.field("string", "Name for the whole food, e.g. \"Tomato egg with konjac\"."),
+                "items": Self.array(of: item, "Every component with its grams. One item for a "
+                                    + "single food; several for a mixed dish."),
+                "consumedAt": Self.field("string", "ISO 8601 timestamp. Omit for now.")
+            ], required: ["name", "items"])
 
         case .editFoodEntry:
             return Self.object([
@@ -134,6 +130,10 @@ struct AssistantToolCall: Identifiable, Equatable, Sendable {
     let tool: AssistantTool
     /// Raw decoded arguments.
     let arguments: [String: JSONValue]
+    /// Opaque provider data attached to the call (Gemini sends a thought
+    /// signature in `extra_content`). Echoed back verbatim on the next request;
+    /// Gemini rejects the follow-up with HTTP 400 if it is missing.
+    var extra: JSONValue? = nil
 }
 
 /// A write the assistant wants to make, awaiting explicit confirmation
@@ -308,67 +308,101 @@ enum AssistantArgumentParser {
                   fibre: arguments["fibre"]?.doubleValue ?? 0).sanitised
     }
 
-    /// Builds a draft for `addFoodEntry`.
-    static func parseAdd(arguments: [String: JSONValue]) throws -> FoodEntryDraft {
+    /// Builds a draft for `addFoodEntry` from the model's component list.
+    ///
+    /// Every component becomes a gram-based ingredient whose values are per
+    /// 100 g, so they scale correctly when the user changes the amount. The
+    /// model's per-100 g figures are only provisional: `AssistantToolExecutor`
+    /// replaces them with the app's nutrition database wherever it has a match.
+    /// Whole-dish totals from the model are never used - they were the source of
+    /// wildly wrong entries (e.g. a ~300 kcal plate logged as 1,000).
+    static func parseAdd(arguments: [String: JSONValue],
+                         resolve: (IngredientDraft) -> IngredientDraft = { $0 }) throws -> FoodEntryDraft {
+        let tool = AssistantTool.addFoodEntry.rawValue
         guard let name = arguments["name"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+            throw AssistantToolError.malformedArguments(tool: tool, detail: "a food name is required")
+        }
+
+        let items = (arguments["items"]?.arrayValue ?? []).compactMap {
+            parseItem($0.objectValue ?? [:]).map(resolve)
+        }
+        guard !items.isEmpty else {
             throw AssistantToolError.malformedArguments(
-                tool: AssistantTool.addFoodEntry.rawValue, detail: "a food name is required")
+                tool: tool, detail: "list each component with the grams eaten")
         }
 
-        let unit = parseUnit(arguments["unit"]) ?? .serving
-        let quantity = arguments["quantity"]?.doubleValue ?? 1
-        let servingSize = arguments["servingSize"]?.doubleValue ?? 1
+        let consumedAt = parseDate(arguments["consumedAt"]) ?? .now
 
-        guard quantity > 0 else {
-            throw AssistantToolError.malformedArguments(
-                tool: AssistantTool.addFoodEntry.rawValue, detail: "quantity must be positive")
-        }
-        guard servingSize > 0 else {
-            throw AssistantToolError.malformedArguments(
-                tool: AssistantTool.addFoodEntry.rawValue, detail: "serving size must be positive")
-        }
-
-        let ingredients = (arguments["ingredients"]?.arrayValue ?? []).compactMap {
-            parseIngredient($0.objectValue ?? [:])
+        // One component: a simple food measured in grams.
+        if items.count == 1, let only = items.first {
+            return FoodEntryDraft(name: name,
+                                  consumedAt: consumedAt,
+                                  quantity: only.quantity,
+                                  servingSize: 100,
+                                  unit: .gram,
+                                  nutritionPerServing: only.nutritionPerServing,
+                                  source: .assistant,
+                                  canonicalID: only.canonicalID)
         }
 
-        var draft = FoodEntryDraft(name: name,
-                                   consumedAt: parseDate(arguments["consumedAt"]) ?? .now,
-                                   quantity: quantity,
-                                   servingSize: servingSize,
-                                   unit: unit,
-                                   nutritionPerServing: nutrition(from: arguments),
-                                   ingredients: ingredients,
-                                   source: .assistant)
-
-        // A composite food derives its nutrition from its children, so the
-        // parent's own figures are cleared to avoid double-counting.
-        if !draft.ingredients.isEmpty {
-            draft.nutritionPerServing = .zero
-            draft.quantity = max(1, quantity)
-            draft.servingSize = 1
-            draft.unit = .serving
-        }
-
-        return draft
+        // Several: a composite dish, one serving, nutrition from its parts.
+        return FoodEntryDraft(name: name,
+                              consumedAt: consumedAt,
+                              quantity: 1,
+                              servingSize: 1,
+                              unit: .serving,
+                              ingredients: items,
+                              source: .assistant)
     }
 
-    static func parseIngredient(_ arguments: [String: JSONValue]) -> IngredientDraft? {
+    /// Largest believable mass for one component of one meal, in grams.
+    static let maximumItemGrams: Double = 3000
+
+    static func parseItem(_ arguments: [String: JSONValue]) -> IngredientDraft? {
         guard let name = arguments["name"]?.stringValue?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+            .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
+              let grams = arguments["grams"]?.doubleValue,
+              grams > 0, grams <= maximumItemGrams else {
             return nil
         }
-        let quantity = arguments["quantity"]?.doubleValue ?? 0
-        let servingSize = arguments["servingSize"]?.doubleValue ?? 100
-        guard quantity > 0, servingSize > 0 else { return nil }
+
+        let estimate = Nutrition(calories: arguments["kcalPer100g"]?.doubleValue ?? 0,
+                                 protein: arguments["proteinPer100g"]?.doubleValue ?? 0,
+                                 carbs: arguments["carbsPer100g"]?.doubleValue ?? 0,
+                                 fat: arguments["fatPer100g"]?.doubleValue ?? 0,
+                                 fibre: arguments["fibrePer100g"]?.doubleValue ?? 0)
 
         return IngredientDraft(name: name,
-                               quantity: quantity,
-                               servingSize: servingSize,
-                               unit: parseUnit(arguments["unit"]) ?? .gram,
-                               nutritionPerServing: nutrition(from: arguments),
+                               quantity: grams.rounded(),
+                               servingSize: 100,
+                               unit: .gram,
+                               nutritionPerServing: plausiblePer100g(estimate),
                                provenance: .modelEstimate)
+    }
+
+    /// Repairs a per-100 g estimate that can't be physically right.
+    ///
+    /// - Nothing exceeds pure fat (about 900 kcal/100 g), and macros can't
+    ///   weigh more than the 100 g they're in.
+    /// - When protein, carbs and fat are given, calories are checked against
+    ///   them (4/4/9 kcal per gram). If the stated figure is more than 25% off,
+    ///   the macro-derived value is used: the macros are usually the more
+    ///   reliable half of a guess.
+    static func plausiblePer100g(_ estimate: Nutrition) -> Nutrition {
+        var value = estimate.sanitised
+        value.protein = min(value.protein, 100)
+        value.carbs = min(value.carbs, 100)
+        value.fat = min(value.fat, 100)
+        value.fibre = min(value.fibre, value.carbs > 0 ? value.carbs : 100)
+
+        let fromMacros = value.energyFromMacros
+        if fromMacros > 0 {
+            let gap = abs(value.calories - fromMacros) / fromMacros
+            if value.calories <= 0 || gap > 0.25 { value.calories = fromMacros.rounded() }
+        }
+        value.calories = min(value.calories, 900)
+        return value
     }
 
     static func parseEntryID(_ value: JSONValue?) throws -> UUID {

@@ -223,6 +223,14 @@ struct AssistantContextBuilder {
     - Every add, edit and delete requires the user's explicit confirmation, \
     which happens outside your control. After proposing one, say plainly that \
     it is waiting for confirmation.
+    - When logging food, never state or estimate a total for the whole meal. \
+    Break it into components with realistic grams for what the user actually \
+    ate - count pieces and convert them (12 konjac knots is about 150 g, one \
+    egg about 50 g), and include cooking oil for fried or stir-fried dishes. \
+    The app calculates the nutrition from its own database; quote its totals \
+    from the tool result rather than your own.
+    - If the message includes an on-device photo analysis, log the foods and \
+    grams it lists unless the user corrects them.
     - Ground every claim about the user's intake in the context or a tool result. \
     Do not invent numbers or trends.
     - When suggesting from a menu, give a few concrete options with rough \

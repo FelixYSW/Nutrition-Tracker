@@ -192,8 +192,24 @@ final class AssistantToolExecutor {
     // MARK: Write proposals (still no writes)
 
     private func proposeAdd(call: AssistantToolCall) throws -> PendingAssistantWrite {
-        let draft = try AssistantArgumentParser.parseAdd(arguments: call.arguments)
+        let repository = NutritionRepository(context: context)
+        let draft = try AssistantArgumentParser.parseAdd(arguments: call.arguments) { item in
+            Self.resolve(item, with: repository)
+        }
         return PendingAssistantWrite(id: call.id, tool: .addFoodEntry, action: .add(draft))
+    }
+
+    /// Swaps the model's per-100 g guess for the app's own figures wherever the
+    /// nutrition data layer knows the food: the user's saved products first,
+    /// then MyFCD, then the generic table (spec section 23). Unknown foods keep
+    /// the - already sanity-checked - estimate, marked as an estimate.
+    static func resolve(_ item: IngredientDraft, with repository: NutritionRepository) -> IngredientDraft {
+        guard let hit = repository.lookup(canonicalID: nil, name: item.name) else { return item }
+        var resolved = item
+        resolved.nutritionPerServing = hit.nutritionPer100g
+        resolved.canonicalID = hit.canonicalID
+        resolved.provenance = hit.provenance
+        return resolved
     }
 
     private func proposeEdit(call: AssistantToolCall) throws -> PendingAssistantWrite {
@@ -267,9 +283,23 @@ final class AssistantToolExecutor {
             let entry = draft.makeEntry()
             context.insert(entry)
             try context.save()
-            return try encode(["status": "added",
-                               "id": entry.id.uuidString,
-                               "name": entry.name])
+            // The app's own totals, so the model quotes these rather than a
+            // figure it made up.
+            struct Added: Encodable {
+                let status = "added"
+                let id: String
+                let name: String
+                let calories: Double
+                let protein: Double
+                let carbs: Double
+                let fat: Double
+            }
+            let total = entry.total
+            return try encode(Added(id: entry.id.uuidString, name: entry.name,
+                                    calories: total.calories.rounded(),
+                                    protein: total.protein.rounded(),
+                                    carbs: total.carbs.rounded(),
+                                    fat: total.fat.rounded()))
 
         case .edit(let entryID, let draft, _):
             guard let entry = context.fetchEntry(id: entryID) else {

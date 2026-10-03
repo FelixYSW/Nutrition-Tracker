@@ -1,122 +1,21 @@
 import SwiftUI
 
-/// Ring showing consumed-vs-target where the target is a band, not a point
-/// (spec section 13).
+// MARK: - Range ring
+
+/// The ring every nutrient display is drawn with: consumed against a target
+/// that is a band, not a point (spec section 13).
 ///
-/// Three states:
-///  - under  - below the minimum. Normal for most of the day; shown calmly.
-///  - within - inside the band. Reads as "on track".
-///  - over   - above the maximum. Flagged distinctly, factually, without
-///             medical framing.
+/// - The empty track runs all the way round.
+/// - The in-range zone is shaded from the minimum (marked with a tick) round
+///   to the maximum at the top, so "on track" is visible at a glance.
+/// - The consumed arc fills clockwise from the top in the state colour:
+///   under keeps the nutrient's own colour (normal for most of the day),
+///   within turns green, over turns orange.
+/// - Going past the maximum draws a second lap over the first, with a soft
+///   shadow on top so it reads as wrapping rather than just "full".
 ///
-/// The ring track itself shades the min-max zone so the user can see where
-/// "in range" sits at a glance rather than having to read the numbers.
-struct CircularNutritionProgress: View {
-    let nutrient: Nutrient
-    let consumed: Double
-    let range: NutrientRange
-
-    var lineWidth: CGFloat = 11
-    var showsLabel: Bool = true
-
-    private var state: RangeState { range.state(consumed: consumed) }
-    private var progress: Double { range.progress(consumed: consumed) }
-    private var bandStart: Double { range.bandFractions().start }
-    private var tint: Color { AppTheme.color(for: state, nutrient: nutrient) }
-
-    var body: some View {
-        VStack(spacing: 8) {
-            ZStack {
-                // Empty track.
-                Circle()
-                    .stroke(AppTheme.subtleFill, lineWidth: lineWidth)
-
-                // Shaded in-range zone: from the minimum round to the maximum.
-                Circle()
-                    .trim(from: bandStart, to: 1)
-                    .stroke(AppTheme.color(for: nutrient).opacity(0.22),
-                            style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
-                    .rotationEffect(.degrees(-90))
-
-                // Consumed arc, capped at one full turn so going far over does
-                // not wrap confusingly round the ring.
-                Circle()
-                    .trim(from: 0, to: max(0.001, min(progress, 1)))
-                    .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeOut(duration: 0.28), value: progress)
-
-                // A second, inset arc marks the overflow past the maximum.
-                if progress > 1 {
-                    Circle()
-                        .trim(from: 0, to: min(progress - 1, 1))
-                        .stroke(tint, style: StrokeStyle(lineWidth: lineWidth * 0.4,
-                                                         lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .padding(lineWidth * 1.1)
-                }
-
-                centreContent
-            }
-            .aspectRatio(1, contentMode: .fit)
-
-            if showsLabel {
-                Text(nutrient.displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(nutrient.displayName)
-        .accessibilityValue(accessibilityDescription)
-    }
-
-    private var centreContent: some View {
-        VStack(spacing: 1) {
-            Text(AppFormatters.amount(consumed))
-                .font(.system(.title3, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-                .minimumScaleFactor(0.5)
-                .lineLimit(1)
-            Text(AppFormatters.range(range))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-            if state == .over {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(tint)
-                    .accessibilityHidden(true)
-            }
-        }
-        // Keeps the text inside the ring rather than letting large Dynamic Type
-        // sizes push it over the stroke.
-        .padding(lineWidth * 1.6)
-    }
-
-    private var accessibilityDescription: String {
-        let unit = nutrient.unitLabel
-        let base = "\(AppFormatters.amount(consumed)) \(unit) of a "
-            + "\(AppFormatters.amount(range.min)) to \(AppFormatters.amount(range.max)) \(unit) range."
-        switch state {
-        case .under:
-            let gap = AppFormatters.amount(max(0, range.min - consumed))
-            return base + " \(gap) \(unit) to go to reach your minimum."
-        case .within:
-            return base + " On track."
-        case .over:
-            let excess = AppFormatters.amount(consumed - range.max)
-            return base + " \(excess) \(unit) over your range."
-        }
-    }
-}
-
-// MARK: - Range ring primitive and the Today summary views
-
-/// Ring track with the shaded in-range zone and a consumed arc. Shared by the
-/// calorie hero and the compact macro rings so both read the same way.
+/// The stroke is kept inside the view's frame, so callers size it with a
+/// plain `.frame`.
 struct RangeRing: View {
     let progress: Double
     let bandStart: Double
@@ -125,22 +24,62 @@ struct RangeRing: View {
     var lineWidth: CGFloat = 8
     var trackColor: Color = AppTheme.subtleFill
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// What is drawn; animates towards `progress` on appear and on change.
+    @State private var shown: Double = 0
+
+    private var band: Double { min(max(bandStart, 0), 1) }
+    /// Capped at two laps: past that, the extra amount stops adding meaning.
+    private var target: Double { min(max(progress.isFinite ? progress : 0, 0), 2) }
+
     var body: some View {
         ZStack {
             Circle()
                 .stroke(trackColor, lineWidth: lineWidth)
 
+            // In-range zone, minimum round to maximum.
             Circle()
-                .trim(from: min(max(bandStart, 0), 1), to: 1)
-                .stroke(bandTint.opacity(0.28),
+                .trim(from: band, to: 1)
+                .stroke(bandTint.opacity(0.22),
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
                 .rotationEffect(.degrees(-90))
+                .opacity(band < 1 ? 1 : 0)
 
+            // Crisp tick where the minimum is.
             Circle()
-                .trim(from: 0, to: max(0.001, min(progress, 1)))
+                .trim(from: max(band - 0.005, 0), to: min(band + 0.005, 1))
+                .stroke(bandTint.opacity(0.75),
+                        style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
+                .rotationEffect(.degrees(-90))
+                .opacity(band > 0 && band < 1 ? 1 : 0)
+
+            // First lap. Always in the hierarchy (faded out at zero) so its
+            // trim animates instead of popping in; this also avoids the round
+            // cap drawing a stray dot when nothing has been eaten.
+            Circle()
+                .trim(from: 0, to: min(shown, 1))
                 .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.easeOut(duration: 0.28), value: progress)
+                .opacity(shown > 0.001 ? 1 : 0)
+
+            // Second lap, past the maximum.
+            Circle()
+                .trim(from: 0, to: max(0, min(shown - 1, 0.999)))
+                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .shadow(color: .black.opacity(0.28), radius: lineWidth * 0.4)
+                .opacity(shown > 1.001 ? 1 : 0)
+        }
+        .padding(lineWidth / 2)
+        .onAppear { animate() }
+        .onChange(of: target) { _, _ in animate() }
+    }
+
+    private func animate() {
+        if reduceMotion {
+            shown = target
+        } else {
+            withAnimation(.spring(response: 0.8, dampingFraction: 0.86)) { shown = target }
         }
     }
 }
@@ -176,14 +115,16 @@ struct CompactMacroRing: View {
                           tint: AppTheme.color(for: state, nutrient: nutrient),
                           bandTint: AppTheme.color(for: nutrient),
                           lineWidth: 7)
-                    .frame(width: 64, height: 64)
+                    .frame(width: 66, height: 66)
 
                 Text(AppFormatters.amount(consumed))
                     .font(.system(.subheadline, design: .rounded).weight(.heavy))
                     .monospacedDigit()
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
-                    .frame(width: 40)
+                    .foregroundStyle(state == .over ? AppTheme.over : AppTheme.ink)
+                    .contentTransition(.numericText())
+                    .frame(width: 42)
             }
 
             Text(nutrient.displayName)
@@ -208,14 +149,14 @@ struct CompactMacroRing: View {
     }
 }
 
-/// Today's calorie summary: a pale blue card with the running total and a
-/// large ring.
+/// Today's calorie summary: the running total beside a large ring.
 struct CalorieHeroCard: View {
     let consumed: Double
     let range: NutrientRange
 
     private var state: RangeState { range.state(consumed: consumed) }
     private var progress: Double { range.progress(consumed: consumed) }
+    private var tint: Color { AppTheme.color(for: state, nutrient: .calories) }
 
     var body: some View {
         HStack(spacing: 18) {
@@ -252,18 +193,58 @@ struct CalorieHeroCard: View {
             ZStack {
                 RangeRing(progress: progress,
                           bandStart: range.bandFractions().start,
-                          tint: AppTheme.color(for: .calories),
-                          bandTint: AppTheme.within,
-                          lineWidth: 12,
+                          tint: tint,
+                          bandTint: AppTheme.color(for: .calories),
+                          lineWidth: 13,
                           trackColor: AppTheme.heroTrack)
-                Text("\(Int((min(progress, 9.99) * 100).rounded()))%")
-                    .font(.system(.title3, design: .rounded).weight(.heavy))
-                    .monospacedDigit()
+                ringCentre
             }
-            .frame(width: 108, height: 108)
+            .frame(width: 112, height: 112)
             .accessibilityHidden(true)
         }
         .appSkyCard()
         .accessibilityElement(children: .combine)
+    }
+
+    /// What the centre says depends on the state, so it adds information
+    /// rather than repeating the number beside it.
+    @ViewBuilder
+    private var ringCentre: some View {
+        if range.max <= 0 {
+            Text("\u{2013}")
+                .font(.system(.title3, design: .rounded).weight(.heavy))
+                .foregroundStyle(.secondary)
+        } else {
+            switch state {
+            case .under:
+                // How far towards the minimum - the point where the day counts
+                // as on track.
+                VStack(spacing: 0) {
+                    Text("\(Int((consumed / max(range.min, 1) * 100).rounded()))%")
+                        .font(.system(.title3, design: .rounded).weight(.heavy))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                    Text("of min")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AppTheme.skyCardText)
+                }
+            case .within:
+                Image(systemName: "checkmark")
+                    .font(.system(size: 30, weight: .heavy))
+                    .foregroundStyle(tint)
+            case .over:
+                VStack(spacing: 0) {
+                    Text("+\(AppFormatters.amount(consumed - range.max))")
+                        .font(.system(.title3, design: .rounded).weight(.heavy))
+                        .monospacedDigit()
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                    Text("kcal over")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(tint)
+                .frame(width: 76)
+            }
+        }
     }
 }

@@ -33,6 +33,8 @@
     { "canonicalID": "gen.bread.white", "displayName": "White Bread", "aliases": ["bread", "white bread", "toast"], "sources": ["foodseg103"], "isMalaysian": false },
     { "canonicalID": "gen.noodles.boiled", "displayName": "Noodles (Boiled)", "aliases": ["noodles", "mee", "egg noodles"], "sources": ["foodseg103", "mf150"], "isMalaysian": false },
     { "canonicalID": "gen.banana", "displayName": "Banana", "aliases": ["banana", "pisang"], "sources": ["foodseg103"], "isMalaysian": false },
-    { "canonicalID": "gen.apple", "displayName": "Apple", "aliases": ["apple"], "sources": ["foodseg103"], "isMalaysian": false }
+    { "canonicalID": "gen.apple", "displayName": "Apple", "aliases": ["apple"], "sources": ["foodseg103"], "isMalaysian": false },
+    { "canonicalID": "gen.konjac", "displayName": "Konjac (Shirataki)", "aliases": ["konjac", "konjac knot", "konjac knots", "konjac noodles", "shirataki", "shirataki noodles", "konnyaku", "konjac rice"], "sources": [], "isMalaysian": false },
+    { "canonicalID": "gen.oil.cooking", "displayName": "Cooking Oil", "aliases": ["cooking oil", "oil", "vegetable oil", "palm oil", "canola oil", "sunflower oil", "corn oil", "olive oil", "minyak masak"], "sources": [], "isMalaysian": false }
   ]
 }
