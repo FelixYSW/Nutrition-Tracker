@@ -83,9 +83,15 @@ final class AssistantViewModel {
             : UnconfiguredAssistantService()
 
         let pipeline = PhotoAnalysisPipeline.make(context: context)
-        let analyser: PhotoAnalyser? = pipeline.canRecogniseFoods
-            ? { data in await describePhoto(data, using: pipeline) }
-            : nil
+        // An if-statement rather than `cond ? { closure } : nil`: Swift can't
+        // infer a closure's type through a ternary with an optional
+        // @MainActor async function type ("type of expression is ambiguous").
+        var analyser: PhotoAnalyser?
+        if pipeline.canRecogniseFoods {
+            analyser = { @MainActor (data: Data) async -> String? in
+                await Self.describePhoto(data, using: pipeline)
+            }
+        }
 
         return AssistantViewModel(
             service: service,
