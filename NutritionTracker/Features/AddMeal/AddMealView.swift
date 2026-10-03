@@ -3,14 +3,15 @@ import SwiftData
 
 /// Add Meal holds one or more draft food cards before saving (spec section 12).
 ///
-/// This is also the mandatory review step for the photo pipeline, barcode
-/// scanning and the assistant: all of them hand over drafts rather than writing
-/// to the database.
+/// It always shows at least one card: the page opens with a blank one ready to
+/// fill in, and the last card can't be removed. It is also the mandatory review
+/// step for the photo pipeline, barcode scanning and the assistant, all of which
+/// hand over drafts rather than writing to the database.
 struct AddMealView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppRouter.self) private var router
 
-    @State private var drafts: [FoodEntryDraft] = []
+    @State private var drafts: [FoodEntryDraft] = [FoodEntryDraft()]
     @State private var saveError: String?
     /// Explanation handed over with scanned or photographed drafts.
     @State private var notice: String?
@@ -26,7 +27,16 @@ struct AddMealView: View {
     }
 
     private var canSave: Bool {
-        !drafts.isEmpty && drafts.allSatisfy(\.isSaveable)
+        drafts.allSatisfy(\.isSaveable)
+    }
+
+    /// One time for the whole meal, applied to every food on the page.
+    private var mealTime: Binding<Date> {
+        Binding(
+            get: { drafts.first?.consumedAt ?? .now },
+            set: { time in
+                for index in drafts.indices { drafts[index].consumedAt = time }
+            })
     }
 
     var body: some View {
@@ -34,79 +44,49 @@ struct AddMealView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
                     if let notice {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "info.circle.fill")
-                                .foregroundStyle(AppTheme.accent)
-                                .accessibilityHidden(true)
-                            Text(notice)
-                                .font(.footnote)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 4)
-                            Button {
-                                withAnimation(.snappy) { self.notice = nil }
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 28, height: 28)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Dismiss")
-                        }
-                        .appCard()
+                        noticeCard(notice)
+                    } else if drafts.contains(where: { $0.source == .photoAI }) {
+                        // The hand-over notice already says this, so only one shows.
+                        EstimateDisclaimer().appCard()
                     }
 
-                    if drafts.contains(where: { $0.source == .photoAI }) {
-                        EstimateDisclaimer()
-                            .appCard()
+                    ForEach($drafts) { $draft in
+                        FoodDraftCard(draft: $draft,
+                                      onDelete: deleteAction(for: draft.id))
                     }
 
-                    if drafts.isEmpty {
-                        EmptyStateView(
-                            title: "No food added yet",
-                            message: "Add a food card to enter something by hand, or use "
-                                + "the Scan tab to photograph a meal or scan a barcode.",
-                            systemImage: "plus.circle",
-                            actionTitle: "Add food card") {
-                            addCard()
-                        }
-                        .appCard()
-                    } else {
-                        ForEach($drafts) { $draft in
-                            FoodDraftCard(draft: $draft) {
-                                remove(id: draft.id)
+                    Button {
+                        addCard()
+                    } label: {
+                        Label("Add another food", systemImage: "plus")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.appSecondary)
+
+                    VStack(spacing: 14) {
+                        DatePicker("Eaten at", selection: mealTime,
+                                   in: ...Date.now.addingTimeInterval(60 * 60),
+                                   displayedComponents: [.date, .hourAndMinute])
+                            .font(.subheadline)
+
+                        // A single food's card already shows its total.
+                        if drafts.count > 1 {
+                            Divider()
+                            VStack(alignment: .leading, spacing: 10) {
+                                AppSectionHeading(title: "Meal total",
+                                                  trailing: "\(drafts.count) foods")
+                                NutritionSummaryView(nutrition: combinedTotal, showsFibre: false)
                             }
                         }
-
-                        Button {
-                            addCard()
-                        } label: {
-                            Label("Add another food", systemImage: "plus.circle.fill")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.appSecondary)
-
-                        totalsCard
                     }
+                    .appCard()
                 }
                 .appPageContent()
             }
             .appPageSurface()
             .navigationTitle("Add Meal")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        addCard()
-                    } label: {
-                        Image(systemName: "plus")
-                            .accessibilityLabel("Add food card")
-                    }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                if !drafts.isEmpty { saveBar }
-            }
+            .safeAreaInset(edge: .bottom) { saveBar }
             .alert("Could not save",
                    isPresented: Binding(get: { saveError != nil },
                                         set: { if !$0 { saveError = nil } })) {
@@ -121,11 +101,25 @@ struct AddMealView: View {
 
     // MARK: Pieces
 
-    private var totalsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            AppSectionHeading(title: "Total",
-                              trailing: "\(drafts.count) item\(drafts.count == 1 ? "" : "s")")
-            NutritionSummaryView(nutrition: combinedTotal)
+    private func noticeCard(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(AppTheme.accent)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.footnote)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button {
+                withAnimation(.snappy) { notice = nil }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
         }
         .appCard()
     }
@@ -163,23 +157,41 @@ struct AddMealView: View {
     private func collectPendingDrafts() {
         let pending = router.consumePendingDrafts()
         guard !pending.drafts.isEmpty else { return }
-        // Newest first, so the card that was just filled in is at the top of the
-        // screen rather than below any foods already waiting to be saved.
-        drafts.insert(contentsOf: pending.drafts, at: 0)
+
+        if drafts.allSatisfy(\.isBlank) {
+            // Replace the empty starter card rather than stacking above it.
+            drafts = pending.drafts
+        } else {
+            // Join the meal already being built, at its time, newest first so
+            // the card that was just filled in is at the top of the screen.
+            let time = mealTime.wrappedValue
+            drafts.insert(contentsOf: pending.drafts.map { draft in
+                var draft = draft
+                draft.consumedAt = time
+                return draft
+            }, at: 0)
+        }
         notice = pending.notice
     }
 
     private func addCard() {
-        // A new card inherits the timestamp already in use, so a backdated meal
-        // does not need the date re-set for every food.
-        let timestamp = drafts.first?.consumedAt ?? .now
-        drafts.append(FoodEntryDraft(consumedAt: timestamp))
+        // A new card joins the meal at the time already set.
+        withAnimation(.snappy) {
+            drafts.append(FoodEntryDraft(consumedAt: mealTime.wrappedValue))
+        }
         Haptics.selection()
     }
 
+    /// Nil hides "Remove food" when this is the only card left.
+    private func deleteAction(for id: UUID) -> (() -> Void)? {
+        guard drafts.count > 1 else { return nil }
+        return { remove(id: id) }
+    }
+
     private func remove(id: UUID) {
-        drafts.removeAll { $0.id == id }
-        if drafts.isEmpty { notice = nil }
+        // The page always keeps one card.
+        guard drafts.count > 1 else { return }
+        withAnimation(.snappy) { drafts.removeAll { $0.id == id } }
         Haptics.selection()
     }
 
@@ -216,7 +228,7 @@ struct AddMealView: View {
         }
         do {
             try context.save()
-            drafts = []
+            drafts = [FoodEntryDraft()]
             notice = nil
             Haptics.success()
             router.selectedTab = .dashboard
@@ -227,213 +239,186 @@ struct AddMealView: View {
     }
 }
 
-/// One editable food card: simple or composite, with nested ingredient cards
+/// One editable food: simple, or composite with ingredient rows
 /// (spec sections 10, 12).
+///
+/// Each fact appears once: the name, one amount control, one total line, then
+/// the label values the total is worked out from.
 struct FoodDraftCard: View {
     @Binding var draft: FoodEntryDraft
-    /// Nil hides the delete control, e.g. when editing a single saved entry.
+    /// Nil when the food can't be removed: it's the only card on the page, or
+    /// a saved entry being edited.
     var onDelete: (() -> Void)?
+    /// Add Meal sets one time for the whole meal; the edit sheet needs its own.
+    var showsTimePicker: Bool = false
 
-    @State private var isEditingDetails = false
     @State private var showRemovePrompt = false
-    /// Upper end of the portion slider. Captured when the card appears (and
-    /// when the unit changes) so the scale does not move while dragging.
-    @State private var portionCeiling: Double = 0
+    @State private var expandedIngredient: UUID?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             header
-
-            HStack(spacing: 10) {
-                QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
-                    showRemovePrompt = true
-                }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text("\(AppFormatters.amount(draft.total.calories)) kcal")
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                    Text(draft.isComposite ? "from ingredients" : "total")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            portionSlider
-
+            amountRow
             NutritionSummaryView(nutrition: draft.total, showsFibre: false)
 
             Divider()
 
-            // A composite food derives its nutrition from children, so the
-            // parent's own nutrition editor is hidden to avoid implying it is
-            // used (which it is not - see FoodEntryDraft.nutritionForOneServing).
+            // A composite food's nutrition comes from its ingredients, so it
+            // has no label values of its own to edit.
             if draft.isComposite {
                 ingredientsSection
             } else {
-                simpleFoodSection
-                Button {
-                    withAnimation(.snappy) { addIngredient() }
-                } label: {
-                    Label("Break into ingredients", systemImage: "list.bullet.indent")
-                        .font(.footnote)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(AppTheme.accent)
+                NutritionEditor(nutrition: $draft.nutritionPerServing,
+                                servingSize: $draft.servingSize,
+                                unit: draft.unit,
+                                showsExtendedFields: true)
             }
 
-            Divider()
-
-            DatePicker("Eaten at", selection: $draft.consumedAt,
-                       in: ...Date.now.addingTimeInterval(60 * 60),
-                       displayedComponents: [.date, .hourAndMinute])
-                .font(.subheadline)
+            if showsTimePicker {
+                Divider()
+                DatePicker("Eaten at", selection: $draft.consumedAt,
+                           in: ...Date.now.addingTimeInterval(60 * 60),
+                           displayedComponents: [.date, .hourAndMinute])
+                    .font(.subheadline)
+            }
         }
         .appCard()
         .alert("Remove \(draft.name.isEmpty ? "this food" : draft.name)?",
                isPresented: $showRemovePrompt) {
             Button("Remove", role: .destructive) { onDelete?() }
-            Button("Keep", role: .cancel) {
-                draft.quantity = draft.unit.step
-            }
+            Button("Keep", role: .cancel) { draft.quantity = draft.unit.step }
         } message: {
-            Text("The quantity reached zero.")
+            Text("The amount reached zero.")
         }
     }
 
-    private var sliderRange: ClosedRange<Double> {
-        let lower = draft.unit.step
-        let upper = max(portionCeiling, lower * 20, draft.quantity)
-        return lower...upper
-    }
-
-    private var portionSlider: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Portion size")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(AppFormatters.quantity(draft.quantity, unit: draft.unit)) \(draft.unit.shortLabel)")
-                    .font(.footnote.weight(.bold))
-                    .monospacedDigit()
-            }
-            Slider(value: Binding(
-                get: { min(max(draft.quantity, sliderRange.lowerBound), sliderRange.upperBound) },
-                set: { draft.quantity = QuantityStepper.rounded($0, unit: draft.unit) }),
-                   in: sliderRange,
-                   step: draft.unit.step)
-                .tint(AppTheme.accentFill)
-                .accessibilityLabel("Portion size")
-        }
-        .onAppear { resetCeiling() }
-        .onChange(of: draft.unit) { _, _ in resetCeiling() }
-    }
-
-    private func resetCeiling() {
-        portionCeiling = max(draft.unit.step * 20, draft.quantity * 2)
-    }
+    // MARK: Pieces
 
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 TextField("Food name", text: $draft.name)
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                     .textInputAutocapitalization(.words)
-                HStack(spacing: 6) {
-                    Image(systemName: draft.source.symbolName)
-                        .font(.caption2)
-                        .accessibilityHidden(true)
-                    Text(draft.source.displayName)
-                        .font(.caption)
+
+                // Only worth showing when it didn't come from typing it in.
+                if draft.source != .manual || draft.hasLowConfidenceItems {
+                    HStack(spacing: 6) {
+                        Label(draft.source.displayName, systemImage: draft.source.symbolName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if draft.hasLowConfidenceItems {
+                            ConfidenceBadge(confidence: draft.confidence
+                                            ?? draft.ingredients.compactMap(\.confidence).min())
+                        }
+                    }
                 }
-                .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 4)
 
-            if draft.hasLowConfidenceItems {
-                ConfidenceBadge(confidence: draft.confidence
-                                ?? draft.ingredients.compactMap(\.confidence).min())
-            }
-
-            if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                        .accessibilityLabel("Delete this food")
+            Menu {
+                if draft.isComposite {
+                    Button("Add ingredient", systemImage: "plus") { addIngredient() }
+                } else {
+                    Button("Break into ingredients", systemImage: "list.bullet.indent") {
+                        addIngredient()
+                    }
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                if let onDelete {
+                    Button("Remove food", systemImage: "trash", role: .destructive, action: onDelete)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .frame(width: AppTheme.minimumTapTarget, height: AppTheme.minimumTapTarget)
+                    .contentShape(Rectangle())
             }
+            .accessibilityLabel("Food options")
         }
     }
 
-    private var simpleFoodSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Unit").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
+    /// The one place the amount eaten is set. A composite dish is counted in
+    /// servings of the whole dish, so it has no unit choice.
+    private var amountRow: some View {
+        HStack(spacing: 8) {
+            Text(draft.isComposite ? "Servings" : "Amount")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
+                if onDelete != nil {
+                    showRemovePrompt = true
+                } else {
+                    // The only card can't be removed, so it can't reach zero either.
+                    draft.quantity = draft.unit.step
+                }
+            }
+            if !draft.isComposite {
                 Picker("Unit", selection: $draft.unit) {
-                    ForEach(ServingUnit.allCases) { Text($0.displayName).tag($0) }
+                    ForEach(ServingUnit.allCases) { Text($0.shortLabel).tag($0) }
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
             }
-            NutritionEditor(nutrition: $draft.nutritionPerServing,
-                            servingSize: $draft.servingSize,
-                            unit: draft.unit,
-                            showsExtendedFields: true)
         }
     }
 
     private var ingredientsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            AppSectionHeading(title: "Ingredients",
-                              trailing: "\(draft.ingredients.count)")
+            Text("Ingredients")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
 
             ForEach($draft.ingredients) { $ingredient in
-                IngredientCard(draft: $ingredient) {
-                    withAnimation(.snappy) {
-                        draft.ingredients.removeAll { $0.id == ingredient.id }
-                    }
-                }
+                IngredientRow(
+                    draft: $ingredient,
+                    isExpanded: Binding(
+                        get: { expandedIngredient == ingredient.id },
+                        set: { expandedIngredient = $0 ? ingredient.id : nil }),
+                    onDelete: { removeIngredient(id: ingredient.id) })
             }
 
             Button {
-                withAnimation(.snappy) { addIngredient() }
+                addIngredient()
             } label: {
-                Label("Add ingredient", systemImage: "plus.circle")
-                    .font(.footnote)
+                Label("Add ingredient", systemImage: "plus")
+                    .font(.footnote.weight(.semibold))
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.accent)
-
-            Text("The parent total is worked out from the ingredients. "
-                 + "Changing the food's quantity scales them all.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
+    // MARK: Actions
+
     private func addIngredient() {
-        // Moving a simple food to composite carries its existing nutrition into
-        // the first ingredient, so nothing the user typed is lost.
-        if draft.ingredients.isEmpty, draft.nutritionPerServing != .zero {
-            draft.ingredients.append(IngredientDraft(
-                name: draft.name.isEmpty ? "Ingredient 1" : draft.name,
-                quantity: draft.quantity,
-                servingSize: draft.servingSize,
-                unit: draft.unit,
-                nutritionPerServing: draft.nutritionPerServing))
-            draft.nutritionPerServing = .zero
-            draft.quantity = 1
-            draft.servingSize = 1
-            draft.unit = .serving
-        } else {
-            draft.ingredients.append(IngredientDraft(
-                name: "", quantity: 100, servingSize: 100, unit: .gram))
+        withAnimation(.snappy) {
+            // Turning a simple food into a composite one carries its values into
+            // the first ingredient, so nothing already typed is lost.
+            if draft.ingredients.isEmpty, draft.nutritionPerServing != .zero {
+                draft.ingredients.append(IngredientDraft(
+                    name: draft.name.isEmpty ? "Ingredient 1" : draft.name,
+                    quantity: draft.quantity,
+                    servingSize: draft.servingSize,
+                    unit: draft.unit,
+                    nutritionPerServing: draft.nutritionPerServing))
+                draft.nutritionPerServing = .zero
+                draft.quantity = 1
+                draft.servingSize = 1
+                draft.unit = .serving
+            }
+            let added = IngredientDraft(name: "", quantity: 100, servingSize: 100, unit: .gram)
+            draft.ingredients.append(added)
+            // Open the new one so its values can be typed straight away.
+            expandedIngredient = added.id
+        }
+        Haptics.selection()
+    }
+
+    private func removeIngredient(id: UUID) {
+        withAnimation(.snappy) {
+            draft.ingredients.removeAll { $0.id == id }
         }
         Haptics.selection()
     }

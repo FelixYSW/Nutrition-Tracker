@@ -231,7 +231,7 @@ struct CalendarMonthGrid: View {
         let day = calendar.component(.day, from: date)
 
         let fill: Color = switch state {
-        case .within: AppTheme.accentFill.opacity(0.3)
+        case .within: AppTheme.within.opacity(0.3)
         case .under: AppTheme.subtleFill
         case .over: AppTheme.over.opacity(0.28)
         case nil: Color.clear
@@ -267,7 +267,7 @@ struct CalendarMonthGrid: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            legendItem("In range", AppTheme.accentFill.opacity(0.45))
+            legendItem("In range", AppTheme.within.opacity(0.45))
             legendItem("Under", AppTheme.subtleFill)
             legendItem("Over", AppTheme.over.opacity(0.45))
         }

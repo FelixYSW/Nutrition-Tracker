@@ -127,60 +127,81 @@ struct FoodEntryCard: View {
     }
 }
 
-/// An editable ingredient row inside an Add Meal draft card.
-struct IngredientCard: View {
+/// One ingredient inside a composite food: name, amount and calories on two
+/// short lines. Its label values are tucked away until the row is opened, so a
+/// five-ingredient dish stays readable.
+struct IngredientRow: View {
     @Binding var draft: IngredientDraft
+    @Binding var isExpanded: Bool
     var onDelete: () -> Void
 
     @State private var showRemovePrompt = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 8) {
-                TextField("Ingredient name", text: $draft.name)
+            HStack(spacing: 8) {
+                TextField("Ingredient", text: $draft.name)
                     .textInputAutocapitalization(.words)
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
 
                 if draft.isLowConfidence {
                     ConfidenceBadge(confidence: draft.confidence)
                 }
-            }
 
-            HStack(spacing: 10) {
-                QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
-                    showRemovePrompt = true
-                }
-                Spacer(minLength: 4)
                 Text("\(AppFormatters.amount(draft.total.calories)) kcal")
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .contentTransition(.numericText())
+                    .fixedSize()
             }
 
             HStack(spacing: 8) {
+                QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
+                    showRemovePrompt = true
+                }
                 Picker("Unit", selection: $draft.unit) {
-                    ForEach(ServingUnit.allCases) { unit in
-                        Text(unit.displayName).tag(unit)
-                    }
+                    ForEach(ServingUnit.allCases) { Text($0.shortLabel).tag($0) }
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 0)
 
-                if draft.provenance != .manual {
-                    Text(draft.provenance.displayName)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                Button {
+                    withAnimation(.snappy) { isExpanded.toggle() }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        .frame(width: AppTheme.minimumTapTarget,
+                               height: AppTheme.minimumTapTarget)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(isExpanded ? "Hide nutrition" : "Edit nutrition")
             }
 
-            NutritionEditor(nutrition: $draft.nutritionPerServing,
-                            servingSize: $draft.servingSize,
-                            unit: draft.unit)
+            if isExpanded {
+                NutritionEditor(nutrition: $draft.nutritionPerServing,
+                                servingSize: $draft.servingSize,
+                                unit: draft.unit)
+
+                HStack {
+                    if draft.provenance != .manual {
+                        Text("Values from \(draft.provenance.displayName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Remove", role: .destructive, action: onDelete)
+                        .font(.footnote)
+                }
+            }
         }
         .padding(12)
-        .background(AppTheme.subtleFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(AppTheme.subtleFill.opacity(0.55),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .alert("Remove \(draft.name.isEmpty ? "this ingredient" : draft.name)?",
                isPresented: $showRemovePrompt) {
             Button("Remove", role: .destructive, action: onDelete)
@@ -189,7 +210,7 @@ struct IngredientCard: View {
                 draft.quantity = draft.unit.step
             }
         } message: {
-            Text("The quantity reached zero.")
+            Text("The amount reached zero.")
         }
     }
 }

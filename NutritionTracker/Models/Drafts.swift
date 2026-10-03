@@ -45,6 +45,17 @@ struct FoodEntryDraft: Identifiable, Codable, Equatable, Sendable {
         return total.calories > 0 || total.protein > 0 || total.carbs > 0 || total.fat > 0
     }
 
+    /// The untouched starter card Add Meal always shows. A scanned or
+    /// photographed food replaces it rather than stacking on top of it.
+    var isBlank: Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && nutritionPerServing == .zero
+            && ingredients.isEmpty
+            && source == .manual
+            && barcode == nil
+            && photoPath == nil
+    }
+
     var hasLowConfidenceItems: Bool {
         if let confidence, confidence < NutritionConstants.lowConfidenceThreshold { return true }
         return ingredients.contains(where: \.isLowConfidence)

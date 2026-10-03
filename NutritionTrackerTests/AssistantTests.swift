@@ -181,6 +181,52 @@ final class AssistantResponseDecodingTests: XCTestCase {
     }
 }
 
+/// When Google retires a model name, the service picks a current one from the
+/// provider's model list instead of failing with HTTP 404.
+final class AssistantModelDiscoveryTests: XCTestCase {
+
+    func testPrefersNewestStableFlash() {
+        let picked = OpenAICompatibleAssistantService.pickModel(from: [
+            "models/gemini-2.5-flash",
+            "models/gemini-3.0-flash",
+            "models/gemini-3.1-flash-preview",
+            "models/gemini-3.0-flash-lite",
+            "models/gemini-3.0-pro",
+            "models/text-embedding-004"
+        ], excluding: "gemini-2.5-flash")
+        XCTAssertEqual(picked, "gemini-3.0-flash")
+    }
+
+    func testNeverReturnsTheModelThatJustFailed() {
+        let picked = OpenAICompatibleAssistantService.pickModel(
+            from: ["gemini-2.5-flash", "gemini-2.5-pro"], excluding: "gemini-2.5-flash")
+        XCTAssertEqual(picked, "gemini-2.5-pro")
+    }
+
+    func testSkipsSpecialisedModels() {
+        let picked = OpenAICompatibleAssistantService.pickModel(from: [
+            "gemini-3.0-flash-image", "gemini-3.0-flash-tts", "gemini-embedding-001",
+            "gemini-3.0-flash-live", "gemini-2.0-flash"
+        ], excluding: "x")
+        XCTAssertEqual(picked, "gemini-2.0-flash")
+    }
+
+    func testNoSuitableModelReturnsNil() {
+        XCTAssertNil(OpenAICompatibleAssistantService.pickModel(
+            from: ["text-embedding-004", "imagen-4"], excluding: "x"))
+    }
+
+    func testStatusMapping() {
+        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 404, model: "m")) {
+            XCTAssertEqual($0 as? AssistantServiceError, .modelUnavailable(model: "m"))
+        }
+        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 429, model: "m")) {
+            XCTAssertEqual($0 as? AssistantServiceError, .rateLimited)
+        }
+        XCTAssertNoThrow(try OpenAICompatibleAssistantService.check(status: 200, model: "m"))
+    }
+}
+
 final class AssistantRequestEncodingTests: XCTestCase {
 
     func testToolResultsBecomeSeparateToolMessages() {

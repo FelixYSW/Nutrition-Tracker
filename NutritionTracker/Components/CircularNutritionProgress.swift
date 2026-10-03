@@ -313,9 +313,9 @@ struct CalorieHeroCard: View {
                 RangeRing(progress: progress,
                           bandStart: range.bandFractions().start,
                           tint: AppTheme.color(for: .calories),
-                          bandTint: AppTheme.accentFill,
+                          bandTint: AppTheme.within,
                           lineWidth: 12,
-                          trackColor: Color.white.opacity(0.55))
+                          trackColor: AppTheme.heroTrack)
                 Text("\(Int((min(progress, 9.99) * 100).rounded()))%")
                     .font(.system(.title3, design: .rounded).weight(.heavy))
                     .monospacedDigit()

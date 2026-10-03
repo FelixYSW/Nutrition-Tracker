@@ -128,7 +128,7 @@ struct OnboardingView: View {
                 Divider()
 
                 Toggle("I have a target weight", isOn: $input.hasTargetWeight)
-                    .tint(AppTheme.accentFill)
+                    .tint(AppTheme.nativeSwitch)
                     .onChange(of: input.hasTargetWeight) { _, isOn in
                         if isOn, input.targetWeightKg <= 0 {
                             input.targetWeightKg = input.weightKg
@@ -143,7 +143,7 @@ struct OnboardingView: View {
                 Divider()
 
                 Toggle("I know my body-fat percentage", isOn: $input.hasBodyFat)
-                    .tint(AppTheme.accentFill)
+                    .tint(AppTheme.nativeSwitch)
                     .onChange(of: input.hasBodyFat) { _, isOn in
                         if isOn, input.bodyFatPercent <= 0 { input.bodyFatPercent = 20 }
                     }

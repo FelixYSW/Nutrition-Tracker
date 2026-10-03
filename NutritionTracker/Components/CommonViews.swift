@@ -104,7 +104,7 @@ struct LoadingAnalysisView: View {
     private func icon(for candidate: AnalysisStage) -> some View {
         if candidate.order < stage.order {
             Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(AppTheme.accentFill)
+                .foregroundStyle(AppTheme.within)
                 .accessibilityHidden(true)
         } else if candidate.order == stage.order {
             ProgressView()
@@ -127,15 +127,19 @@ struct NumericEntryField: View {
     @Binding var value: Double
     var unitLabel: String?
     var allowsDecimal: Bool = true
+    /// Hidden when the field sits inline after its own label.
+    var showsTitle: Bool = true
 
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
+            if showsTitle {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
             HStack(spacing: 4) {
                 TextField("0", text: $text)
                     .keyboardType(allowsDecimal ? .decimalPad : .numberPad)
@@ -179,36 +183,56 @@ struct NumericEntryField: View {
     }
 }
 
-/// Editor for one nutrition payload. Labels state clearly that figures are
-/// *per serving size*, which is the usual source of confusion.
+/// Editor for the label values of a food: "per 100 g, it has ...".
+///
+/// The serving size sits inline in the heading rather than as one more field,
+/// because it is what the numbers below refer to - the usual source of
+/// confusion. The amount actually eaten is set separately, on the card.
 struct NutritionEditor: View {
     @Binding var nutrition: Nutrition
     @Binding var servingSize: Double
     let unit: ServingUnit
     var showsExtendedFields: Bool = false
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Per \(AppFormatters.quantity(servingSize, unit: unit)) \(unit.shortLabel)")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
+    @State private var showsMore = false
 
-            let columns = [GridItem(.adaptive(minimum: 88), spacing: 8)]
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("Label values per")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 NumericEntryField(title: "Serving size", value: $servingSize,
-                                  unitLabel: unit.shortLabel)
+                                  unitLabel: unit.shortLabel, showsTitle: false)
+                    .frame(width: 96)
+                Spacer(minLength: 0)
+            }
+
+            let columns = [GridItem(.adaptive(minimum: 92), spacing: 8)]
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                 NumericEntryField(title: "Calories", value: $nutrition.calories,
                                   unitLabel: "kcal")
                 NumericEntryField(title: "Protein", value: $nutrition.protein, unitLabel: "g")
                 NumericEntryField(title: "Carbs", value: $nutrition.carbs, unitLabel: "g")
                 NumericEntryField(title: "Fat", value: $nutrition.fat, unitLabel: "g")
                 NumericEntryField(title: "Fibre", value: $nutrition.fibre, unitLabel: "g")
-                if showsExtendedFields {
+                if showsExtendedFields && showsMore {
                     NumericEntryField(title: "Sugar", value: $nutrition.sugar, unitLabel: "g")
                     NumericEntryField(title: "Sodium", value: $nutrition.sodium, unitLabel: "mg")
                 }
             }
+
+            if showsExtendedFields {
+                Button(showsMore ? "Fewer nutrients" : "Sugar and sodium") {
+                    withAnimation(.snappy) { showsMore.toggle() }
+                }
+                .font(.footnote)
+                .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.accent)
+            }
         }
+        // Open automatically if a scanned label already filled them in.
+        .onAppear { if nutrition.sugar > 0 || nutrition.sodium > 0 { showsMore = true } }
     }
 }
 
@@ -245,7 +269,7 @@ struct SliderEntryRow: View {
                 set: { value = $0 }),
                    in: range,
                    step: step)
-                .tint(AppTheme.accentFill)
+                .tint(AppTheme.nativeSlider)
                 .accessibilityLabel(title)
                 .accessibilityValue(valueText)
         }

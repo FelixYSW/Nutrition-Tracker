@@ -29,11 +29,15 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                rangeSummarySection
-                profileSection
-                targetsSection
-                dataSection
-                aboutSection
+                Group {
+                    rangeSummarySection
+                    profileSection
+                    targetsSection
+                    dataSection
+                    aboutSection
+                }
+                // Soft card rows instead of the system's pure white.
+                .listRowBackground(AppTheme.cardBackground)
             }
             .scrollContentBackground(.hidden)
             .background(AppTheme.background.ignoresSafeArea())
@@ -205,13 +209,13 @@ struct SettingsView: View {
                         if !newValue { ImageStore.deleteAll() }
                         save()
                     }))
-            .tint(AppTheme.accentFill)
+            .tint(AppTheme.nativeSwitch)
 
             Toggle("Keep my corrections for future training",
                    isOn: Binding(
                     get: { settings.storeCorrectionsForTraining },
                     set: { settings.storeCorrectionsForTraining = $0; save() }))
-            .tint(AppTheme.accentFill)
+            .tint(AppTheme.nativeSwitch)
 
             Button("Export backup") { exportBackup() }
 
@@ -355,44 +359,50 @@ struct ProfileEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Body") {
-                    DatePicker("Date of birth", selection: $profile.dateOfBirth,
-                               displayedComponents: .date)
-                    SliderEntryRow(title: "Height", value: $profile.heightCm,
-                                   range: 120...220, step: 1, unitLabel: "cm")
-                    SliderEntryRow(title: "Weight", value: $profile.weightKg,
-                                   range: 30...200, step: 0.5, unitLabel: "kg",
-                                   fractionDigits: 1)
-                    Picker("Sex", selection: Binding(
-                        get: { profile.sex }, set: { profile.sex = $0 })) {
-                        ForEach(BiologicalSex.allCases) { Text($0.displayName).tag($0) }
+                Group {
+                    Section("Body") {
+                        DatePicker("Date of birth", selection: $profile.dateOfBirth,
+                                   displayedComponents: .date)
+                        SliderEntryRow(title: "Height", value: $profile.heightCm,
+                                       range: 120...220, step: 1, unitLabel: "cm")
+                        SliderEntryRow(title: "Weight", value: $profile.weightKg,
+                                       range: 30...200, step: 0.5, unitLabel: "kg",
+                                       fractionDigits: 1)
+                        Picker("Sex", selection: Binding(
+                            get: { profile.sex }, set: { profile.sex = $0 })) {
+                            ForEach(BiologicalSex.allCases) { Text($0.displayName).tag($0) }
+                        }
                     }
-                }
 
-                Section("Goal") {
-                    Picker("Goal", selection: Binding(
-                        get: { profile.goal }, set: { profile.goal = $0 })) {
-                        ForEach(FitnessGoal.allCases) { Text($0.displayName).tag($0) }
+                    Section("Goal") {
+                        Picker("Goal", selection: Binding(
+                            get: { profile.goal }, set: { profile.goal = $0 })) {
+                            ForEach(FitnessGoal.allCases) { Text($0.displayName).tag($0) }
+                        }
+                        Picker("Activity", selection: Binding(
+                            get: { profile.activity }, set: { profile.activity = $0 })) {
+                            ForEach(ActivityLevel.allCases) { Text($0.displayName).tag($0) }
+                        }
                     }
-                    Picker("Activity", selection: Binding(
-                        get: { profile.activity }, set: { profile.activity = $0 })) {
-                        ForEach(ActivityLevel.allCases) { Text($0.displayName).tag($0) }
-                    }
-                }
 
-                Section("Training") {
-                    SliderEntryRow(title: "Strength sessions per week",
-                                   value: Binding(
-                                    get: { Double(profile.strengthSessionsPerWeek) },
-                                    set: { profile.strengthSessionsPerWeek = Int($0.rounded()) }),
-                                   range: 0...14, step: 1)
-                    SliderEntryRow(title: "Cardio sessions per week",
-                                   value: Binding(
-                                    get: { Double(profile.cardioSessionsPerWeek) },
-                                    set: { profile.cardioSessionsPerWeek = Int($0.rounded()) }),
-                                   range: 0...14, step: 1)
+                    Section("Training") {
+                        SliderEntryRow(title: "Strength sessions per week",
+                                       value: Binding(
+                                        get: { Double(profile.strengthSessionsPerWeek) },
+                                        set: { profile.strengthSessionsPerWeek = Int($0.rounded()) }),
+                                       range: 0...14, step: 1)
+                        SliderEntryRow(title: "Cardio sessions per week",
+                                       value: Binding(
+                                        get: { Double(profile.cardioSessionsPerWeek) },
+                                        set: { profile.cardioSessionsPerWeek = Int($0.rounded()) }),
+                                       range: 0...14, step: 1)
+                    }
                 }
+                // Soft card rows instead of the system's pure white.
+                .listRowBackground(AppTheme.cardBackground)
             }
+            .scrollContentBackground(.hidden)
+            .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Edit profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -453,53 +463,59 @@ struct TargetsEditorView: View {
 struct AttributionView: View {
     var body: some View {
         List {
-            Section("Nutrition data") {
-                AttributionRow(
-                    title: "MyFCD \u{2014} Malaysian Food Composition Database",
-                    detail: "Ministry of Health Malaysia. Lab-measured values for "
-                        + "local foods, compiled by hand into the bundled reference "
-                        + "table. Check its terms before redistributing.")
-                AttributionRow(
-                    title: "Open Food Facts",
-                    detail: "Barcode product data, contributed by the community. "
-                        + "Product data under the Open Database Licence (ODbL).")
-            }
+            Group {
+                Section("Nutrition data") {
+                    AttributionRow(
+                        title: "MyFCD \u{2014} Malaysian Food Composition Database",
+                        detail: "Ministry of Health Malaysia. Lab-measured values for "
+                            + "local foods, compiled by hand into the bundled reference "
+                            + "table. Check its terms before redistributing.")
+                    AttributionRow(
+                        title: "Open Food Facts",
+                        detail: "Barcode product data, contributed by the community. "
+                            + "Product data under the Open Database Licence (ODbL).")
+                }
 
-            Section("Model training datasets") {
-                AttributionRow(
-                    title: "FoodSeg103",
-                    detail: "Food segmentation base training set for Model A. "
-                        + "Research use; check its licence before distribution.")
-                AttributionRow(
-                    title: "Nutrition5k",
-                    detail: "Google. Mass and nutrition labels for Model B. "
-                        + "Captured on a fixed overhead rig with depth sensing.")
-                AttributionRow(
-                    title: "Malaysia Food-11",
-                    detail: "Kaggle. Small 11-class Malaysian starter set, "
-                        + "used for fine-tuning.")
-                AttributionRow(
-                    title: "MF-150",
-                    detail: "IEEE DataPort. Multilabel Malaysian foods dataset for "
-                        + "ingredient detection.")
-                AttributionRow(
-                    title: "Malaysian Food Recognition 1 & 2",
-                    detail: "Roboflow Universe, CC BY 4.0. Community "
-                        + "object-detection sets.")
-            }
+                Section("Model training datasets") {
+                    AttributionRow(
+                        title: "FoodSeg103",
+                        detail: "Food segmentation base training set for Model A. "
+                            + "Research use; check its licence before distribution.")
+                    AttributionRow(
+                        title: "Nutrition5k",
+                        detail: "Google. Mass and nutrition labels for Model B. "
+                            + "Captured on a fixed overhead rig with depth sensing.")
+                    AttributionRow(
+                        title: "Malaysia Food-11",
+                        detail: "Kaggle. Small 11-class Malaysian starter set, "
+                            + "used for fine-tuning.")
+                    AttributionRow(
+                        title: "MF-150",
+                        detail: "IEEE DataPort. Multilabel Malaysian foods dataset for "
+                            + "ingredient detection.")
+                    AttributionRow(
+                        title: "Malaysian Food Recognition 1 & 2",
+                        detail: "Roboflow Universe, CC BY 4.0. Community "
+                            + "object-detection sets.")
+                }
 
-            Section {
-                Text("Local-dish recognition starts weak: the public Malaysian "
-                     + "datasets are small, and Model B's portion estimates were "
-                     + "trained only on Nutrition5k, so its accuracy on local "
-                     + "food is unverified. Your own corrections are what "
-                     + "improve it over time.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("Accuracy")
+                Section {
+                    Text("Local-dish recognition starts weak: the public Malaysian "
+                         + "datasets are small, and Model B's portion estimates were "
+                         + "trained only on Nutrition5k, so its accuracy on local "
+                         + "food is unverified. Your own corrections are what "
+                         + "improve it over time.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Accuracy")
+                }
             }
+            // Soft card rows instead of the system's pure white.
+            .listRowBackground(AppTheme.cardBackground)
         }
+        .scrollContentBackground(.hidden)
+        .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("Data sources")
         .navigationBarTitleDisplayMode(.inline)
     }

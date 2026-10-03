@@ -3,33 +3,56 @@ import SwiftUI
 import UIKit
 #endif
 
-/// Visual language for the app: a calm, light-blue palette with soft cards,
-/// range-aware nutrient colours and glass surfaces for floating controls.
+/// Visual language for the app: a calm "paper and ink" palette.
 ///
-/// Colours are adaptive (light and dark) and text always uses a contrast-safe
-/// blue, while the lighter sky blue is reserved for fills that carry dark text
-/// (spec section 33).
+/// Light mode is a warm off-white with soft charcoal text; dark mode is a soft
+/// charcoal with off-white text. Neither uses pure #FFFFFF or #000000: pure
+/// white glares and pure black on white has harsh contrast, both of which are
+/// tiring to read for long. Contrast stays well above WCAG AA (spec section 33).
+///
+/// The main (accent) colour is the ink itself, so the interface is monochrome
+/// and colour is reserved for meaning: the nutrient rings and range states.
 enum AppTheme {
 
     // MARK: Colours
 
-    /// Contrast-safe blue for text, icons and links on a card or page.
-    static var accent: Color { .adaptive(light: 0x2F6FC4, dark: 0x8DBBF5) }
+    /// Body text and icons. Soft charcoal / soft off-white.
+    static var ink: Color { .adaptive(light: inkLight, dark: inkDark) }
+    static let inkLight: UInt32 = 0x2A2926
+    static let inkDark: UInt32 = 0xE7E4DE
 
-    /// Soft sky blue for fills: buttons, switches, slider tracks, in-range bars.
-    /// Always paired with `onAccent` text, never white.
-    static var accentFill: Color { .adaptive(light: 0x5E9EEE, dark: 0x6AA6F2) }
+    /// Main colour for links, icons, the selected tab and primary buttons.
+    static var accent: Color { ink }
 
-    /// Dark navy used on top of `accentFill`.
-    static var onAccent: Color { Color(hex: 0x0F2238) }
+    /// Fill for primary buttons and selected chips. Always paired with
+    /// `onAccent` text.
+    static var accentFill: Color { .adaptive(light: 0x2F2E2B, dark: 0xE2DFD8) }
 
-    static var background: Color { .adaptive(light: 0xF8FAFC, dark: 0x0A111C) }
-    static var cardBackground: Color { .adaptive(light: 0xFFFFFF, dark: 0x141D2B) }
-    static var subtleFill: Color { .adaptive(light: 0xE8EDF4, dark: 0x243245) }
+    /// Text on top of `accentFill`: the paper colour, inverted per mode.
+    static var onAccent: Color { .adaptive(light: 0xF6F4EF, dark: 0x1F1E1C) }
 
-    /// Pale blue card used for the hero summaries.
-    static var skyCard: Color { .adaptive(light: 0xE9F1FB, dark: 0x1B2B42) }
-    static var skyCardText: Color { .adaptive(light: 0x3A5F8F, dark: 0xA9C7EE) }
+    /// Stock iOS control colours. Switches and sliders use these rather than
+    /// the app accent so they look exactly like the system's own controls; an
+    /// explicit tint is needed because the app-wide accent tint would
+    /// otherwise recolour them.
+    static var nativeSwitch: Color { Color(.systemGreen) }
+    static var nativeSlider: Color { Color(.systemBlue) }
+
+    /// Page background: warm paper / soft charcoal.
+    static var background: Color { .adaptive(light: 0xF3F1EC, dark: 0x1B1A18) }
+    /// Cards sit one step lighter (light) or lighter-grey (dark) than the page.
+    static var cardBackground: Color { .adaptive(light: 0xFAF9F6, dark: 0x252421) }
+    static var subtleFill: Color { .adaptive(light: 0xE6E3DC, dark: 0x33312D) }
+
+    /// Tinted card used for the hero summaries.
+    static var skyCard: Color { .adaptive(light: 0xEAE7E0, dark: 0x2B2A27) }
+    static var skyCardText: Color { .adaptive(light: 0x55524C, dark: 0xC9C5BD) }
+    /// Empty ring track on a hero card.
+    static var heroTrack: Color { .adaptive(light: 0xF8F6F1, dark: 0x3A3834) }
+
+    /// Calm green for "in range". The accent is now monochrome, so being on
+    /// track gets its own colour rather than reading as plain ink.
+    static var within: Color { .adaptive(light: 0x4F8A63, dark: 0x7DB892) }
 
     /// Warm colour for "over". Deliberately not red: going over is a heads-up,
     /// not an error.
@@ -56,7 +79,7 @@ enum AppTheme {
     static func color(for state: RangeState, nutrient: Nutrient) -> Color {
         switch state {
         case .under: color(for: nutrient)
-        case .within: accentFill
+        case .within: within
         case .over: over
         }
     }
@@ -66,8 +89,8 @@ enum AppTheme {
     /// calorie bar can never be mistaken for an "over" one.
     static func summaryColor(for state: RangeState) -> Color {
         switch state {
-        case .under: .adaptive(light: 0xB6C2BA, dark: 0x56657A)
-        case .within: accentFill
+        case .under: .adaptive(light: 0xC2BEB6, dark: 0x58554F)
+        case .within: within
         case .over: over
         }
     }
@@ -93,20 +116,40 @@ extension Color {
     /// A colour that follows light and dark mode without an asset catalogue.
     static func adaptive(light: UInt32, dark: UInt32) -> Color {
         #if canImport(UIKit)
+        return Color(UIColor.adaptive(light: light, dark: dark))
+        #else
+        return Color(hex: light)
+        #endif
+    }
+}
+
+#if canImport(UIKit)
+extension UIColor {
+    /// UIKit twin of `Color.adaptive`, for the few places UIKit draws text
+    /// itself (navigation bar titles).
+    static func adaptive(light: UInt32, dark: UInt32) -> UIColor {
         func ui(_ hex: UInt32) -> UIColor {
             UIColor(red: CGFloat((hex >> 16) & 0xFF) / 255,
                     green: CGFloat((hex >> 8) & 0xFF) / 255,
                     blue: CGFloat(hex & 0xFF) / 255,
                     alpha: 1)
         }
-        return Color(UIColor { traits in
+        return UIColor { traits in
             traits.userInterfaceStyle == .dark ? ui(dark) : ui(light)
-        })
-        #else
-        return Color(hex: light)
-        #endif
+        }
     }
 }
+
+extension AppTheme {
+    /// Navigation bar titles are drawn by UIKit, so they need the ink colour
+    /// set separately or they stay pure black / pure white.
+    static func applyNavigationBarTextColour() {
+        let ink = UIColor.adaptive(light: inkLight, dark: inkDark)
+        UINavigationBar.appearance().titleTextAttributes = [.foregroundColor: ink]
+        UINavigationBar.appearance().largeTitleTextAttributes = [.foregroundColor: ink]
+    }
+}
+#endif
 
 // MARK: - Layout modifiers
 

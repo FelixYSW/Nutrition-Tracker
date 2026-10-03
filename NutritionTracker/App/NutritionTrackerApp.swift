@@ -8,6 +8,12 @@ struct NutritionTrackerApp: App {
     @State private var dayObserver = DayChangeObserver()
     @State private var appRouter = AppRouter()
 
+    init() {
+        #if canImport(UIKit)
+        AppTheme.applyNavigationBarTextColour()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

@@ -35,9 +35,14 @@ enum AssistantServiceError: LocalizedError, Equatable {
     case requestFailed(detail: String)
     case malformedResponse(detail: String)
     case rateLimited
+    /// HTTP 404: the configured model name doesn't exist (retired or mistyped),
+    /// and no replacement could be found automatically.
+    case modelUnavailable(model: String)
 
     var errorDescription: String? {
         switch self {
+        case .modelUnavailable:
+            "The assistant's AI model isn't available right now. Try again later."
         case .notConfigured:
             "The assistant isn't available in this version of the app."
         case .offline:
@@ -83,13 +88,19 @@ struct UnconfiguredAssistantService: AssistantServing {
 struct OpenAICompatibleAssistantService: AssistantServing {
 
     static let defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
-    /// Overridable with the ASSISTANT_MODEL repository variable, because model
-    /// names get retired. Check Google AI Studio for current names.
+    /// Starting guess only. Google retires model names, so when this (or a
+    /// remembered model) returns 404 the service looks up a current model and
+    /// switches to it automatically. ASSISTANT_MODEL pins one explicitly.
     static let defaultModel = "gemini-2.5-flash"
+
+    /// Where an auto-discovered model is remembered between launches.
+    static let discoveredModelKey = "assistant.discoveredModel"
 
     private let session: URLSession
     private let baseURL: String
-    private let model: String
+    /// Set when ASSISTANT_MODEL was provided at build time; never overridden.
+    private let pinnedModel: String?
+    private let defaults: UserDefaults
 
     init(session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -98,14 +109,21 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         return URLSession(configuration: configuration)
     }(),
          baseURL: String = BundledAPIKey.assistantBaseURL ?? Self.defaultBaseURL,
-         model: String = BundledAPIKey.assistantModel ?? Self.defaultModel) {
+         pinnedModel: String? = BundledAPIKey.assistantModel,
+         defaults: UserDefaults = .standard) {
         self.session = session
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
-        self.model = model
+        self.pinnedModel = pinnedModel
+        self.defaults = defaults
     }
 
     var isConfigured: Bool {
         BundledAPIKey.hasAssistantKey
+    }
+
+    /// Pinned model, else the last model that was discovered to work, else the default.
+    private var currentModel: String {
+        pinnedModel ?? defaults.string(forKey: Self.discoveredModelKey) ?? Self.defaultModel
     }
 
     func send(turns: [AssistantTurn],
@@ -115,10 +133,32 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         guard let apiKey = BundledAPIKey.assistant else {
             throw AssistantServiceError.notConfigured
         }
+
+        let model = currentModel
+        let (data, status) = try await postChat(model: model, apiKey: apiKey, turns: turns,
+                                                contextJSON: contextJSON, tools: tools)
+
+        // 404 means the model name no longer exists. Unless it was pinned on
+        // purpose, find a current one, remember it, and retry once.
+        if status == 404, pinnedModel == nil,
+           let replacement = try await discoverModel(apiKey: apiKey, excluding: model) {
+            defaults.set(replacement, forKey: Self.discoveredModelKey)
+            let (retryData, retryStatus) = try await postChat(model: replacement, apiKey: apiKey,
+                                                              turns: turns, contextJSON: contextJSON,
+                                                              tools: tools)
+            try Self.check(status: retryStatus, model: replacement)
+            return try Self.decode(data: retryData)
+        }
+
+        try Self.check(status: status, model: model)
+        return try Self.decode(data: data)
+    }
+
+    private func postChat(model: String, apiKey: String, turns: [AssistantTurn],
+                          contextJSON: String, tools: [AssistantTool]) async throws -> (Data, Int) {
         guard let url = URL(string: "\(baseURL)/chat/completions"), url.scheme == "https" else {
             throw AssistantServiceError.requestFailed(detail: "invalid assistant URL")
         }
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -130,29 +170,85 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         } catch {
             throw AssistantServiceError.requestFailed(detail: "could not encode the request")
         }
+        return try await perform(request)
+    }
 
-        let data: Data
-        let response: URLResponse
+    private func perform(_ request: URLRequest) async throws -> (Data, Int) {
         do {
-            (data, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
+            return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
         } catch let error as URLError
             where error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
             throw AssistantServiceError.offline
         } catch {
             throw AssistantServiceError.requestFailed(detail: error.localizedDescription)
         }
+    }
 
-        if let http = response as? HTTPURLResponse {
-            // Free tiers rate-limit; this is the expected error under load.
-            if http.statusCode == 429 { throw AssistantServiceError.rateLimited }
-            guard (200..<300).contains(http.statusCode) else {
-                // Never include the body: it can echo the request, which holds
-                // the user's nutrition context (spec section 39).
-                throw AssistantServiceError.requestFailed(detail: "HTTP \(http.statusCode)")
+    static func check(status: Int, model: String) throws {
+        // Free tiers rate-limit; this is the expected error under load.
+        if status == 429 { throw AssistantServiceError.rateLimited }
+        if status == 404 { throw AssistantServiceError.modelUnavailable(model: model) }
+        guard (200..<300).contains(status) else {
+            // Never include the body: it can echo the request, which holds
+            // the user's nutrition context (spec section 39).
+            throw AssistantServiceError.requestFailed(detail: "HTTP \(status)")
+        }
+    }
+
+    // MARK: Model discovery
+
+    /// Asks the provider which models exist and picks one suitable for chat.
+    private func discoverModel(apiKey: String, excluding failed: String) async throws -> String? {
+        guard let url = URL(string: "\(baseURL)/models") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        let (data, status) = try await perform(request)
+        guard (200..<300).contains(status) else { return nil }
+
+        struct List: Decodable {
+            struct Model: Decodable { let id: String }
+            let data: [Model]
+        }
+        guard let list = try? JSONDecoder().decode(List.self, from: data) else { return nil }
+        return Self.pickModel(from: list.data.map(\.id), excluding: failed)
+    }
+
+    /// Chooses the best general chat model from a provider's model list.
+    ///
+    /// Prefers Gemini Flash models (fast, and on the free tier), stable over
+    /// preview, newest version first, full over "lite". Specialised models
+    /// (embedding, image, audio, TTS, live) are skipped.
+    static func pickModel(from ids: [String], excluding failed: String) -> String? {
+        let skip = ["embed", "image", "tts", "audio", "live", "vision", "aqa", "imagen", "veo", "learnlm", "gemma"]
+        let candidates = ids
+            .map { $0.hasPrefix("models/") ? String($0.dropFirst("models/".count)) : $0 }
+            .filter { id in
+                let lower = id.lowercased()
+                return id != failed && lower.contains("gemini") && !skip.contains { lower.contains($0) }
             }
+
+        func version(_ id: String) -> Double {
+            // "gemini-3.1-flash" -> 3.1
+            let parts = id.lowercased().split(separator: "-")
+            guard let index = parts.firstIndex(of: "gemini"), index + 1 < parts.count else { return 0 }
+            return Double(parts[index + 1]) ?? 0
+        }
+        func isPreview(_ id: String) -> Bool {
+            let lower = id.lowercased()
+            return lower.contains("preview") || lower.contains("exp")
         }
 
-        return try Self.decode(data: data)
+        let ranked = candidates.sorted { lhs, rhs in
+            let lFlash = lhs.contains("flash"), rFlash = rhs.contains("flash")
+            if lFlash != rFlash { return lFlash }
+            if isPreview(lhs) != isPreview(rhs) { return !isPreview(lhs) }
+            if version(lhs) != version(rhs) { return version(lhs) > version(rhs) }
+            let lLite = lhs.contains("lite"), rLite = rhs.contains("lite")
+            if lLite != rLite { return !lLite }
+            return lhs < rhs
+        }
+        return ranked.first
     }
 
     // MARK: Request

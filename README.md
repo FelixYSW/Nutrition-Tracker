@@ -183,7 +183,7 @@ Add these under **Settings → Secrets and variables → Actions → Variables**
 | `ASSISTANT_MODEL` | `gemini-2.5-flash` | a newer Gemini model name from AI Studio |
 | `ASSISTANT_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | any OpenAI-compatible API, e.g. `https://api.deepseek.com` |
 
-Google retires model names over time. If the assistant starts failing with an HTTP 404, set `ASSISTANT_MODEL` to a current one.
+Google retires model names over time. If the model returns HTTP 404, the app looks up the current list of models, switches to the newest stable Gemini Flash model, and remembers it on that phone. If you set `ASSISTANT_MODEL`, that model is always used and never auto-switched.
 
 ### How it gets into the app
 

@@ -217,7 +217,7 @@ struct EditEntrySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: AppTheme.pageSpacing) {
-                    FoodDraftCard(draft: $draft, onDelete: nil)
+                    FoodDraftCard(draft: $draft, onDelete: nil, showsTimePicker: true)
                 }
                 .appPageContent()
             }
