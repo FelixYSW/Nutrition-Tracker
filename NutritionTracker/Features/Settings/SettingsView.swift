@@ -30,11 +30,12 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Group {
-                    rangeSummarySection
-                    profileSection
-                    targetsSection
-                    dataSection
+                    summarySection
+                    planSection
+                    privacySection
+                    backupSection
                     aboutSection
+                    deleteSection
                 }
                 // Soft card rows instead of the system's pure white.
                 .listRowBackground(AppTheme.cardBackground)
@@ -53,6 +54,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $isShowingTargetsEditor) {
                 if let target { TargetsEditorView(target: target) }
+            }
+            .sheet(isPresented: $isShowingExporter) {
+                if let exportURL { ShareSheet(url: exportURL) }
             }
             .fileImporter(isPresented: $isShowingImporter,
                           allowedContentTypes: [.json],
@@ -96,149 +100,141 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: Range summary
+    // MARK: Summary
 
-    /// Pale blue card at the top: today's calorie range and the profile it
-    /// came from.
-    private var rangeSummarySection: some View {
+    /// Who the targets are for, and the headline calorie range. The only place
+    /// the profile basics are shown, so nothing below repeats them.
+    private var summarySection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("YOUR DAILY RANGE")
-                    .font(.caption.weight(.bold))
-                    .tracking(0.8)
-                    .foregroundStyle(AppTheme.skyCardText)
-                if let target {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(AppFormatters.range(target.ranges.calories))
-                            .font(.system(size: 30, weight: .heavy, design: .rounded))
-                            .monospacedDigit()
-                        Text("kcal")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.skyCardText)
-                    }
-                } else {
-                    Text("No targets yet")
-                        .font(.title3.weight(.bold))
-                }
-                if let profile {
-                    Text("\(profile.goal.displayName) \u{00B7} "
-                         + "\(AppFormatters.amount(profile.heightCm)) cm \u{00B7} "
-                         + "\(AppFormatters.amount(profile.weightKg)) kg")
-                        .font(.footnote)
+            Button {
+                if profile != nil { isShowingProfileEditor = true }
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 44))
                         .foregroundStyle(AppTheme.skyCardText)
-                }
-            }
-            .appSkyCard()
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-        }
-    }
-
-    // MARK: Profile
-
-    private var profileSection: some View {
-        Section("Profile") {
-            if let profile {
-                LabeledContent("Goal", value: profile.goal.displayName)
-                LabeledContent("Activity", value: profile.activity.displayName)
-                LabeledContent("Weight",
-                               value: "\(AppFormatters.amount(profile.weightKg)) kg")
-                LabeledContent("Height",
-                               value: "\(AppFormatters.amount(profile.heightCm)) cm")
-
-                Button("Edit profile") { isShowingProfileEditor = true }
-
-                Button("Recalculate targets") { recalculateTargets() }
-
-                if profile.targetsLikelyStale {
-                    // Targets are never silently recalculated; the user is just
-                    // told that they look stale (spec section 6).
-                    Label("Your profile has changed since these targets were "
-                          + "worked out. Recalculating is optional.",
-                          systemImage: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } else {
-                Text("No profile yet.").foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    // MARK: Targets
-
-    private var targetsSection: some View {
-        Section {
-            if let target {
-                ForEach(Nutrient.allCases) { nutrient in
-                    let range = target.ranges[nutrient]
-                    LabeledContent(nutrient.displayName) {
-                        HStack(spacing: 4) {
-                            Text("\(AppFormatters.range(range)) \(nutrient.unitLabel)")
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        if let profile {
+                            Text(profile.goal.displayName)
+                                .font(.headline)
+                            Text("\(AppFormatters.amount(profile.heightCm)) cm \u{00B7} "
+                                 + "\(AppFormatters.amount(profile.weightKg)) kg \u{00B7} "
+                                 + profile.activity.displayName)
+                                .font(.footnote)
+                                .foregroundStyle(AppTheme.skyCardText)
+                        } else {
+                            Text("No profile yet").font(.headline)
+                        }
+                        if let target {
+                            Text("\(AppFormatters.range(target.ranges.calories)) kcal a day")
+                                .font(.footnote.weight(.semibold))
                                 .monospacedDigit()
-                            if range.isManuallyModified {
-                                Image(systemName: "pencil")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityLabel("Edited by you")
-                            }
                         }
                     }
+                    Spacer(minLength: 4)
+                    if profile != nil {
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
                 }
-                Button("Edit daily ranges") { isShowingTargetsEditor = true }
-            } else {
-                Text("No targets yet.").foregroundStyle(.secondary)
+                .contentShape(Rectangle())
             }
-        } header: {
-            Text("Daily Targets")
-        } footer: {
-            Text("Each nutrient is a range with a minimum and a maximum, because "
-                 + "the formulas behind them are estimates. Edit either bound.")
+            .buttonStyle(.plain)
+            .accessibilityHint("Edit profile")
         }
     }
 
-    // MARK: Data
+    // MARK: Plan
 
-    private var dataSection: some View {
+    private var planSection: some View {
         Section {
-            Toggle("Keep analysed photos",
-                   isOn: Binding(
-                    get: { settings.retainAnalysedImages },
-                    set: { newValue in
-                        settings.retainAnalysedImages = newValue
-                        if !newValue { ImageStore.deleteAll() }
-                        save()
-                    }))
-            .tint(AppTheme.nativeSwitch)
-
-            Toggle("Keep my corrections for future training",
-                   isOn: Binding(
-                    get: { settings.storeCorrectionsForTraining },
-                    set: { settings.storeCorrectionsForTraining = $0; save() }))
-            .tint(AppTheme.nativeSwitch)
-
-            Button("Export backup") { exportBackup() }
-
-            Button("Import backup") { isShowingImporter = true }
-
-            if let importSummary {
-                Text(importSummary).font(.caption).foregroundStyle(.secondary)
+            SettingsRow(title: "Profile", systemImage: "figure.walk",
+                        detail: profile.map { "Goal, body and activity \u{00B7} \($0.age()) yrs" }) {
+                isShowingProfileEditor = true
             }
+            .disabled(profile == nil)
 
-            Button("Delete all data", role: .destructive) {
-                isConfirmingDeleteAll = true
+            SettingsRow(title: "Daily ranges", systemImage: "target",
+                        detail: targetsDetail) {
+                isShowingTargetsEditor = true
+            }
+            .disabled(target == nil)
+
+            Button {
+                recalculateTargets()
+            } label: {
+                Label("Recalculate ranges", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(profile == nil)
+        } header: {
+            Text("Your plan")
+        } footer: {
+            if profile?.targetsLikelyStale == true {
+                // Targets are never silently recalculated; the user is just told
+                // that they look stale (spec section 6).
+                Text("Your profile has changed since these ranges were worked out. "
+                     + "Recalculating keeps any value you edited by hand.")
+            } else {
+                Text("Each nutrient has a minimum and a maximum, because the formulas "
+                     + "behind them are estimates.")
+            }
+        }
+    }
+
+    private var targetsDetail: String? {
+        guard let target else { return nil }
+        let edited = Nutrient.allCases.filter { target.ranges[$0].isManuallyModified }.count
+        return edited == 0 ? "Calculated for you" : "\(edited) edited by you"
+    }
+
+    // MARK: Photos and privacy
+
+    private var privacySection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { settings.retainAnalysedImages },
+                set: { newValue in
+                    settings.retainAnalysedImages = newValue
+                    if !newValue { ImageStore.deleteAll() }
+                    save()
+                })) {
+                Label("Keep analysed photos", systemImage: "photo")
+            }
+            .tint(AppTheme.nativeSwitch)
+
+            Toggle(isOn: Binding(
+                get: { settings.storeCorrectionsForTraining },
+                set: { settings.storeCorrectionsForTraining = $0; save() })) {
+                Label("Save my corrections", systemImage: "checkmark.bubble")
+            }
+            .tint(AppTheme.nativeSwitch)
+        } header: {
+            Text("Photos and privacy")
+        } footer: {
+            Text("Everything stays on this iPhone. Corrections pair what photo analysis "
+                 + "guessed with what you saved, to help improve it later; they are "
+                 + "never uploaded.")
+        }
+    }
+
+    // MARK: Backup
+
+    private var backupSection: some View {
+        Section {
+            Button { exportBackup() } label: {
+                Label("Export backup", systemImage: "square.and.arrow.up")
+            }
+            Button { isShowingImporter = true } label: {
+                Label("Import backup", systemImage: "square.and.arrow.down")
             }
         } header: {
-            Text("Data")
+            Text("Backup")
         } footer: {
-            Text("Everything is stored on this iPhone only. Deleting the app "
-                 + "removes its database, so export a backup if that matters. "
-                 + "Corrections and photos are never uploaded anywhere.")
-        }
-        .sheet(isPresented: $isShowingExporter) {
-            if let exportURL {
-                ShareSheet(url: exportURL)
-            }
+            Text(importSummary ?? "Deleting the app deletes its data, so export a backup "
+                 + "before you uninstall or switch phones.")
         }
     }
 
@@ -246,17 +242,35 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            LabeledContent("Version", value: Self.versionString)
-            LabeledContent("Food reference rows",
-                           value: "\(LocalNutritionReference.shared.count)")
-            LabeledContent("Ontology entries", value: "\(FoodOntology.shared.count)")
-
-            NavigationLink("Data sources and licences") { AttributionView() }
+            NavigationLink {
+                AttributionView()
+            } label: {
+                Label("Data sources and licences", systemImage: "books.vertical")
+            }
+            LabeledContent {
+                Text(Self.versionString).monospacedDigit()
+            } label: {
+                Label("Version", systemImage: "info.circle")
+            }
         } header: {
             Text("About")
         } footer: {
-            Text("Calculated targets and image-based nutrition estimates are "
-                 + "informational only and are not medical advice.")
+            Text("Calculated ranges and photo-based nutrition are estimates for "
+                 + "information only, not medical advice.")
+        }
+    }
+
+    // MARK: Delete
+
+    /// On its own at the bottom, away from everyday options.
+    private var deleteSection: some View {
+        Section {
+            Button(role: .destructive) {
+                isConfirmingDeleteAll = true
+            } label: {
+                Text("Delete all data")
+                    .frame(maxWidth: .infinity)
+            }
         }
     }
 
@@ -345,6 +359,46 @@ struct SettingsView: View {
         save()
         Haptics.success()
         dismiss()
+    }
+}
+
+// MARK: - Rows
+
+/// A tappable Settings row: icon, title, optional one-line subtitle, chevron.
+/// Opens its editor as a sheet, so it is a button styled like a navigation row.
+struct SettingsRow: View {
+    let title: String
+    let systemImage: String
+    var detail: String?
+    let action: () -> Void
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                        if let detail {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: systemImage)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.4)
     }
 }
 

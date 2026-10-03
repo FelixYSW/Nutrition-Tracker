@@ -106,41 +106,45 @@ struct ScanView: View {
     // MARK: Sections
 
     private var actionsSection: some View {
-        VStack(spacing: 12) {
-            ScanActionButton(title: "Take Photo",
-                             detail: "Photograph a meal and estimate what is in it.",
-                             systemImage: "camera.fill") {
+        VStack(alignment: .leading, spacing: 14) {
+            // Photographing a meal is the main thing this tab is for.
+            ScanTile(title: "Take Photo",
+                     detail: "Photograph your meal and get an estimate",
+                     systemImage: "camera.fill",
+                     style: .hero) {
                 requirePhotoModel { mode = .camera }
             }
 
-            ScanActionButton(title: "Choose Photo",
-                             detail: "Pick one photo from your library.",
-                             systemImage: "photo.on.rectangle") {
-                requirePhotoModel { photoPickerPresented = true }
+            HStack(spacing: 14) {
+                ScanTile(title: "Choose Photo",
+                         detail: "From your library",
+                         systemImage: "photo.on.rectangle") {
+                    requirePhotoModel { photoPickerPresented = true }
+                }
+                ScanTile(title: "Scan Barcode",
+                         detail: "Packaged food",
+                         systemImage: "barcode.viewfinder") {
+                    mode = .barcode
+                }
             }
 
-            ScanActionButton(title: "Scan Barcode",
-                             detail: "Read a packaged product's label data.",
-                             systemImage: "barcode.viewfinder") {
-                mode = .barcode
-            }
-
-            EstimateDisclaimer(
-                text: "Whatever you photograph or scan opens in Add Meal with the "
-                    + "details filled in. Photo estimates come from a single photo, "
-                    + "so check them before saving.")
-                .appCard()
+            Text("Whatever you capture opens in Add Meal with the details filled in. "
+                 + "Photo estimates come from a single photo, so check them before saving.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
         }
     }
 
     private var analysingSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             LoadingAnalysisView(stage: pipeline?.stage ?? .preparingImage)
-            Button("Cancel", role: .cancel) {
+            Button("Cancel") {
                 analysisTask?.cancel()
                 mode = .idle
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.appSecondary)
         }
     }
 
@@ -348,41 +352,56 @@ struct ScanView: View {
     }
 }
 
-/// One of the three scan actions. Large tap target, title plus explanation.
-struct ScanActionButton: View {
+/// A Scan action. The hero style is the large primary tile; compact tiles sit
+/// two to a row.
+struct ScanTile: View {
+    enum Style { case hero, compact }
+
     let title: String
     let detail: String
     let systemImage: String
+    var style: Style = .compact
     let action: () -> Void
+
+    private var isHero: Bool { style == .hero }
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: isHero ? 14 : 10) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 20, weight: .semibold))
-                    .frame(width: 48, height: 48)
-                    .foregroundStyle(AppTheme.accent)
-                    .background(AppTheme.accentFill.opacity(0.2),
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .font(.system(size: isHero ? 26 : 20, weight: .semibold))
+                    .frame(width: isHero ? 58 : 44, height: isHero ? 58 : 44)
+                    .foregroundStyle(isHero ? AppTheme.onAccent : AppTheme.accent)
+                    .background(isHero ? AppTheme.accentFill : AppTheme.subtleFill, in: Circle())
                     .accessibilityHidden(true)
+
+                Spacer(minLength: 0)
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                        .font(isHero ? .title3.weight(.bold) : .headline)
                     Text(detail)
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
             }
-            .appCard()
+            .padding(isHero ? 20 : 16)
+            .frame(maxWidth: .infinity, minHeight: isHero ? 190 : 140, alignment: .leading)
+            .background(isHero ? AppTheme.skyCard : AppTheme.cardBackground,
+                        in: RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ScanTilePressStyle())
         .accessibilityLabel("\(title). \(detail)")
+    }
+}
+
+/// Slight shrink while pressed, so the tiles feel like buttons.
+private struct ScanTilePressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
     }
 }

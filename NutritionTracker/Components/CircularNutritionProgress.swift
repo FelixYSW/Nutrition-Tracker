@@ -113,66 +113,6 @@ struct CircularNutritionProgress: View {
     }
 }
 
-/// One-line prompt that accompanies a ring.
-///
-/// Copy stays factual and non-judgemental: an "over" day is a nutritional
-/// heads-up, not a warning about the user's health (spec sections 1 and 13).
-struct RangeStatusMessage: View {
-    let nutrient: Nutrient
-    let consumed: Double
-    let range: NutrientRange
-
-    private var state: RangeState { range.state(consumed: consumed) }
-
-    var body: some View {
-        if let message {
-            HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .foregroundStyle(AppTheme.color(for: state, nutrient: nutrient))
-                    .accessibilityHidden(true)
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private var symbol: String {
-        switch state {
-        case .under: "arrow.up.circle"
-        case .within: "checkmark.circle.fill"
-        case .over: "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var message: String? {
-        let unit = nutrient.unitLabel
-        switch state {
-        case .under:
-            let gap = range.min - consumed
-            guard gap > 0 else { return nil }
-            return "\(AppFormatters.amount(gap))\(unit) \(nutrient.displayName.lowercased()) to go to reach your minimum."
-        case .within:
-            return "\(nutrient.displayName) is in range."
-        case .over:
-            let excess = consumed - range.max
-            return "You're \(AppFormatters.amount(excess))\(unit) over your \(nutrient.displayName.lowercased()) range today."
-        }
-    }
-}
-
-#Preview("Range states") {
-    let range = NutrientRange(min: 120, max: 160)
-    return HStack(spacing: 16) {
-        CircularNutritionProgress(nutrient: .protein, consumed: 60, range: range)
-        CircularNutritionProgress(nutrient: .protein, consumed: 140, range: range)
-        CircularNutritionProgress(nutrient: .protein, consumed: 190, range: range)
-    }
-    .padding()
-}
-
 // MARK: - Range ring primitive and the Today summary views
 
 /// Ring track with the shaded in-range zone and a consumed arc. Shared by the

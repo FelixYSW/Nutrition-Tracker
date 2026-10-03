@@ -42,7 +42,6 @@ struct DashboardView: View {
                     header
                     CalorieHeroCard(consumed: consumed.calories, range: ranges.calories)
                     ringsCard
-                    statusMessages
                     entriesSection
                 }
                 .appPageContent()
@@ -107,34 +106,6 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
         .background(AppTheme.cardBackground, in: RoundedRectangle(
             cornerRadius: AppTheme.cornerRadius, style: .continuous))
-    }
-
-    @ViewBuilder
-    private var statusMessages: some View {
-        let flagged = Nutrient.allCases.filter {
-            ranges[$0].max > 0 && ranges[$0].state(consumed: consumed[$0]) == .over
-        }
-        let lowest = Nutrient.allCases
-            .filter { ranges[$0].max > 0 && ranges[$0].state(consumed: consumed[$0]) == .under }
-            .max { lhs, rhs in
-                (ranges[lhs].min - consumed[lhs]) < (ranges[rhs].min - consumed[rhs])
-            }
-
-        if !flagged.isEmpty || lowest != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(flagged) { nutrient in
-                    RangeStatusMessage(nutrient: nutrient,
-                                       consumed: consumed[nutrient],
-                                       range: ranges[nutrient])
-                }
-                if let lowest {
-                    RangeStatusMessage(nutrient: lowest,
-                                       consumed: consumed[lowest],
-                                       range: ranges[lowest])
-                }
-            }
-            .appCard()
-        }
     }
 
     private var entriesSection: some View {
