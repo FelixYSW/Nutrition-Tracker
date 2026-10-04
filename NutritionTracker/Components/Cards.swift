@@ -79,8 +79,7 @@ struct FoodEntryCard: View {
                     HStack(spacing: 4) {
                         Text(isExpanded ? "Hide ingredients"
                                         : "\(entry.ingredients.count) ingredients")
-                        Image(systemName: "chevron.down")
-                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        DisclosureChevron(isExpanded: isExpanded)
                             .font(.caption2)
                     }
                     .font(.footnote.weight(.medium))
@@ -171,8 +170,7 @@ struct IngredientRow: View {
                 Button {
                     withAnimation(.snappy) { isExpanded.toggle() }
                 } label: {
-                    Image(systemName: "chevron.down")
-                        .rotationEffect(.degrees(isExpanded ? 0 : 180))
+                    DisclosureChevron(isExpanded: isExpanded)
                         .frame(width: AppTheme.minimumTapTarget,
                                height: AppTheme.minimumTapTarget)
                         .contentShape(Rectangle())
@@ -237,5 +235,18 @@ struct ConfidenceBadge: View {
             .accessibilityLabel(isLow ? "Low confidence, \(percent) percent"
                                       : "Confidence \(percent) percent")
         }
+    }
+}
+
+/// The app's one show/hide chevron, so every expandable section follows the
+/// same rule: pointing up while collapsed, down while open. Rotates between
+/// the two so the change animates with the section.
+struct DisclosureChevron: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Image(systemName: "chevron.down")
+            .rotationEffect(.degrees(isExpanded ? 0 : 180))
+            .accessibilityHidden(true)
     }
 }

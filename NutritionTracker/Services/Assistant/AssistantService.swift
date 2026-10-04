@@ -1,10 +1,10 @@
 import Foundation
 
 /// One turn in the conversation sent to the provider.
-struct AssistantTurn: Equatable, Sendable {
-    enum Role: String, Sendable { case user, assistant }
+struct AssistantTurn: Equatable, Codable, Sendable {
+    enum Role: String, Codable, Sendable { case user, assistant }
 
-    enum Block: Equatable, Sendable {
+    enum Block: Equatable, Codable, Sendable {
         case text(String)
         /// JPEG bytes, for the menu-photo flow.
         case image(Data)

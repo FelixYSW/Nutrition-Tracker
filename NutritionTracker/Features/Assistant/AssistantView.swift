@@ -6,10 +6,15 @@ import PhotosUI
 /// (spec section 29A).
 struct AssistantView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var viewModel: AssistantViewModel?
-    @State private var photoSelection: PhotosPickerItem?
+    @State private var photoSelections: [PhotosPickerItem] = []
     @State private var viewingPhoto: ViewedPhoto?
+    @State private var isShowingPhotoPicker = false
+    @State private var isShowingCamera = false
+    @State private var cameraProblem: String?
+    @State private var isShowingHistory = false
 
     var body: some View {
         NavigationStack {
@@ -24,18 +29,37 @@ struct AssistantView: View {
             .keyboardDismissControls()
             .navigationBarTitleDisplayMode(.inline)
             .fullScreenCover(item: $viewingPhoto) { photo in
-                PhotoViewer(data: photo.data)
+                PhotoViewer(images: photo.images, startIndex: photo.index)
+            }
+            .alert("Camera unavailable", isPresented: Binding(
+                get: { cameraProblem != nil },
+                set: { if !$0 { cameraProblem = nil } })) {
+                Button("OK", role: .cancel) { cameraProblem = nil }
+            } message: {
+                Text(cameraProblem ?? "")
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Clear conversation", systemImage: "trash") {
-                            viewModel?.clearConversation()
-                        }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        isShowingHistory = true
                     } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .accessibilityLabel("More options")
+                        Image(systemName: "clock.arrow.circlepath")
+                            .accessibilityLabel("Past chats")
                     }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        withAnimation(.snappy) { viewModel?.startNewConversation() }
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .accessibilityLabel("New chat")
+                    }
+                    .disabled(viewModel?.messages.isEmpty ?? true)
+                }
+            }
+            .sheet(isPresented: $isShowingHistory) {
+                ChatHistoryView(currentID: viewModel?.conversationID) { conversation in
+                    viewModel?.open(conversation)
                 }
             }
         }
@@ -43,6 +67,10 @@ struct AssistantView: View {
             if viewModel == nil {
                 viewModel = AssistantViewModel.make(context: context)
             }
+        }
+        // Leaving the app mid-chat still keeps it in history.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { viewModel?.persist() }
         }
     }
 
@@ -152,20 +180,14 @@ struct AssistantView: View {
     private func messageRow(message: AssistantChatMessage,
                             viewModel: AssistantViewModel) -> some View {
         switch message.kind {
-        case .user(let text, let image):
-            // Photo above the text bubble, both right-aligned, like Claude and
-            // ChatGPT. Tapping the photo opens it full screen.
+        case .user(let text, let images):
+            // Photos above the text bubble, both right-aligned, like Claude and
+            // ChatGPT. Tapping a photo opens it full screen.
             VStack(alignment: .trailing, spacing: 6) {
-                if let image {
-                    Button {
-                        viewingPhoto = ViewedPhoto(data: image)
-                    } label: {
-                        AttachmentImage(data: image)
-                            .frame(maxWidth: 220, maxHeight: 280)
-                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                if !images.isEmpty {
+                    SentPhotos(images: images) { index in
+                        viewingPhoto = ViewedPhoto(images: images, index: index)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Attached photo. Opens full screen.")
                 }
                 if !text.isEmpty {
                     Text(text)
@@ -197,6 +219,7 @@ struct AssistantView: View {
             AssistantConfirmationCard(
                 write: write,
                 isActive: viewModel.pendingWrite?.id == write.id,
+                isReplaced: viewModel.replacedWriteIDs.contains(write.id),
                 onConfirm: { Task { await viewModel.confirmPendingWrite() } },
                 onDecline: { Task { await viewModel.declinePendingWrite() } })
 
@@ -236,53 +259,43 @@ struct AssistantView: View {
         }
     }
 
-    /// One rounded box holding the attached photo's thumbnail and the text,
-    /// with attach on the left and send on the right - the layout Claude and
-    /// ChatGPT use.
+    /// One rounded box holding the attached photos and the text, with attach
+    /// on the left and send on the right - the layout Claude and ChatGPT use.
     private func composer(viewModel: AssistantViewModel) -> some View {
         VStack(spacing: 8) {
             if viewModel.pendingWrite != nil {
-                Text("Respond to the confirmation above to carry on.")
+                Text("Confirm the card above, or tell the assistant what to change.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                PhotosPicker(selection: $photoSelection, matching: .images) {
+                // Attach: take a photo with the camera, or pick several.
+                Menu {
+                    Button("Take Photo", systemImage: "camera") { openCamera() }
+                    Button("Choose Photos", systemImage: "photo.on.rectangle") {
+                        isShowingPhotoPicker = true
+                    }
+                } label: {
                     Image(systemName: "plus")
                         .font(.body.weight(.semibold))
                         .frame(width: 38, height: 38)
                         .background(AppTheme.subtleFill, in: Circle())
                 }
+                .disabled(!viewModel.canAttachMore)
                 .padding(.bottom, 3)
-                .accessibilityLabel("Attach a photo")
+                .accessibilityLabel("Attach photos")
+                .accessibilityHint(viewModel.canAttachMore
+                                   ? "Take a photo or choose from your library"
+                                   : "Up to \(AssistantViewModel.maxAttachments) photos")
 
                 VStack(alignment: .leading, spacing: 8) {
-                    if let image = viewModel.attachedImageData {
-                        ZStack(alignment: .topTrailing) {
-                            AttachmentImage(data: image)
-                                .frame(width: 64, height: 64)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            Button {
-                                withAnimation(.snappy) { viewModel.attachedImageData = nil }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 20))
-                                    .symbolRenderingMode(.palette)
-                                    .foregroundStyle(AppTheme.onAccent, AppTheme.accentFill)
-                            }
-                            .buttonStyle(.plain)
-                            .offset(x: 7, y: -7)
-                            .accessibilityLabel("Remove photo")
-                        }
-                        .padding(.top, 4)
-                        .transition(.scale.combined(with: .opacity))
+                    if !viewModel.attachments.isEmpty {
+                        attachmentStrip(viewModel: viewModel)
                     }
 
-                    TextField(viewModel.attachedImageData == nil
-                                ? "Ask anything about your nutrition"
-                                : "Ask about this photo",
+                    TextField(placeholder(for: viewModel),
                               text: Binding(get: { viewModel.composerText },
                                             set: { viewModel.composerText = $0 }),
                               axis: .vertical)
@@ -305,29 +318,130 @@ struct AssistantView: View {
                 }
                 .padding(.bottom, 2)
                 .disabled(!viewModel.canSend)
-                .accessibilityLabel("Send")
+                .accessibilityLabel(viewModel.isLoadingAttachment ? "Send, waiting for photos" : "Send")
             }
         }
         .padding(.horizontal, AppTheme.cardPadding)
         .padding(.vertical, 10)
         .background(AppTheme.background)
-        .onChange(of: photoSelection) { _, newValue in
-            guard let newValue else { return }
-            Task {
-                // Downsized before upload so a 12MP photo is not sent whole.
-                if let data = try? await newValue.loadTransferable(type: Data.self) {
-                    #if canImport(UIKit)
-                    if let prepared = try? ImagePreparer.prepare(data: data) {
-                        viewModel.attachedImageData = prepared.jpegData
-                    } else {
-                        viewModel.attachedImageData = data
+        .photosPicker(isPresented: $isShowingPhotoPicker,
+                      selection: $photoSelections,
+                      maxSelectionCount: max(1, viewModel.remainingAttachmentSlots),
+                      matching: .images)
+        .onChange(of: photoSelections) { _, items in
+            guard !items.isEmpty else { return }
+            for item in items { attach(item, to: viewModel) }
+            photoSelections = []
+        }
+        #if canImport(UIKit)
+        .fullScreenCover(isPresented: $isShowingCamera) {
+            CameraPicker(onImage: { image in
+                isShowingCamera = false
+                attach(image, to: viewModel)
+            }, onCancel: {
+                isShowingCamera = false
+            })
+            .ignoresSafeArea()
+        }
+        #endif
+    }
+
+    /// Thumbnails above the text, each with an x. One still loading shows a
+    /// spinner in its place, as Claude does while an image uploads.
+    private func attachmentStrip(viewModel: AssistantViewModel) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(viewModel.attachments) { attachment in
+                    ZStack(alignment: .topTrailing) {
+                        Group {
+                            if let data = attachment.data {
+                                AttachmentImage(data: data)
+                            } else {
+                                ZStack {
+                                    AppTheme.subtleFill
+                                    ProgressView()
+                                }
+                                .accessibilityLabel("Loading photo")
+                            }
+                        }
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                        Button {
+                            withAnimation(.snappy) { viewModel.removeAttachment(id: attachment.id) }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 20))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(AppTheme.onAccent, AppTheme.accentFill)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 7, y: -7)
+                        .accessibilityLabel("Remove photo")
                     }
-                    #else
-                    viewModel.attachedImageData = data
-                    #endif
+                    .transition(.scale.combined(with: .opacity))
                 }
-                photoSelection = nil
             }
+            // Room for the x buttons, which sit just outside each thumbnail.
+            .padding(.top, 8)
+            .padding(.trailing, 8)
+        }
+        .animation(.snappy, value: viewModel.attachments)
+    }
+
+    private func placeholder(for viewModel: AssistantViewModel) -> String {
+        switch viewModel.attachments.count {
+        case 0: "Ask anything about your nutrition"
+        case 1: "Ask about this photo"
+        default: "Ask about these photos"
+        }
+    }
+
+    // MARK: Attaching
+
+    #if canImport(UIKit)
+    /// Opens the camera, or explains why it can't (spec section 34).
+    private func openCamera() {
+        if let explanation = CameraPermission.current().explanation {
+            cameraProblem = explanation
+        } else {
+            isShowingCamera = true
+        }
+    }
+
+    private func attach(_ image: UIImage, to viewModel: AssistantViewModel) {
+        guard let id = viewModel.beginAttachment() else { return }
+        Task {
+            let data = await Self.downsized(image)
+            viewModel.finishAttachment(id: id, data: data)
+        }
+    }
+
+    /// Resized off the main thread so the composer stays responsive; a 12MP
+    /// photo is never sent whole.
+    private static func downsized(_ image: UIImage) async -> Data? {
+        await Task.detached(priority: .userInitiated) {
+            (try? ImagePreparer.prepare(image: image))?.jpegData
+        }.value
+    }
+    #else
+    private func openCamera() {}
+    #endif
+
+    private func attach(_ item: PhotosPickerItem, to viewModel: AssistantViewModel) {
+        guard let id = viewModel.beginAttachment() else { return }
+        Task {
+            var result: Data?
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                #if canImport(UIKit)
+                if let image = UIImage(data: data) {
+                    result = await Self.downsized(image)
+                }
+                #else
+                result = data
+                #endif
+            }
+            viewModel.finishAttachment(id: id, data: result)
         }
     }
 }
@@ -337,6 +451,8 @@ struct AssistantView: View {
 struct AssistantConfirmationCard: View {
     let write: PendingAssistantWrite
     let isActive: Bool
+    /// Closed because the user asked for changes and a new card replaced it.
+    var isReplaced: Bool = false
     let onConfirm: () -> Void
     let onDecline: () -> Void
 
@@ -360,9 +476,15 @@ struct AssistantConfirmationCard: View {
                     Button("Cancel", action: onDecline)
                         .buttonStyle(.bordered)
                 }
+            } else if isReplaced {
+                Label("Replaced by the updated card below", systemImage: "arrow.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .appCard()
+        // A replaced card fades back so the current one stands out.
+        .opacity(isReplaced ? 0.55 : 1)
         .overlay(
             RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous)
                 .stroke(isActive ? AppTheme.accent.opacity(0.4) : Color.clear, lineWidth: 1)
@@ -462,42 +584,67 @@ struct AttachmentImage: View {
     }
 }
 
-/// Identifiable wrapper so a sent photo can drive `fullScreenCover(item:)`.
-struct ViewedPhoto: Identifiable {
-    let id = UUID()
-    let data: Data
+/// Photos in a sent message: one shown large, several as a two-column grid of
+/// squares, right-aligned like the rest of the user's message.
+struct SentPhotos: View {
+    let images: [Data]
+    let onOpen: (Int) -> Void
+
+    var body: some View {
+        if images.count == 1, let only = images.first {
+            Button { onOpen(0) } label: {
+                AttachmentImage(data: only)
+                    .frame(maxWidth: 220, maxHeight: 280)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Attached photo. Opens full screen.")
+        } else {
+            let columns = [GridItem(.fixed(108), spacing: 6), GridItem(.fixed(108), spacing: 6)]
+            LazyVGrid(columns: columns, alignment: .trailing, spacing: 6) {
+                ForEach(images.indices, id: \.self) { index in
+                    Button { onOpen(index) } label: {
+                        AttachmentImage(data: images[index])
+                            .frame(width: 108, height: 108)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Photo \(index + 1) of \(images.count). Opens full screen.")
+                }
+            }
+            .fixedSize()
+        }
+    }
 }
 
-/// Full-screen view of a sent photo, with pinch to zoom.
+/// Identifiable wrapper so sent photos can drive `fullScreenCover(item:)`.
+struct ViewedPhoto: Identifiable {
+    let id = UUID()
+    let images: [Data]
+    let index: Int
+}
+
+/// Full-screen view of a message's photos: swipe between them, pinch or
+/// double-tap to zoom.
 struct PhotoViewer: View {
-    let data: Data
+    let images: [Data]
+    let startIndex: Int
+
     @Environment(\.dismiss) private var dismiss
-    @State private var scale: CGFloat = 1
-    @GestureState private var pinch: CGFloat = 1
+    @State private var selection = 0
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
 
-            #if canImport(UIKit)
-            if let image = UIImage(data: data) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .scaleEffect(scale * pinch)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .gesture(
-                        MagnifyGesture()
-                            .updating($pinch) { value, state, _ in state = value.magnification }
-                            .onEnded { value in
-                                scale = min(max(scale * value.magnification, 1), 4)
-                            })
-                    .onTapGesture(count: 2) {
-                        withAnimation(.snappy) { scale = scale > 1 ? 1 : 2 }
-                    }
-                    .accessibilityLabel("Attached photo")
+            TabView(selection: $selection) {
+                ForEach(images.indices, id: \.self) { index in
+                    ZoomablePhoto(data: images[index])
+                        .tag(index)
+                }
             }
-            #endif
+            .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .automatic : .never))
+            .ignoresSafeArea()
 
             Button {
                 dismiss()
@@ -511,5 +658,35 @@ struct PhotoViewer: View {
             .padding()
             .accessibilityLabel("Close")
         }
+        .onAppear { selection = min(max(startIndex, 0), max(images.count - 1, 0)) }
+    }
+}
+
+/// One photo that can be pinched or double-tapped to zoom.
+struct ZoomablePhoto: View {
+    let data: Data
+    @State private var scale: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+
+    var body: some View {
+        #if canImport(UIKit)
+        if let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .scaleEffect(scale * pinch)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .gesture(
+                    MagnifyGesture()
+                        .updating($pinch) { value, state, _ in state = value.magnification }
+                        .onEnded { value in
+                            scale = min(max(scale * value.magnification, 1), 4)
+                        })
+                .onTapGesture(count: 2) {
+                    withAnimation(.snappy) { scale = scale > 1 ? 1 : 2 }
+                }
+                .accessibilityLabel("Attached photo")
+        }
+        #endif
     }
 }

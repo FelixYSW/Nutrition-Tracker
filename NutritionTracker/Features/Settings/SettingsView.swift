@@ -93,7 +93,8 @@ struct SettingsView: View {
                 Button("Delete everything", role: .destructive) { deleteAll() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This removes your profile, targets, every food entry and all "
+                Text("This removes your profile, targets, every food entry, past "
+                     + "assistant chats and all "
                      + "retained photos from this iPhone. It cannot be undone. "
                      + "Export a backup first if you might want this data back.")
             }
@@ -162,25 +163,11 @@ struct SettingsView: View {
                 isShowingTargetsEditor = true
             }
             .disabled(target == nil)
-
-            Button {
-                recalculateTargets()
-            } label: {
-                Label("Recalculate ranges", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .disabled(profile == nil)
         } header: {
             Text("Your plan")
         } footer: {
-            if profile?.targetsLikelyStale == true {
-                // Targets are never silently recalculated; the user is just told
-                // that they look stale (spec section 6).
-                Text("Your profile has changed since these ranges were worked out. "
-                     + "Recalculating keeps any value you edited by hand.")
-            } else {
-                Text("Each nutrient has a minimum and a maximum, because the formulas "
-                     + "behind them are estimates.")
-            }
+            Text("Your daily ranges update automatically when you change your profile. "
+                 + "Any value you edited by hand is kept.")
         }
     }
 
@@ -288,21 +275,6 @@ struct SettingsView: View {
         try? context.save()
     }
 
-    private func recalculateTargets() {
-        guard let profile else { return }
-        let breakdown = NutritionTargetCalculator.calculate(profile: profile)
-        if let target {
-            // Preserves bounds the user edited by hand.
-            target.apply(recalculated: breakdown.ranges)
-        } else {
-            context.insert(NutritionTarget(ranges: breakdown.ranges))
-        }
-        profile.markTargetsCalculated()
-        save()
-        Haptics.success()
-        alertMessage = "Targets recalculated. Any bound you edited by hand was kept."
-    }
-
     private func exportBackup() {
         do {
             exportURL = try BackupService(context: context).exportToTemporaryFile()
@@ -354,6 +326,7 @@ struct SettingsView: View {
     private func deleteAll() {
         BackupService(context: context).deleteAllData(includingImages: true)
         LegacySecretCleanup.deleteStoredKeys()
+        ChatHistoryStore.shared.deleteAll()
         let settings = context.loadAppSettings()
         settings.hasCompletedOnboarding = false
         save()
@@ -410,6 +383,10 @@ struct ProfileEditorView: View {
 
     @Bindable var profile: UserProfile
 
+    /// What the targets were last calculated from, captured when the editor
+    /// opens, so closing it only recalculates if something relevant changed.
+    @State private var originalInputs: TargetInputs?
+
     var body: some View {
         NavigationStack {
             Form {
@@ -440,16 +417,8 @@ struct ProfileEditorView: View {
                     }
 
                     Section("Training") {
-                        SliderEntryRow(title: "Strength sessions per week",
-                                       value: Binding(
-                                        get: { Double(profile.strengthSessionsPerWeek) },
-                                        set: { profile.strengthSessionsPerWeek = Int($0.rounded()) }),
-                                       range: 0...14, step: 1)
-                        SliderEntryRow(title: "Cardio sessions per week",
-                                       value: Binding(
-                                        get: { Double(profile.cardioSessionsPerWeek) },
-                                        set: { profile.cardioSessionsPerWeek = Int($0.rounded()) }),
-                                       range: 0...14, step: 1)
+                        TrainingDaysEditor(strengthDays: $profile.strengthSessionsPerWeek,
+                                           cardioDays: $profile.cardioSessionsPerWeek)
                     }
                 }
                 // Soft card rows instead of the system's pure white.
@@ -461,13 +430,56 @@ struct ProfileEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        try? context.save()
-                        dismiss()
-                    }
+                    Button("Done") { dismiss() }
                 }
             }
         }
+        .onAppear { originalInputs = TargetInputs(profile) }
+        // Runs however the sheet closes - Done or a swipe down.
+        .onDisappear {
+            if let originalInputs, originalInputs != TargetInputs(profile) {
+                TargetUpdater.update(for: profile, in: context)
+            } else {
+                try? context.save()
+            }
+        }
+    }
+}
+
+/// The profile fields the daily targets are calculated from (spec section 6).
+/// Training days are deliberately absent: they don't change the maths.
+struct TargetInputs: Equatable {
+    let dateOfBirth: Date
+    let sex: BiologicalSex
+    let heightCm: Double
+    let weightKg: Double
+    let goal: FitnessGoal
+    let activity: ActivityLevel
+
+    init(_ profile: UserProfile) {
+        dateOfBirth = profile.dateOfBirth
+        sex = profile.sex
+        heightCm = profile.heightCm
+        weightKg = profile.weightKg
+        goal = profile.goal
+        activity = profile.activity
+    }
+}
+
+/// Keeps the daily targets in step with the profile.
+@MainActor
+enum TargetUpdater {
+    /// Recalculates and saves the targets. Any bound the user edited by hand
+    /// is kept, so an automatic update never undoes a deliberate choice.
+    static func update(for profile: UserProfile, in context: ModelContext) {
+        let ranges = NutritionTargetCalculator.calculate(profile: profile).ranges
+        if let target = context.loadNutritionTarget() {
+            target.apply(recalculated: ranges)
+        } else {
+            context.insert(NutritionTarget(ranges: ranges))
+        }
+        profile.markTargetsCalculated()
+        try? context.save()
     }
 }
 

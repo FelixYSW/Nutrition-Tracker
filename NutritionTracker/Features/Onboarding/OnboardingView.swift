@@ -188,15 +188,8 @@ struct OnboardingView: View {
 
         case .training:
             VStack(alignment: .leading, spacing: 16) {
-                SliderEntryRow(title: "Strength sessions per week",
-                               value: Binding(get: { Double(input.strengthSessions) },
-                                              set: { input.strengthSessions = Int($0.rounded()) }),
-                               range: 0...14, step: 1)
-                Divider()
-                SliderEntryRow(title: "Cardio sessions per week",
-                               value: Binding(get: { Double(input.cardioSessions) },
-                                              set: { input.cardioSessions = Int($0.rounded()) }),
-                               range: 0...14, step: 1)
+                TrainingDaysEditor(strengthDays: $input.strengthSessions,
+                                   cardioDays: $input.cardioSessions)
                 Text("Kept as part of your profile. Your activity level above "
                      + "already accounts for the calories, so these are not "
                      + "counted twice.")

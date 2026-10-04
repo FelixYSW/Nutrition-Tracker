@@ -5,7 +5,7 @@ import Foundation
 /// Read tools execute immediately. Write tools never commit on their own: they
 /// produce a proposal that the user must confirm, exactly as the photo pipeline
 /// requires a review step.
-enum AssistantTool: String, CaseIterable, Sendable {
+enum AssistantTool: String, CaseIterable, Codable, Sendable {
     case addFoodEntry
     case editFoodEntry
     case deleteFoodEntry
@@ -23,7 +23,10 @@ enum AssistantTool: String, CaseIterable, Sendable {
     var description: String {
         switch self {
         case .addFoodEntry:
-            "Propose logging a food. Requires the user to confirm before it is saved. "
+            "Propose logging a food the user says they ate or asks to log - never "
+                + "just because they shared a photo or asked what to eat. Shown to the "
+                + "user as a confirmation card; nothing is saved until they confirm. "
+                + "Calling it again while a card is open replaces that card. "
                 + "List every component separately with the grams actually eaten - "
                 + "including cooking oil, sauces and drinks - and never give a total for "
                 + "the whole dish: the app works out the totals itself from its nutrition "
@@ -141,12 +144,12 @@ struct AssistantToolCall: Identifiable, Equatable, Sendable {
 ///
 /// This type is the confirmation gate: nothing in the assistant flow can reach
 /// the database except by the user accepting one of these.
-struct PendingAssistantWrite: Identifiable, Equatable, Sendable {
+struct PendingAssistantWrite: Identifiable, Equatable, Codable, Sendable {
     let id: String
     let tool: AssistantTool
     let action: Action
 
-    enum Action: Equatable, Sendable {
+    enum Action: Equatable, Codable, Sendable {
         case add(FoodEntryDraft)
         case edit(entryID: UUID, draft: FoodEntryDraft, originalName: String)
         case delete(entryID: UUID, name: String, calories: Double)

@@ -367,3 +367,66 @@ extension View {
                 .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
     }
 }
+
+// MARK: - Training days
+
+/// Strength and cardio days per week. They share one week, so together they
+/// can't exceed 7: raising one lowers the other when needed, and the remaining
+/// rest days are shown underneath.
+///
+/// Stored for profile context only - the activity level already covers the
+/// calories (spec section 6) - but the numbers should still make sense.
+struct TrainingDaysEditor: View {
+    @Binding var strengthDays: Int
+    @Binding var cardioDays: Int
+
+    static let daysInWeek = 7
+
+    private var restDays: Int { max(0, Self.daysInWeek - strengthDays - cardioDays) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SliderEntryRow(title: "Strength training days per week",
+                           value: binding(for: $strengthDays, other: $cardioDays),
+                           range: 0...Double(Self.daysInWeek), step: 1)
+            SliderEntryRow(title: "Cardio days per week",
+                           value: binding(for: $cardioDays, other: $strengthDays),
+                           range: 0...Double(Self.daysInWeek), step: 1)
+            Text(restDays == 1 ? "1 rest day a week" : "\(restDays) rest days a week")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .onAppear {
+            // Earlier versions allowed up to 14 of each; bring old values in line.
+            let fixed = Self.normalised(strength: strengthDays, cardio: cardioDays)
+            if fixed.strength != strengthDays { strengthDays = fixed.strength }
+            if fixed.cardio != cardioDays { cardioDays = fixed.cardio }
+        }
+    }
+
+    private func binding(for value: Binding<Int>, other: Binding<Int>) -> Binding<Double> {
+        Binding(
+            get: { Double(min(max(value.wrappedValue, 0), Self.daysInWeek)) },
+            set: { newValue in
+                let adjusted = Self.adjust(changed: Int(newValue.rounded()), other: other.wrappedValue)
+                value.wrappedValue = adjusted.changed
+                if adjusted.other != other.wrappedValue { other.wrappedValue = adjusted.other }
+            })
+    }
+
+    /// The value just changed wins; the other gives way so the week isn't
+    /// over-full.
+    static func adjust(changed: Int, other: Int) -> (changed: Int, other: Int) {
+        let changed = min(max(changed, 0), daysInWeek)
+        return (changed, min(max(other, 0), daysInWeek - changed))
+    }
+
+    /// Fixes stored values from before the 7-day rule, keeping their proportion.
+    static func normalised(strength: Int, cardio: Int) -> (strength: Int, cardio: Int) {
+        let s = min(max(strength, 0), daysInWeek)
+        let c = min(max(cardio, 0), daysInWeek)
+        guard s + c > daysInWeek else { return (s, c) }
+        let scaledStrength = Int((Double(s) / Double(s + c) * Double(daysInWeek)).rounded())
+        return (scaledStrength, daysInWeek - scaledStrength)
+    }
+}

@@ -666,52 +666,6 @@ final class AssistantViewModelTests: XCTestCase {
                                                       "grams": .number(300),
                                                       "kcalPer100g": .number(127)])])])])
 
-    /// Flow J: propose -> confirmation card -> confirm -> saved.
-    func testConfirmedWriteIsSaved() async throws {
-        let service = ScriptedAssistantService([addCall,
-                                                AssistantResponse(text: "Logged it.", toolCalls: [])])
-        let (viewModel, context) = makeViewModel(service)
-
-        viewModel.composerText = "log the grilled chicken salad"
-        await viewModel.send()
-
-        XCTAssertNotNil(viewModel.pendingWrite, "loop pauses on a write")
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
-        XCTAssertFalse(viewModel.canSend, "cannot send while a confirmation is open")
-
-        await viewModel.confirmPendingWrite()
-
-        XCTAssertNil(viewModel.pendingWrite)
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 1)
-
-        // The provider must have received a tool_result for its tool_use.
-        let lastTurns = try XCTUnwrap(service.receivedTurns.last)
-        let resultBlocks = lastTurns.last?.blocks ?? []
-        XCTAssertTrue(resultBlocks.contains {
-            if case .toolResult(let id, let content, false) = $0 {
-                return id == "toolu_add" && content.contains("added")
-            }
-            return false
-        })
-    }
-
-    func testDeclinedWriteIsNotSavedAndModelIsTold() async throws {
-        let service = ScriptedAssistantService([addCall,
-                                                AssistantResponse(text: "No problem.", toolCalls: [])])
-        let (viewModel, context) = makeViewModel(service)
-
-        viewModel.composerText = "log it"
-        await viewModel.send()
-        await viewModel.declinePendingWrite()
-
-        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
-        let resultBlocks = service.receivedTurns.last?.last?.blocks ?? []
-        XCTAssertTrue(resultBlocks.contains {
-            if case .toolResult(_, let content, _) = $0 { return content.contains("declined") }
-            return false
-        })
-    }
-
     /// The assistant's own replies must be sent back on the next request, or
     /// follow-up questions lose their context.
     func testAssistantRepliesAreKeptInHistory() async throws {
@@ -729,6 +683,154 @@ final class AssistantViewModelTests: XCTestCase {
         let second = try XCTUnwrap(service.receivedTurns.last)
         XCTAssertEqual(second.map(\.role), [.user, .assistant, .user])
         XCTAssertEqual(second[1].blocks, [.text("Try the grilled chicken salad.")])
+    }
+
+    /// Every tool result anywhere in a request, as (id, content).
+    private func toolResults(in turns: [AssistantTurn]) -> [(id: String, content: String)] {
+        turns.flatMap(\.blocks).compactMap { block in
+            if case .toolResult(let id, let content, _) = block { return (id, content) }
+            return nil
+        }
+    }
+
+    private func texts(in turn: AssistantTurn?) -> [String] {
+        (turn?.blocks ?? []).compactMap { block in
+            if case .text(let text) = block { return text }
+            return nil
+        }
+    }
+
+    /// Flow J: propose -> confirmation card -> confirm -> saved, with no extra
+    /// reply from the assistant.
+    func testConfirmedWriteIsSaved() async throws {
+        let service = ScriptedAssistantService([addCall,
+                                                AssistantResponse(text: "Noted.", toolCalls: [])])
+        let (viewModel, context) = makeViewModel(service)
+
+        viewModel.composerText = "I had a grilled chicken salad"
+        await viewModel.send()
+
+        XCTAssertNotNil(viewModel.pendingWrite, "loop pauses on a write")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+
+        await viewModel.confirmPendingWrite()
+
+        XCTAssertNil(viewModel.pendingWrite)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 1)
+        XCTAssertEqual(service.receivedTurns.count, 1, "confirming doesn't ask the model to reply")
+
+        // The outcome reaches the model with the next message.
+        viewModel.composerText = "thanks"
+        await viewModel.send()
+        let next = try XCTUnwrap(service.receivedTurns.last)
+        XCTAssertTrue(toolResults(in: next).contains { $0.id == "toolu_add" && $0.content.contains("added") })
+    }
+
+    func testDeclinedWriteIsNotSavedAndModelHearsNextTime() async throws {
+        let service = ScriptedAssistantService([addCall,
+                                                AssistantResponse(text: "Sure.", toolCalls: [])])
+        let (viewModel, context) = makeViewModel(service)
+
+        viewModel.composerText = "I had a salad"
+        await viewModel.send()
+        await viewModel.declinePendingWrite()
+
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 0)
+        XCTAssertEqual(service.receivedTurns.count, 1, "cancelling doesn't ask the model to reply")
+
+        viewModel.composerText = "ok"
+        await viewModel.send()
+        let next = try XCTUnwrap(service.receivedTurns.last)
+        XCTAssertTrue(toolResults(in: next).contains { $0.content.contains("declined") })
+    }
+
+    /// The card is the whole reply: text sent alongside a proposal isn't shown.
+    func testTextAlongsideAProposalIsHidden() async {
+        let (viewModel, _) = makeViewModel(ScriptedAssistantService([addCall]))
+        viewModel.composerText = "I had a salad"
+        await viewModel.send()
+
+        XCTAssertFalse(viewModel.messages.contains {
+            if case .assistant = $0.kind { return true }
+            return false
+        })
+        XCTAssertTrue(viewModel.messages.contains {
+            if case .proposal = $0.kind { return true }
+            return false
+        })
+    }
+
+    /// Chatting about something else keeps the card open to confirm later.
+    func testUnrelatedMessageKeepsTheCardOpen() async throws {
+        let service = ScriptedAssistantService([
+            addCall,
+            AssistantResponse(text: "You've had about 600 kcal so far.", toolCalls: [])
+        ])
+        let (viewModel, _) = makeViewModel(service)
+        viewModel.composerText = "I had a salad"
+        await viewModel.send()
+        let card = try XCTUnwrap(viewModel.pendingWrite)
+
+        viewModel.composerText = "how many calories so far?"
+        XCTAssertTrue(viewModel.canSend, "sending is allowed while a card is open")
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.pendingWrite?.id, card.id, "card still open")
+        XCTAssertTrue(viewModel.replacedWriteIDs.isEmpty)
+        // The model was told the card is waiting, before the new message.
+        let request = try XCTUnwrap(service.receivedTurns.last)
+        XCTAssertTrue(toolResults(in: request).contains {
+            $0.id == "toolu_add" && $0.content.contains("awaiting_user")
+        })
+        XCTAssertTrue(viewModel.messages.contains {
+            if case .assistant(let text) = $0.kind { return text.contains("600 kcal") }
+            return false
+        })
+    }
+
+    /// Asking for a change makes the model propose again: the new card
+    /// replaces the old one.
+    func testAmendmentReplacesTheOpenCard() async throws {
+        let amended = AssistantResponse(text: nil, toolCalls: [
+            AssistantToolCall(id: "toolu_add2", tool: .addFoodEntry,
+                              arguments: AssistantToolExecutorTests.tinyArguments)])
+        let service = ScriptedAssistantService([addCall, amended])
+        let (viewModel, _) = makeViewModel(service)
+
+        viewModel.composerText = "I had a salad"
+        await viewModel.send()
+        let first = try XCTUnwrap(viewModel.pendingWrite)
+
+        viewModel.composerText = "add some rice too"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.pendingWrite?.id, "toolu_add2")
+        XCTAssertTrue(viewModel.replacedWriteIDs.contains(first.id))
+    }
+
+    /// Confirming a card after chatting on: the model learns via a note with
+    /// the next message, not a fresh request.
+    func testConfirmingAfterChattingSendsANoteNextTime() async throws {
+        let service = ScriptedAssistantService([
+            addCall,
+            AssistantResponse(text: "About 600 kcal.", toolCalls: []),
+            AssistantResponse(text: "Great.", toolCalls: [])
+        ])
+        let (viewModel, context) = makeViewModel(service)
+        viewModel.composerText = "I had a salad"
+        await viewModel.send()
+        viewModel.composerText = "calories so far?"
+        await viewModel.send()
+
+        await viewModel.confirmPendingWrite()
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 1)
+        XCTAssertEqual(service.receivedTurns.count, 2, "no request on confirm")
+
+        viewModel.composerText = "thanks"
+        await viewModel.send()
+        let note = texts(in: service.receivedTurns.last?.last).first { $0.hasPrefix("[Note:") }
+        XCTAssertNotNil(note)
+        XCTAssertTrue(note?.contains("confirmed") == true)
     }
 
     func testReadToolRunsWithoutConfirmation() async throws {
@@ -756,21 +858,70 @@ final class AssistantViewModelTests: XCTestCase {
                 AssistantToolCall(id: "a", tool: .addFoodEntry,
                                   arguments: AssistantToolExecutorTests.tinyArguments),
                 AssistantToolCall(id: "b", tool: .getTrends, arguments: [:])
-            ])
+            ]),
+            AssistantResponse(text: "Ok.", toolCalls: [])
         ])
         let (viewModel, _) = makeViewModel(service)
-        viewModel.composerText = "go"
+        viewModel.composerText = "I had something"
         await viewModel.send()
         await viewModel.declinePendingWrite()
+        viewModel.composerText = "next"
+        await viewModel.send()
 
-        let ids = (service.receivedTurns.last?.last?.blocks ?? []).compactMap { block -> String? in
-            if case .toolResult(let id, _, _) = block { return id }
-            return nil
-        }
-        XCTAssertEqual(Set(ids), ["a", "b"], "every tool_use gets a result")
+        let ids = toolResults(in: service.receivedTurns.last ?? []).map(\.id)
+        XCTAssertEqual(Set(ids), ["a", "b"], "every tool call gets a result")
     }
 
     /// A build without the assistant key: unavailable, and nothing is sent.
+    // MARK: Photo attachments
+
+    func testLoadingPhotoBlocksSendingUntilReady() throws {
+        let (viewModel, _) = makeViewModel(ScriptedAssistantService([]))
+        let id = try XCTUnwrap(viewModel.beginAttachment())
+        XCTAssertTrue(viewModel.isLoadingAttachment)
+        XCTAssertFalse(viewModel.canSend, "can't send while a photo is still loading")
+
+        viewModel.finishAttachment(id: id, data: Data([1, 2, 3]))
+        XCTAssertFalse(viewModel.isLoadingAttachment)
+        XCTAssertTrue(viewModel.canSend, "a photo alone is enough to send")
+    }
+
+    func testUnreadablePhotoRemovesItsPlaceholder() throws {
+        let (viewModel, _) = makeViewModel(ScriptedAssistantService([]))
+        let id = try XCTUnwrap(viewModel.beginAttachment())
+        viewModel.finishAttachment(id: id, data: nil)
+        XCTAssertTrue(viewModel.attachments.isEmpty)
+    }
+
+    func testAttachmentsAreCapped() {
+        let (viewModel, _) = makeViewModel(ScriptedAssistantService([]))
+        for _ in 0..<AssistantViewModel.maxAttachments {
+            XCTAssertNotNil(viewModel.beginAttachment())
+        }
+        XCTAssertFalse(viewModel.canAttachMore)
+        XCTAssertNil(viewModel.beginAttachment())
+        XCTAssertEqual(viewModel.attachments.count, AssistantViewModel.maxAttachments)
+    }
+
+    func testMultiplePhotosAreSentTogether() async throws {
+        let service = ScriptedAssistantService([AssistantResponse(text: "Nice menu.", toolCalls: [])])
+        let (viewModel, _) = makeViewModel(service)
+        for byte in [UInt8(1), 2] {
+            let id = try XCTUnwrap(viewModel.beginAttachment())
+            viewModel.finishAttachment(id: id, data: Data([byte]))
+        }
+        await viewModel.send()
+
+        XCTAssertTrue(viewModel.attachments.isEmpty, "composer cleared after sending")
+        let sent = try XCTUnwrap(service.receivedTurns.first?.first)
+        let images = sent.blocks.filter { if case .image = $0 { return true }; return false }
+        XCTAssertEqual(images.count, 2)
+        XCTAssertTrue(viewModel.messages.contains {
+            if case .user(_, let photos) = $0.kind { return photos.count == 2 }
+            return false
+        })
+    }
+
     func testUnconfiguredServiceIsUnavailableAndSendsNothing() async {
         let (viewModel, _) = makeViewModel(UnconfiguredAssistantService())
         XCTAssertFalse(viewModel.isAvailable)

@@ -6,10 +6,10 @@ import UIKit
 #endif
 
 /// A message as shown in the chat transcript.
-struct AssistantChatMessage: Identifiable, Equatable {
-    enum Kind: Equatable {
+struct AssistantChatMessage: Identifiable, Equatable, Codable {
+    enum Kind: Equatable, Codable {
         /// Text may be empty when only a photo was sent.
-        case user(text: String, image: Data?)
+        case user(text: String, images: [Data])
         case assistant(String)
         /// A write awaiting confirmation, rendered as a card.
         case proposal(PendingAssistantWrite)
@@ -19,7 +19,7 @@ struct AssistantChatMessage: Identifiable, Equatable {
         case toolActivity(String)
     }
 
-    let id = UUID()
+    var id = UUID()
     var kind: Kind
     var timestamp: Date = .now
 }
@@ -35,13 +35,51 @@ final class AssistantViewModel {
 
     private(set) var messages: [AssistantChatMessage] = []
     private(set) var isSending = false
-    /// The single write currently awaiting confirmation. Only one at a time, so
-    /// the user is never asked to approve a batch they cannot inspect.
+    /// The write currently awaiting confirmation. Only one card is open at a
+    /// time, so the user is never asked to approve a batch they cannot inspect.
     private(set) var pendingWrite: PendingAssistantWrite?
+    /// Cards closed because the user asked for changes and a new one replaced them.
+    private(set) var replacedWriteIDs: Set<String> = []
+    /// True once the model has been told the open card is still waiting, so its
+    /// eventual outcome goes in `contextNotes` rather than as a tool result.
+    private var pendingResultSent = false
+    /// Outcomes to tell the model with the next message, without asking it to reply.
+    private var contextNotes: [String] = []
 
     var composerText = ""
-    /// Menu photo attached to the next message.
-    var attachedImageData: Data?
+    /// Photos attached to the next message, in the order added. An attachment
+    /// with no data yet is still loading and shows a spinner, as in Claude.
+    private(set) var attachments: [ComposerAttachment] = []
+
+    /// Caps upload size and token use; four covers a menu spread over pages.
+    static let maxAttachments = 4
+
+    var canAttachMore: Bool { attachments.count < Self.maxAttachments }
+    var remainingAttachmentSlots: Int { max(0, Self.maxAttachments - attachments.count) }
+    var isLoadingAttachment: Bool { attachments.contains { $0.data == nil } }
+
+    /// Adds a loading placeholder straight away and returns its id; call
+    /// `finishAttachment` once the photo is ready (or failed).
+    func beginAttachment() -> UUID? {
+        guard canAttachMore else { return nil }
+        let attachment = ComposerAttachment()
+        attachments.append(attachment)
+        return attachment.id
+    }
+
+    /// Fills in a loading placeholder, or removes it if the photo couldn't be read.
+    func finishAttachment(id: UUID, data: Data?) {
+        guard let index = attachments.firstIndex(where: { $0.id == id }) else { return }
+        if let data {
+            attachments[index].data = data
+        } else {
+            attachments.remove(at: index)
+        }
+    }
+
+    func removeAttachment(id: UUID) {
+        attachments.removeAll { $0.id == id }
+    }
 
     private var turns: [AssistantTurn] = []
     /// Tool results queued while a confirmation is outstanding.
@@ -64,14 +102,22 @@ final class AssistantViewModel {
     typealias PhotoAnalyser = @MainActor (Data) async -> String?
     private let photoAnalyser: PhotoAnalyser?
 
+    /// Where chats are saved; nil keeps them in memory only (tests, previews).
+    private let historyStore: ChatHistoryStore?
+    /// The chat on screen. Changes when starting a new chat or opening an old one.
+    private(set) var conversationID = UUID()
+    private var conversationCreatedAt = Date.now
+
     init(service: AssistantServing,
          executor: AssistantToolExecutor,
          contextBuilder: AssistantContextBuilder,
-         photoAnalyser: PhotoAnalyser? = nil) {
+         photoAnalyser: PhotoAnalyser? = nil,
+         historyStore: ChatHistoryStore? = nil) {
         self.service = service
         self.executor = executor
         self.contextBuilder = contextBuilder
         self.photoAnalyser = photoAnalyser
+        self.historyStore = historyStore
     }
 
     /// The assistant uses the app's built-in key; there is nothing for the
@@ -97,7 +143,8 @@ final class AssistantViewModel {
             service: service,
             executor: AssistantToolExecutor(context: context),
             contextBuilder: AssistantContextBuilder(context: context),
-            photoAnalyser: analyser)
+            photoAnalyser: analyser,
+            historyStore: .shared)
     }
 
     /// Plain-text summary of the on-device photo analysis: each food with its
@@ -135,17 +182,17 @@ final class AssistantViewModel {
     var canSend: Bool {
         isAvailable
             && !isSending
-            && pendingWrite == nil
+            && !isLoadingAttachment
             && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || attachedImageData != nil)
+                || !attachments.isEmpty)
     }
 
     // MARK: Sending
 
     func send() async {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let image = attachedImageData
-        guard !text.isEmpty || image != nil else { return }
+        let images = attachments.compactMap(\.data)
+        guard !text.isEmpty || !images.isEmpty, !isLoadingAttachment else { return }
 
         guard isAvailable else {
             append(.error(AssistantServiceError.notConfigured.localizedDescription))
@@ -153,34 +200,38 @@ final class AssistantViewModel {
         }
 
         composerText = ""
-        attachedImageData = nil
+        attachments = []
 
         // Show the message straight away; the photo analysis below can take a moment.
-        append(.user(text: text, image: image))
+        append(.user(text: text, images: images))
 
-        var blocks: [AssistantTurn.Block] = []
-        if let image {
+        // A card left open gets its "still waiting" result first, then any
+        // outcomes the model hasn't heard about go in front of the message.
+        notePendingCardBeforeNewMessage()
+        var blocks: [AssistantTurn.Block] = contextNotes.map { .text("[Note: \($0)]") }
+        contextNotes = []
+        if !images.isEmpty, photoAnalyser != nil { isSending = true }
+        for (index, image) in images.enumerated() {
             blocks.append(.image(image))
             // With the food models installed, the app's own recognition and
-            // portion estimate go along with the photo, so logging uses those
+            // portion estimate go along with each photo, so logging uses those
             // grams and the app's nutrition data rather than an LLM's guess.
-            if let photoAnalyser {
-                isSending = true
-                if let analysis = await photoAnalyser(image) {
-                    blocks.append(.text(analysis))
-                }
+            if let photoAnalyser, let analysis = await photoAnalyser(image) {
+                let label = images.count > 1 ? "Photo \(index + 1) of \(images.count). " : ""
+                blocks.append(.text(label + analysis))
             }
         }
-        // A photo sent on its own still needs a question for the model; the
-        // chat shows just the photo, as Claude and ChatGPT do.
+        // Photos sent on their own still need a question for the model; the
+        // chat shows just the photos, as Claude and ChatGPT do.
         blocks.append(.text(text.isEmpty ? Self.photoOnlyPrompt : text))
         turns.append(AssistantTurn(role: .user, blocks: blocks))
 
         await runLoop()
+        persist()
     }
 
     /// Sends the conversation and processes tool calls until the model stops
-    /// calling tools or a confirmation is required.
+    /// calling tools or proposes a write.
     private func runLoop() async {
         isSending = true
         defer { isSending = false }
@@ -207,14 +258,8 @@ final class AssistantViewModel {
                 return
             }
 
-            if let text = response.text {
-                append(.assistant(text))
-            }
-
             // Record the whole assistant turn - its text as well as its tool
             // calls - so the next request carries the full conversation.
-            // Without the text, a follow-up like "make it smaller" has nothing
-            // to refer to.
             var assistantBlocks: [AssistantTurn.Block] = []
             if let text = response.text { assistantBlocks.append(.text(text)) }
             assistantBlocks += response.toolCalls.map {
@@ -224,6 +269,13 @@ final class AssistantViewModel {
                 turns.append(AssistantTurn(role: .assistant, blocks: assistantBlocks))
             }
 
+            // A turn that proposes an entry shows only the card: the card is
+            // the reply, so any text alongside it is not displayed.
+            let proposesWrite = response.toolCalls.contains { $0.tool.isWrite }
+            if let text = response.text, !proposesWrite {
+                append(.assistant(text))
+            }
+
             guard response.hasToolCalls else { return }
 
             var resultBlocks: [AssistantTurn.Block] = []
@@ -231,13 +283,13 @@ final class AssistantViewModel {
 
             for call in response.toolCalls {
                 if paused {
-                    // Anything after a confirmation request is deferred: the
-                    // provider requires a result for every tool_use block, and
-                    // we cannot answer them until the user has decided.
+                    // Anything after a proposal waits: the provider needs a
+                    // result for every tool call, and these can't be answered
+                    // until the user has decided.
                     resultBlocks.append(.toolResult(
                         id: call.id,
                         content: "{\"status\":\"deferred\",\"detail\":\"Waiting for the "
-                            + "user to respond to an earlier confirmation.\"}",
+                            + "user to respond to the confirmation card.\"}",
                         isError: false))
                     continue
                 }
@@ -255,15 +307,20 @@ final class AssistantViewModel {
                         isError: true))
 
                 case .awaitingConfirmation(let write):
+                    // A new proposal while a card is still open is the amended
+                    // version: the old card closes as replaced.
+                    if let previous = pendingWrite {
+                        replacedWriteIDs.insert(previous.id)
+                    }
                     pendingWrite = write
+                    pendingResultSent = false
                     append(.proposal(write))
                     paused = true
                 }
             }
 
             if paused {
-                // Stash the results gathered so far; they are sent together with
-                // the confirmation outcome.
+                // Held until the user acts on the card, or sends another message.
                 deferredResults = resultBlocks
                 return
             }
@@ -278,62 +335,163 @@ final class AssistantViewModel {
     // MARK: Confirmation gate
 
     /// The user accepted the proposed write. This is the only path that commits.
+    ///
+    /// No follow-up request is made: the card already shows what was saved, so
+    /// the assistant doesn't reply. The outcome is recorded in the history so
+    /// the model knows about it next time the user writes.
     func confirmPendingWrite() async {
         guard let write = pendingWrite else { return }
-        pendingWrite = nil
 
-        let resultJSON: String
-        var summary: String
         do {
-            resultJSON = try executor.commit(write)
-            summary = Self.successSummary(for: write)
+            let resultJSON = try executor.commit(write)
             Haptics.success()
+            append(.proposalResolved(summary: Self.successSummary(for: write), confirmed: true))
+            record(write, resultJSON: resultJSON, isError: false,
+                   note: "The user confirmed the card: \(resultJSON)")
         } catch {
             let message = error.localizedDescription
-            append(.error(message))
             Haptics.error()
-            resultJSON = "{\"status\":\"error\",\"detail\":\"\(Self.escape(message))\"}"
-            summary = "Could not apply that change."
-            append(.proposalResolved(summary: summary, confirmed: false))
-            await resume(with: write, resultJSON: resultJSON, isError: true)
-            return
+            append(.error(message))
+            append(.proposalResolved(summary: "Could not apply that change.", confirmed: false))
+            record(write, resultJSON: "{\"status\":\"error\",\"detail\":\"\(Self.escape(message))\"}",
+                   isError: true,
+                   note: "Saving the card failed: \(message)")
         }
-
-        append(.proposalResolved(summary: summary, confirmed: true))
-        await resume(with: write, resultJSON: resultJSON, isError: false)
     }
 
-    /// The user declined. Nothing is written, and the model is told so.
+    /// The user declined. Nothing is written, and no reply is requested.
     func declinePendingWrite() async {
         guard let write = pendingWrite else { return }
-        pendingWrite = nil
         Haptics.warning()
-
         append(.proposalResolved(summary: "Not saved.", confirmed: false))
-        await resume(with: write,
-                     resultJSON: executor.declinedResult(for: write),
-                     isError: false)
+        record(write, resultJSON: executor.declinedResult(for: write), isError: false,
+               note: "The user cancelled the card; nothing was saved.")
     }
 
-    private func resume(with write: PendingAssistantWrite,
-                        resultJSON: String,
-                        isError: Bool) async {
-        var blocks = deferredResults
+    /// Closes the open card and records its outcome without calling the model.
+    private func record(_ write: PendingAssistantWrite, resultJSON: String,
+                        isError: Bool, note: String) {
+        if pendingResultSent {
+            // The model was already told the card was waiting (the user kept
+            // chatting), so the outcome rides along with the next message.
+            contextNotes.append(note)
+        } else {
+            var blocks = deferredResults
+            blocks.insert(.toolResult(id: write.id, content: resultJSON, isError: isError), at: 0)
+            turns.append(AssistantTurn(role: .user, blocks: blocks))
+        }
         deferredResults = []
-        blocks.insert(.toolResult(id: write.id, content: resultJSON, isError: isError),
-                      at: 0)
-        turns.append(AssistantTurn(role: .user, blocks: blocks))
-        await runLoop()
+        pendingWrite = nil
+        pendingResultSent = false
+        persist()
     }
 
-    // MARK: Transcript helpers
+    /// Called when the user sends a message while a card is still open. The
+    /// card stays open, but the model must be told it is waiting - every tool
+    /// call needs a result before the conversation can continue. Telling it
+    /// what the card holds lets it amend the card if the user asks.
+    private func notePendingCardBeforeNewMessage() {
+        guard let write = pendingWrite, !pendingResultSent else { return }
+        var blocks = deferredResults
+        blocks.insert(.toolResult(id: write.id,
+                                  content: Self.awaitingResult(for: write),
+                                  isError: false), at: 0)
+        turns.append(AssistantTurn(role: .user, blocks: blocks))
+        deferredResults = []
+        pendingResultSent = true
+    }
 
-    func clearConversation() {
+    static func awaitingResult(for write: PendingAssistantWrite) -> String {
+        let card: String = switch write.action {
+        case .add(let draft):
+            "Add \(draft.name): "
+                + (draft.isComposite
+                   ? draft.ingredients.map { "\($0.name) \(AppFormatters.amount($0.quantity)) g" }
+                       .joined(separator: ", ")
+                   : "\(AppFormatters.amount(draft.quantity)) \(draft.unit.shortLabel)")
+                + ", \(AppFormatters.amount(draft.total.calories)) kcal"
+        case .edit(_, let draft, _):
+            "Update \(draft.name)"
+        case .delete(_, let name, _):
+            "Delete \(name)"
+        }
+        return "{\"status\":\"awaiting_user\",\"card\":\"\(escape(card))\",\"detail\":\"Shown to "
+            + "the user as a confirmation card, not yet confirmed or cancelled. If the user "
+            + "now asks to change it, propose the complete amended version and it will "
+            + "replace this card. Otherwise answer them and leave the card as it is.\"}"
+    }
+
+    // MARK: Chat history
+
+    /// Saves the chat on screen, once it has at least one message from the user.
+    func persist() {
+        guard let historyStore,
+              messages.contains(where: { if case .user = $0.kind { return true }; return false })
+        else { return }
+        historyStore.save(SavedConversation(id: conversationID,
+                                            title: SavedConversation.title(for: messages),
+                                            createdAt: conversationCreatedAt,
+                                            updatedAt: .now,
+                                            messages: messages,
+                                            turns: turns))
+    }
+
+    /// Saves the current chat and starts an empty one.
+    func startNewConversation() {
+        persist()
+        resetState()
+        conversationID = UUID()
+        conversationCreatedAt = .now
+    }
+
+    /// Reopens a saved chat so the user can read it or carry on.
+    func open(_ conversation: SavedConversation) {
+        guard conversation.id != conversationID else { return }
+        persist()
+        resetState()
+        conversationID = conversation.id
+        conversationCreatedAt = conversation.createdAt
+        messages = conversation.messages
+        turns = Self.closingUnansweredToolCalls(in: conversation.turns)
+    }
+
+    /// A chat saved while a card was still open has a tool call with no
+    /// result, which the provider would reject. The card can't be acted on
+    /// any more (nothing is open after reopening), so it is recorded as closed.
+    static func closingUnansweredToolCalls(in turns: [AssistantTurn]) -> [AssistantTurn] {
+        let blocks = turns.flatMap(\.blocks)
+        let answered = Set(blocks.compactMap { block -> String? in
+            if case .toolResult(let id, _, _) = block { return id }
+            return nil
+        })
+        let unanswered = blocks.compactMap { block -> String? in
+            if case .toolUse(let id, _, _, _) = block, !answered.contains(id) { return id }
+            return nil
+        }
+        guard !unanswered.isEmpty else { return turns }
+        let closed = unanswered.map { id in
+            AssistantTurn.Block.toolResult(
+                id: id,
+                content: "{\"status\":\"closed\",\"detail\":\"The chat was closed and reopened "
+                    + "before the user decided. Nothing was saved.\"}",
+                isError: false)
+        }
+        return turns + [AssistantTurn(role: .user, blocks: closed)]
+    }
+
+    private func resetState() {
         messages = []
         turns = []
         deferredResults = []
         pendingWrite = nil
+        pendingResultSent = false
+        contextNotes = []
+        replacedWriteIDs = []
+        attachments = []
+        composerText = ""
     }
+
+    // MARK: Transcript helpers
 
     private func append(_ kind: AssistantChatMessage.Kind) {
         messages.append(AssistantChatMessage(kind: kind))
@@ -365,4 +523,11 @@ final class AssistantViewModel {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: " ")
     }
+}
+
+/// One photo in the composer. `data` is nil while it is still being loaded
+/// and downsized, which the composer shows as a spinner.
+struct ComposerAttachment: Identifiable, Equatable {
+    let id = UUID()
+    var data: Data?
 }
