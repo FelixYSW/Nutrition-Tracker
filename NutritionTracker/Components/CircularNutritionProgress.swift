@@ -8,11 +8,10 @@ import SwiftUI
 /// - The empty track runs all the way round.
 /// - The in-range zone is shaded from the minimum (marked with a tick) round
 ///   to the maximum at the top, so "on track" is visible at a glance.
-/// - The consumed arc fills clockwise from the top in the state colour:
-///   under keeps the nutrient's own colour (normal for most of the day),
-///   within turns green, over turns orange.
-/// - Going past the maximum draws a second lap over the first, with a soft
-///   shadow on top so it reads as wrapping rather than just "full".
+/// - The consumed arc fills clockwise from the top in the nutrient's own
+///   colour. The ring looks the same whether the user is under, in range or
+///   over - the caption underneath is what says which; going over simply
+///   shows a full ring.
 ///
 /// The stroke is kept inside the view's frame, so callers size it with a
 /// plain `.frame`.
@@ -29,8 +28,8 @@ struct RangeRing: View {
     @State private var shown: Double = 0
 
     private var band: Double { min(max(bandStart, 0), 1) }
-    /// Capped at two laps: past that, the extra amount stops adding meaning.
-    private var target: Double { min(max(progress.isFinite ? progress : 0, 0), 2) }
+    /// Capped at one full turn: over the maximum just shows a full ring.
+    private var target: Double { min(max(progress.isFinite ? progress : 0, 0), 1) }
 
     var body: some View {
         ZStack {
@@ -62,13 +61,6 @@ struct RangeRing: View {
                 .rotationEffect(.degrees(-90))
                 .opacity(shown > 0.001 ? 1 : 0)
 
-            // Second lap, past the maximum.
-            Circle()
-                .trim(from: 0, to: max(0, min(shown - 1, 0.999)))
-                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .shadow(color: .black.opacity(0.28), radius: lineWidth * 0.4)
-                .opacity(shown > 1.001 ? 1 : 0)
         }
         .padding(lineWidth / 2)
         .onAppear { animate() }
@@ -81,6 +73,17 @@ struct RangeRing: View {
         } else {
             withAnimation(.spring(response: 0.8, dampingFraction: 0.86)) { shown = target }
         }
+    }
+}
+
+/// Colour for the status caption under a ring. The ring itself never changes
+/// with the state; only this line does: "… to go" stays plain, "In range" is
+/// green and "… over" is the warm orange.
+private func captionColor(for state: RangeState, normal: Color) -> Color {
+    switch state {
+    case .under: normal
+    case .within: AppTheme.within
+    case .over: AppTheme.over
     }
 }
 
@@ -105,14 +108,13 @@ struct CompactMacroRing: View {
     let consumed: Double
     let range: NutrientRange
 
-    private var state: RangeState { range.state(consumed: consumed) }
 
     var body: some View {
         VStack(spacing: 6) {
             ZStack {
                 RangeRing(progress: range.progress(consumed: consumed),
                           bandStart: range.bandFractions().start,
-                          tint: AppTheme.color(for: state, nutrient: nutrient),
+                          tint: AppTheme.color(for: nutrient),
                           bandTint: AppTheme.color(for: nutrient),
                           lineWidth: 7)
                     .frame(width: 66, height: 66)
@@ -122,7 +124,7 @@ struct CompactMacroRing: View {
                     .monospacedDigit()
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
-                    .foregroundStyle(state == .over ? AppTheme.over : AppTheme.ink)
+                    .foregroundStyle(AppTheme.ink)
                     .contentTransition(.numericText())
                     .frame(width: 42)
             }
@@ -132,9 +134,11 @@ struct CompactMacroRing: View {
             VStack(spacing: 1) {
                 Text("\(AppFormatters.range(range)) \(nutrient.unitLabel)")
                 Text(rangeCaption(nutrient: nutrient, consumed: consumed, range: range))
+                    .foregroundStyle(captionColor(for: range.state(consumed: consumed),
+                                                  normal: .secondary))
             }
             .font(.caption2)
-            .foregroundStyle(state == .over ? AppTheme.over : Color.secondary)
+            .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .minimumScaleFactor(0.8)
             .lineLimit(2)
@@ -154,9 +158,8 @@ struct CalorieHeroCard: View {
     let consumed: Double
     let range: NutrientRange
 
-    private var state: RangeState { range.state(consumed: consumed) }
     private var progress: Double { range.progress(consumed: consumed) }
-    private var tint: Color { AppTheme.color(for: state, nutrient: .calories) }
+    private var tint: Color { AppTheme.color(for: .calories) }
 
     var body: some View {
         HStack(spacing: 18) {
@@ -182,7 +185,8 @@ struct CalorieHeroCard: View {
                         .font(.footnote)
                     Text(rangeCaption(nutrient: .calories, consumed: consumed, range: range))
                         .font(.footnote.weight(.medium))
-                        .foregroundStyle(state == .over ? AppTheme.over : AppTheme.skyCardText)
+                        .foregroundStyle(captionColor(for: range.state(consumed: consumed),
+                                                      normal: AppTheme.skyCardText))
                 } else {
                     Text("No targets yet. Set them in Settings.")
                         .font(.footnote)
@@ -206,8 +210,9 @@ struct CalorieHeroCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// What the centre says depends on the state, so it adds information
-    /// rather than repeating the number beside it.
+    /// The same read-out in every state - how far towards the minimum, where
+    /// the day counts as on track. Whether that's under, in range or over is
+    /// said by the caption beside the ring, not by the ring itself.
     @ViewBuilder
     private var ringCentre: some View {
         if range.max <= 0 {
@@ -215,36 +220,18 @@ struct CalorieHeroCard: View {
                 .font(.system(.title3, design: .rounded).weight(.heavy))
                 .foregroundStyle(.secondary)
         } else {
-            switch state {
-            case .under:
-                // How far towards the minimum - the point where the day counts
-                // as on track.
-                VStack(spacing: 0) {
-                    Text("\(Int((consumed / max(range.min, 1) * 100).rounded()))%")
-                        .font(.system(.title3, design: .rounded).weight(.heavy))
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                    Text("of min")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(AppTheme.skyCardText)
-                }
-            case .within:
-                Image(systemName: "checkmark")
-                    .font(.system(size: 30, weight: .heavy))
-                    .foregroundStyle(tint)
-            case .over:
-                VStack(spacing: 0) {
-                    Text("+\(AppFormatters.amount(consumed - range.max))")
-                        .font(.system(.title3, design: .rounded).weight(.heavy))
-                        .monospacedDigit()
-                        .minimumScaleFactor(0.6)
-                        .lineLimit(1)
-                    Text("kcal over")
-                        .font(.caption2.weight(.semibold))
-                }
-                .foregroundStyle(tint)
-                .frame(width: 76)
+            VStack(spacing: 0) {
+                Text("\(Int((consumed / max(range.min, 1) * 100).rounded()))%")
+                    .font(.system(.title3, design: .rounded).weight(.heavy))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
+                Text("of min")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppTheme.skyCardText)
             }
+            .frame(width: 76)
         }
     }
 }
