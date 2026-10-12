@@ -35,14 +35,25 @@ final class AssistantViewModel {
 
     private(set) var messages: [AssistantChatMessage] = []
     private(set) var isSending = false
-    /// The write currently awaiting confirmation. Only one card is open at a
-    /// time, so the user is never asked to approve a batch they cannot inspect.
-    private(set) var pendingWrite: PendingAssistantWrite?
+
+    /// The reply currently appearing word by word, and how many characters of
+    /// it are showing. The message itself always holds the whole reply, so
+    /// saving and the model's history never see a partial one.
+    private(set) var revealingMessageID: UUID?
+    private(set) var revealedLength = 0
+    private var revealTask: Task<Void, Never>?
+    /// Cards awaiting confirmation, in the order shown. A meal of several
+    /// dishes (miso soup, chawanmushi, salmon don) gets one card per dish, so
+    /// each can be confirmed, cancelled or changed on its own.
+    private(set) var pendingWrites: [PendingAssistantWrite] = []
+    /// The first open card, for callers that deal with one at a time.
+    var pendingWrite: PendingAssistantWrite? { pendingWrites.first }
     /// Cards closed because the user asked for changes and a new one replaced them.
     private(set) var replacedWriteIDs: Set<String> = []
-    /// True once the model has been told the open card is still waiting, so its
-    /// eventual outcome goes in `contextNotes` rather than as a tool result.
-    private var pendingResultSent = false
+    /// Open cards from the latest model turn that still owe it a tool result.
+    /// Once a card's "still waiting" result has gone out (the user kept
+    /// chatting), its eventual outcome goes in `contextNotes` instead.
+    private var unansweredCardIDs: [String] = []
     /// Outcomes to tell the model with the next message, without asking it to reply.
     private var contextNotes: [String] = []
 
@@ -82,7 +93,8 @@ final class AssistantViewModel {
     }
 
     private var turns: [AssistantTurn] = []
-    /// Tool results queued while a confirmation is outstanding.
+    /// Tool results for the latest model turn, held until every card in it has
+    /// an answer (or the user sends another message).
     private var deferredResults: [AssistantTurn.Block] = []
 
     private let service: AssistantServing
@@ -93,8 +105,8 @@ final class AssistantViewModel {
     private static let maxToolRoundTrips = 5
 
     /// Sent to the model when the user attaches a photo without typing anything.
-    static let photoOnlyPrompt = "What would you suggest from this, given what I have "
-        + "left in my ranges today?"
+    static let photoOnlyPrompt = "[The user sent only this photo, with no message. Follow "
+        + "the rules for a photo on its own.]"
 
     /// Runs an attached photo through the on-device models (A then B) and
     /// describes what they found, for the model to log from. Nil when the food
@@ -201,6 +213,7 @@ final class AssistantViewModel {
 
         composerText = ""
         attachments = []
+        finishReveal()
 
         // Show the message straight away; the photo analysis below can take a moment.
         append(.user(text: text, images: images))
@@ -274,23 +287,23 @@ final class AssistantViewModel {
             let proposesWrite = response.toolCalls.contains { $0.tool.isWrite }
             if let text = response.text, !proposesWrite {
                 append(.assistant(text))
+                if let id = messages.last?.id { reveal(id, text: text) }
             }
 
             guard response.hasToolCalls else { return }
 
             var resultBlocks: [AssistantTurn.Block] = []
-            var paused = false
+            var proposals: [PendingAssistantWrite] = []
+            var replacing: [String: String] = [:]   // new card id -> card it replaces
 
             for call in response.toolCalls {
-                if paused {
-                    // Anything after a proposal waits: the provider needs a
-                    // result for every tool call, and these can't be answered
-                    // until the user has decided.
-                    resultBlocks.append(.toolResult(
-                        id: call.id,
-                        content: "{\"status\":\"deferred\",\"detail\":\"Waiting for the "
-                            + "user to respond to the confirmation card.\"}",
-                        isError: false))
+                // Web search goes out over the network, so it runs here rather
+                // than in the executor, which only reads the local database.
+                if call.tool.usesWebSearch {
+                    let (question, activity) = Self.webQuestion(for: call)
+                    append(.toolActivity(activity))
+                    let (content, failed) = await searchWeb(question)
+                    resultBlocks.append(.toolResult(id: call.id, content: content, isError: failed))
                     continue
                 }
 
@@ -307,21 +320,18 @@ final class AssistantViewModel {
                         isError: true))
 
                 case .awaitingConfirmation(let write):
-                    // A new proposal while a card is still open is the amended
-                    // version: the old card closes as replaced.
-                    if let previous = pendingWrite {
-                        replacedWriteIDs.insert(previous.id)
+                    proposals.append(write)
+                    if let target = call.arguments["replacesCard"]?.stringValue {
+                        replacing[write.id] = target
                     }
-                    pendingWrite = write
-                    pendingResultSent = false
-                    append(.proposal(write))
-                    paused = true
                 }
             }
 
-            if paused {
-                // Held until the user acts on the card, or sends another message.
+            if !proposals.isEmpty {
+                openCards(proposals, replacing: replacing)
+                // Held until the user answers every card, or sends another message.
                 deferredResults = resultBlocks
+                unansweredCardIDs = proposals.map(\.id)
                 return
             }
 
@@ -332,6 +342,75 @@ final class AssistantViewModel {
                       + "Try rephrasing your question."))
     }
 
+    // MARK: Web search
+
+    /// The search question for a web tool, and the activity line shown in the chat.
+    static func webQuestion(for call: AssistantToolCall) -> (question: String, activity: String) {
+        let arguments = call.arguments
+        if call.tool == .lookUpProductNutrition {
+            let product = arguments["product"]?.stringValue ?? ""
+            return (productNutritionQuestion(product: product,
+                                             country: arguments["country"]?.stringValue),
+                    "Looked up nutrition for \(product)")
+        }
+        // Places to eat around the user, with menu items and prices, for the
+        // model to fit to the user's ranges and budget.
+        let place = arguments["place"]?.stringValue ?? ""
+        return (nearbyFoodQuestion(place: place,
+                                   budget: arguments["budget"]?.stringValue,
+                                   preferences: arguments["preferences"]?.stringValue),
+                "Searched for food near \(place)")
+    }
+
+    static func productNutritionQuestion(product: String, country: String?) -> String {
+        var lines = [
+            "Find the official nutrition facts for \(product).",
+            "Give per 100 g (or per 100 ml for drinks): energy in kcal, protein, carbohydrate, "
+                + "total fat and dietary fibre in grams. If the label only gives per serving, "
+                + "give the serving size too and convert to per 100 g.",
+            "Also give the usual serving or pack size (e.g. one cup, one bottle in ml).",
+            "Prefer the manufacturer's website or the product's label. Name the exact product "
+                + "variant the figures are for, and say if you could not find that product."
+        ]
+        if let country = country?.trimmingCharacters(in: .whitespaces), !country.isEmpty {
+            lines.append("The product as sold in \(country).")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func searchWeb(_ question: String) async -> (String, Bool) {
+        do {
+            let result = try await service.searchWeb(question)
+            struct Payload: Encodable {
+                let status = "ok"
+                let summary: String
+                let sources: [WebSearchResult.Source]
+            }
+            let data = try JSONEncoder().encode(Payload(summary: result.summary, sources: result.sources))
+            return (String(decoding: data, as: UTF8.self), false)
+        } catch {
+            return ("{\"status\":\"error\",\"detail\":\"\(Self.escape(error.localizedDescription))\"}", true)
+        }
+    }
+
+    static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?) -> String {
+        var lines = [
+            "Find restaurants, food court stalls, cafes and kiosks that are open and operating "
+                + "at or right next to \(place). List up to 8 that suit the request.",
+            "For each: the name, where it is (floor, wing or street) if known, the cuisine, "
+                + "and 2 to 4 specific menu items with their current prices in local currency "
+                + "and a short portion description.",
+            "Only include real places and dishes you found; say if prices may be out of date."
+        ]
+        if let budget = budget?.trimmingCharacters(in: .whitespaces), !budget.isEmpty {
+            lines.append("Budget: \(budget). Only include items that fit it.")
+        }
+        if let preferences = preferences?.trimmingCharacters(in: .whitespaces), !preferences.isEmpty {
+            lines.append("Prefer: \(preferences).")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: Confirmation gate
 
     /// The user accepted the proposed write. This is the only path that commits.
@@ -339,15 +418,15 @@ final class AssistantViewModel {
     /// No follow-up request is made: the card already shows what was saved, so
     /// the assistant doesn't reply. The outcome is recorded in the history so
     /// the model knows about it next time the user writes.
-    func confirmPendingWrite() async {
-        guard let write = pendingWrite else { return }
+    func confirm(_ write: PendingAssistantWrite) async {
+        guard pendingWrites.contains(where: { $0.id == write.id }) else { return }
 
         do {
             let resultJSON = try executor.commit(write)
             Haptics.success()
             append(.proposalResolved(summary: Self.successSummary(for: write), confirmed: true))
             record(write, resultJSON: resultJSON, isError: false,
-                   note: "The user confirmed the card: \(resultJSON)")
+                   note: "The user confirmed the card for \(Self.cardTitle(for: write)): \(resultJSON)")
         } catch {
             let message = error.localizedDescription
             Haptics.error()
@@ -355,50 +434,98 @@ final class AssistantViewModel {
             append(.proposalResolved(summary: "Could not apply that change.", confirmed: false))
             record(write, resultJSON: "{\"status\":\"error\",\"detail\":\"\(Self.escape(message))\"}",
                    isError: true,
-                   note: "Saving the card failed: \(message)")
+                   note: "Saving the card for \(Self.cardTitle(for: write)) failed: \(message)")
         }
     }
 
     /// The user declined. Nothing is written, and no reply is requested.
-    func declinePendingWrite() async {
-        guard let write = pendingWrite else { return }
+    func decline(_ write: PendingAssistantWrite) async {
+        guard pendingWrites.contains(where: { $0.id == write.id }) else { return }
         Haptics.warning()
-        append(.proposalResolved(summary: "Not saved.", confirmed: false))
+        append(.proposalResolved(summary: "\(Self.cardTitle(for: write)) not saved.", confirmed: false))
         record(write, resultJSON: executor.declinedResult(for: write), isError: false,
-               note: "The user cancelled the card; nothing was saved.")
+               note: "The user cancelled the card for \(Self.cardTitle(for: write)); "
+                   + "nothing was saved.")
     }
 
-    /// Closes the open card and records its outcome without calling the model.
+    /// "Add all" for a meal split into several cards. Only additions: edits
+    /// and deletions are always confirmed one by one.
+    var confirmableTogether: [PendingAssistantWrite] {
+        pendingWrites.filter { if case .add = $0.action { return true }; return false }
+    }
+
+    func confirmAllAdditions() async {
+        for write in confirmableTogether { await confirm(write) }
+    }
+
+    /// Confirms or cancels the first open card.
+    func confirmPendingWrite() async {
+        if let write = pendingWrite { await confirm(write) }
+    }
+
+    func declinePendingWrite() async {
+        if let write = pendingWrite { await decline(write) }
+    }
+
+    /// Shows the new cards. A card the model says it amends - or one with the
+    /// same name - closes as replaced; all others stay open alongside.
+    private func openCards(_ proposals: [PendingAssistantWrite], replacing: [String: String]) {
+        for write in proposals {
+            let target = replacing[write.id] ?? pendingWrites.first {
+                Self.cardTitle(for: $0).caseInsensitiveCompare(Self.cardTitle(for: write)) == .orderedSame
+            }?.id
+            if let target, let index = pendingWrites.firstIndex(where: { $0.id == target }) {
+                replacedWriteIDs.insert(target)
+                pendingWrites.remove(at: index)
+            }
+            pendingWrites.append(write)
+            append(.proposal(write))
+        }
+    }
+
+    /// Closes one card and records its outcome without calling the model.
     private func record(_ write: PendingAssistantWrite, resultJSON: String,
                         isError: Bool, note: String) {
-        if pendingResultSent {
+        pendingWrites.removeAll { $0.id == write.id }
+        if let index = unansweredCardIDs.firstIndex(of: write.id) {
+            unansweredCardIDs.remove(at: index)
+            deferredResults.append(.toolResult(id: write.id, content: resultJSON, isError: isError))
+            if unansweredCardIDs.isEmpty { flushDeferredResults() }
+        } else {
             // The model was already told the card was waiting (the user kept
             // chatting), so the outcome rides along with the next message.
             contextNotes.append(note)
-        } else {
-            var blocks = deferredResults
-            blocks.insert(.toolResult(id: write.id, content: resultJSON, isError: isError), at: 0)
-            turns.append(AssistantTurn(role: .user, blocks: blocks))
         }
-        deferredResults = []
-        pendingWrite = nil
-        pendingResultSent = false
         persist()
     }
 
-    /// Called when the user sends a message while a card is still open. The
-    /// card stays open, but the model must be told it is waiting - every tool
-    /// call needs a result before the conversation can continue. Telling it
-    /// what the card holds lets it amend the card if the user asks.
-    private func notePendingCardBeforeNewMessage() {
-        guard let write = pendingWrite, !pendingResultSent else { return }
-        var blocks = deferredResults
-        blocks.insert(.toolResult(id: write.id,
-                                  content: Self.awaitingResult(for: write),
-                                  isError: false), at: 0)
-        turns.append(AssistantTurn(role: .user, blocks: blocks))
+    private func flushDeferredResults() {
+        if !deferredResults.isEmpty {
+            turns.append(AssistantTurn(role: .user, blocks: deferredResults))
+        }
         deferredResults = []
-        pendingResultSent = true
+    }
+
+    /// Called when the user sends a message while cards are still open. They
+    /// stay open, but the model must be told they are waiting - every tool
+    /// call needs a result before the conversation can continue. Telling it
+    /// what each card holds lets it amend one if the user asks.
+    private func notePendingCardBeforeNewMessage() {
+        guard !unansweredCardIDs.isEmpty else { return }
+        for id in unansweredCardIDs {
+            guard let write = pendingWrites.first(where: { $0.id == id }) else { continue }
+            deferredResults.append(.toolResult(id: id, content: Self.awaitingResult(for: write),
+                                               isError: false))
+        }
+        unansweredCardIDs = []
+        flushDeferredResults()
+    }
+
+    static func cardTitle(for write: PendingAssistantWrite) -> String {
+        switch write.action {
+        case .add(let draft), .edit(_, let draft, _): draft.name
+        case .delete(_, let name, _): name
+        }
     }
 
     static func awaitingResult(for write: PendingAssistantWrite) -> String {
@@ -415,9 +542,10 @@ final class AssistantViewModel {
         case .delete(_, let name, _):
             "Delete \(name)"
         }
-        return "{\"status\":\"awaiting_user\",\"card\":\"\(escape(card))\",\"detail\":\"Shown to "
-            + "the user as a confirmation card, not yet confirmed or cancelled. If the user "
-            + "now asks to change it, propose the complete amended version and it will "
+        return "{\"status\":\"awaiting_user\",\"cardID\":\"\(escape(write.id))\","
+            + "\"card\":\"\(escape(card))\",\"detail\":\"Shown to the user as a confirmation "
+            + "card, not yet confirmed or cancelled. If the user now asks to change it, propose "
+            + "the complete amended version with replacesCard set to this cardID and it will "
             + "replace this card. Otherwise answer them and leave the card as it is.\"}"
     }
 
@@ -431,7 +559,10 @@ final class AssistantViewModel {
         historyStore.save(SavedConversation(id: conversationID,
                                             title: SavedConversation.title(for: messages),
                                             createdAt: conversationCreatedAt,
-                                            updatedAt: .now,
+                                            // Time of the last message, not of saving:
+                                            // saves also happen on opening history,
+                                            // switching chats and leaving the app.
+                                            updatedAt: messages.last?.timestamp ?? conversationCreatedAt,
                                             messages: messages,
                                             turns: turns))
     }
@@ -480,11 +611,12 @@ final class AssistantViewModel {
     }
 
     private func resetState() {
+        finishReveal()
         messages = []
         turns = []
         deferredResults = []
-        pendingWrite = nil
-        pendingResultSent = false
+        pendingWrites = []
+        unansweredCardIDs = []
         contextNotes = []
         replacedWriteIDs = []
         attachments = []
@@ -495,6 +627,60 @@ final class AssistantViewModel {
 
     private func append(_ kind: AssistantChatMessage.Kind) {
         messages.append(AssistantChatMessage(kind: kind))
+    }
+
+    // MARK: Reply reveal
+
+    /// Time between reveal steps, and the most steps a reply takes, so even a
+    /// long reply is fully shown in about two and a half seconds.
+    private static let revealTick: UInt64 = 30_000_000
+    private static let maxRevealSteps = 80.0
+
+    /// What the transcript shows for an assistant message: the part revealed
+    /// so far while it is appearing, otherwise the whole text.
+    func displayedText(_ text: String, for id: UUID) -> String {
+        guard id == revealingMessageID else { return text }
+        return String(text.prefix(revealedLength))
+    }
+
+    /// Shows the reply a few words at a time, like a streamed chat reply.
+    private func reveal(_ id: UUID, text: String) {
+        finishReveal()
+        let stops = Self.revealStops(in: text)
+        guard stops.count > 1 else { return }
+        let step = max(1, Int((Double(stops.count) / Self.maxRevealSteps).rounded(.up)))
+        revealingMessageID = id
+        revealedLength = 0
+        revealTask = Task { [weak self] in
+            for index in stride(from: step - 1, to: stops.count, by: step) {
+                try? await Task.sleep(nanoseconds: Self.revealTick)
+                guard let self, !Task.isCancelled else { return }
+                self.revealedLength = stops[index]
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.finishReveal()
+        }
+    }
+
+    /// Shows the rest of the reply at once - when it finishes, or when the
+    /// user sends again or switches chat.
+    private func finishReveal() {
+        revealTask?.cancel()
+        revealTask = nil
+        revealingMessageID = nil
+        revealedLength = 0
+    }
+
+    /// Character counts at the end of each word, ending with the full length.
+    static func revealStops(in text: String) -> [Int] {
+        var stops: [Int] = []
+        var previousWasSpace = true
+        for (offset, character) in text.enumerated() {
+            if character.isWhitespace, !previousWasSpace { stops.append(offset) }
+            previousWasSpace = character.isWhitespace
+        }
+        if stops.last != text.count { stops.append(text.count) }
+        return stops
     }
 
     private static func activityLabel(for tool: AssistantTool) -> String {

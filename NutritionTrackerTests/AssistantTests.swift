@@ -506,6 +506,128 @@ final class AssistantToolExecutorTests: XCTestCase {
         XCTAssertEqual(entry.total.calories, 247.5, accuracy: 0.001)
     }
 
+    /// "I forgot, there was also an egg in it": the edit carries the whole
+    /// component list, so the ingredients and totals change - not just the name.
+    func testEditWithItemsReplacesIngredientsAndRecalculates() throws {
+        let context = TestSupport.makeContext()
+        let executor = AssistantToolExecutor(context: context)
+        guard case .awaitingConfirmation(let add) = executor.execute(AssistantToolCall(
+            id: "a", tool: .addFoodEntry, arguments: [
+                "name": .string("Konjac with tomato"),
+                "items": .array([
+                    .object(["name": .string("konjac knots"), "grams": .number(150)]),
+                    .object(["name": .string("tomatoes"), "grams": .number(120)])
+                ])])) else { return XCTFail("expected an add proposal") }
+        try executor.commit(add)
+        let entry = try XCTUnwrap(try context.fetch(FetchDescriptor<FoodEntry>()).first)
+        let before = entry.total.calories
+        let konjacID = try XCTUnwrap(entry.orderedIngredients.first { $0.name == "konjac knots" }?.id)
+
+        guard case .awaitingConfirmation(let edit) = executor.execute(AssistantToolCall(
+            id: "e", tool: .editFoodEntry, arguments: [
+                "id": .string(entry.id.uuidString),
+                "name": .string("Konjac with tomato and egg"),
+                "items": .array([
+                    .object(["name": .string("konjac knots"), "grams": .number(150)]),
+                    .object(["name": .string("tomatoes"), "grams": .number(120)]),
+                    .object(["name": .string("egg"), "grams": .number(50)])
+                ])])) else { return XCTFail("expected an edit proposal") }
+        guard case .edit(_, let draft, _) = edit.action else { return XCTFail() }
+        XCTAssertEqual(draft.ingredients.count, 3, "the card shows the egg before saving")
+
+        try executor.commit(edit)
+        XCTAssertEqual(count(context), 1, "edited, not added as a second entry")
+        XCTAssertEqual(entry.name, "Konjac with tomato and egg")
+        XCTAssertEqual(entry.orderedIngredients.map(\.name), ["konjac knots", "tomatoes", "egg"])
+        XCTAssertGreaterThan(entry.total.calories, before + 50, "the egg's calories are counted")
+        XCTAssertTrue(entry.orderedIngredients.contains { $0.id == konjacID },
+                      "unchanged ingredients are kept, not recreated")
+    }
+
+    /// Figures from a nutrition label (typed, photographed or the brand's own)
+    /// win over the app's database, which would otherwise replace them.
+    func testLabelFiguresBeatTheDatabase() throws {
+        let executor = AssistantToolExecutor(context: TestSupport.makeContext())
+        guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
+            id: "l", tool: .addFoodEntry, arguments: [
+                "name": .string("Konjac noodles"),
+                "items": .array([
+                    .object(["name": .string("konjac knots"), "grams": .number(200),
+                             "kcalPer100g": .number(9), "carbsPer100g": .number(3),
+                             "nutritionSource": .string("label")]),
+                    .object(["name": .string("Farm Fresh fresh milk"), "grams": .number(250),
+                             "kcalPer100g": .number(64), "proteinPer100g": .number(3.2),
+                             "fatPer100g": .number(3.5), "carbsPer100g": .number(4.8),
+                             "nutritionSource": .string("brand")])
+                ])])),
+              case .add(let draft) = write.action else { return XCTFail("expected an add proposal") }
+
+        let konjac = try XCTUnwrap(draft.ingredients.first)
+        XCTAssertEqual(konjac.provenance, .nutritionLabel)
+        XCTAssertEqual(konjac.nutritionPerServing.calories, 9, "kept, not replaced by gen.konjac")
+        XCTAssertNil(konjac.canonicalID)
+        let milk = try XCTUnwrap(draft.ingredients.last)
+        XCTAssertEqual(milk.provenance, .brandPublished)
+        XCTAssertEqual(milk.total.calories, 160, accuracy: 0.5)
+    }
+
+    func testDeclaredFiguresAreNotRepairedLikeGuesses() throws {
+        // A label's kcal can legitimately differ from 4/4/9 (polyols, alcohol);
+        // a guess that far off would be corrected.
+        let label = try XCTUnwrap(AssistantArgumentParser.parseItem([
+            "name": .string("sugar-free sweet"), "grams": .number(20),
+            "kcalPer100g": .number(240), "carbsPer100g": .number(95),
+            "nutritionSource": .string("label")]))
+        XCTAssertEqual(label.nutritionPerServing.calories, 240)
+
+        let empty = try XCTUnwrap(AssistantArgumentParser.parseItem([
+            "name": .string("milk"), "grams": .number(250),
+            "nutritionSource": .string("label")]))
+        XCTAssertEqual(empty.provenance, .modelEstimate, "a label with no figures is a guess")
+    }
+
+    /// "I only ate half": the dish's servings are halved and its ingredients
+    /// stay as they are.
+    func testHalfPortionEditHalvesTheServings() throws {
+        let context = TestSupport.makeContext()
+        let executor = AssistantToolExecutor(context: context)
+        guard case .awaitingConfirmation(let add) = executor.execute(AssistantToolCall(
+            id: "a", tool: .addFoodEntry, arguments: [
+                "name": .string("Nasi lemak"),
+                "items": .array([
+                    .object(["name": .string("rice"), "grams": .number(200)]),
+                    .object(["name": .string("egg"), "grams": .number(50)])
+                ])])) else { return XCTFail() }
+        try executor.commit(add)
+        let entry = try XCTUnwrap(try context.fetch(FetchDescriptor<FoodEntry>()).first)
+        let full = entry.total.calories
+
+        guard case .awaitingConfirmation(let edit) = executor.execute(AssistantToolCall(
+            id: "e", tool: .editFoodEntry,
+            arguments: ["id": .string(entry.id.uuidString), "quantity": .number(0.5)])) else {
+            return XCTFail()
+        }
+        try executor.commit(edit)
+        XCTAssertEqual(entry.quantity, 0.5)
+        XCTAssertEqual(entry.orderedIngredients.count, 2)
+        XCTAssertEqual(entry.total.calories, full / 2, accuracy: 0.5)
+    }
+
+    func testKnownIngredientsKeepHandEditedFigures() {
+        var draft = FoodEntryDraft(name: "Bowl")
+        draft.ingredients = [IngredientDraft(name: "Rice", quantity: 150, servingSize: 100,
+                                             nutritionPerServing: Nutrition(calories: 111))]
+        let merged = AssistantToolExecutor.keepingKnownFigures(
+            [IngredientDraft(name: "rice", quantity: 200, servingSize: 100,
+                             nutritionPerServing: Nutrition(calories: 130)),
+             IngredientDraft(name: "egg", quantity: 50, servingSize: 100)],
+            from: draft)
+        XCTAssertEqual(merged.first?.id, draft.ingredients.first?.id)
+        XCTAssertEqual(merged.first?.quantity, 200, "new amount")
+        XCTAssertEqual(merged.first?.nutritionPerServing.calories, 111, "own figures kept")
+        XCTAssertEqual(merged.last?.name, "egg")
+    }
+
     func testEditOfDeletedEntryFailsCleanly() {
         let executor = AssistantToolExecutor(context: TestSupport.makeContext())
         let missing = UUID()
@@ -577,6 +699,40 @@ final class AssistantToolExecutorTests: XCTestCase {
 @MainActor
 final class AssistantContextBuilderTests: XCTestCase {
 
+    /// Just after midnight the model sees the local clock and last night's
+    /// entries, so "before midnight" lands on yesterday.
+    func testSmallHoursIncludeLocalTimeAndYesterday() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        let context = TestSupport.makeContext()
+        context.insert(TestSupport.entry(name: "Dinner",
+                                         at: TestSupport.date(2026, 10, 13, 20, calendar: calendar)))
+        try context.save()
+        let builder = AssistantContextBuilder(context: context, calendar: calendar)
+
+        let lateNight = builder.build(now: TestSupport.date(2026, 10, 14, 0, 30, calendar: calendar))
+        XCTAssertTrue(lateNight.localTime.hasPrefix("00:30"))
+        XCTAssertEqual(lateNight.localDate, "2026-10-14")
+        XCTAssertTrue(lateNight.entriesToday.isEmpty)
+        XCTAssertEqual(lateNight.entriesYesterday?.map(\.name), ["Dinner"])
+
+        let afternoon = builder.build(now: TestSupport.date(2026, 10, 14, 15, calendar: calendar))
+        XCTAssertNil(afternoon.entriesYesterday, "only in the small hours")
+    }
+
+    func testLocalTimesWithoutAnOffsetAreReadAsLocal() throws {
+        let kualaLumpur = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = kualaLumpur
+        let expected = TestSupport.date(2026, 10, 13, 23, 45, calendar: calendar)
+        XCTAssertEqual(AssistantArgumentParser.parseDate(.string("2026-10-13T23:45"),
+                                                         timeZone: kualaLumpur), expected)
+        XCTAssertEqual(AssistantArgumentParser.parseDate(.string("2026-10-13T23:45:00+08:00")),
+                       expected)
+        XCTAssertEqual(AssistantArgumentParser.parseDate(.string("2026-10-13 23:45"),
+                                                         timeZone: kualaLumpur), expected)
+    }
+
     func testPayloadContainsRemainingRoomAndTodaysEntries() throws {
         let context = TestSupport.makeContext()
         context.insert(UserProfile(dateOfBirth: TestSupport.date(1990, 1, 1), sex: .female,
@@ -644,6 +800,18 @@ final class ScriptedAssistantService: AssistantServing, @unchecked Sendable {
         guard !responses.isEmpty else { return AssistantResponse(text: "Done.", toolCalls: []) }
         return responses.removeFirst()
     }
+
+    /// Nil means search isn't available, like a non-Gemini provider.
+    var searchResult: WebSearchResult?
+    private(set) var searchQuestions: [String] = []
+
+    func searchWeb(_ question: String) async throws -> WebSearchResult {
+        searchQuestions.append(question)
+        guard let searchResult else {
+            throw AssistantServiceError.requestFailed(detail: "web search isn't available")
+        }
+        return searchResult
+    }
 }
 
 @MainActor
@@ -665,6 +833,79 @@ final class AssistantViewModelTests: XCTestCase {
                                                       "name": .string("grilled chicken salad"),
                                                       "grams": .number(300),
                                                       "kcalPer100g": .number(127)])])])])
+
+    /// Replies appear a few words at a time, but the stored message is always
+    /// the whole reply.
+    func testReplyIsRevealedGraduallyThenShownWhole() async throws {
+        let reply = "Have **two sticks** of satay and a small bowl of rice."
+        let (viewModel, _) = makeViewModel(ScriptedAssistantService([
+            AssistantResponse(text: reply, toolCalls: [])]))
+        viewModel.composerText = "what should I eat?"
+        await viewModel.send()
+
+        let message = try XCTUnwrap(viewModel.messages.last)
+        XCTAssertEqual(message.kind, .assistant(reply), "full text saved straight away")
+        XCTAssertEqual(viewModel.revealingMessageID, message.id)
+        XCTAssertLessThan(viewModel.displayedText(reply, for: message.id).count, reply.count)
+
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        XCTAssertNil(viewModel.revealingMessageID)
+        XCTAssertEqual(viewModel.displayedText(reply, for: message.id), reply)
+    }
+
+    /// "I'm in Mid Valley, what should I eat? RM15": the place and budget are
+    /// searched, and the results go back to the model to recommend from.
+    func testFindFoodNearbySearchesAndReturnsResultsToTheModel() async throws {
+        let service = ScriptedAssistantService([
+            AssistantResponse(text: nil, toolCalls: [AssistantToolCall(
+                id: "s", tool: .findFoodNearby,
+                arguments: ["place": .string("Mid Valley Megamall"), "budget": .string("RM15")])]),
+            AssistantResponse(text: "Try the chicken rice at Stall A (RM12).", toolCalls: [])
+        ])
+        service.searchResult = WebSearchResult(
+            summary: "Stall A, LG floor: chicken rice RM12.",
+            sources: [.init(title: "Mall directory", url: "https://example.com")])
+        let (viewModel, _) = makeViewModel(service)
+        viewModel.composerText = "I'm in Mid Valley, what should I eat? Budget RM15"
+        await viewModel.send()
+
+        let question = try XCTUnwrap(service.searchQuestions.first)
+        XCTAssertTrue(question.contains("Mid Valley Megamall"))
+        XCTAssertTrue(question.contains("Budget: RM15"))
+        let sent = try XCTUnwrap(service.receivedTurns.last).flatMap(\.blocks)
+        XCTAssertTrue(sent.contains {
+            if case .toolResult("s", let content, false) = $0 { return content.contains("chicken rice RM12") }
+            return false
+        })
+        XCTAssertEqual(viewModel.messages.last?.kind, .assistant("Try the chicken rice at Stall A (RM12)."))
+    }
+
+    func testFailedSearchIsReportedToTheModelNotTheUser() async throws {
+        let service = ScriptedAssistantService([
+            AssistantResponse(text: nil, toolCalls: [AssistantToolCall(
+                id: "s", tool: .findFoodNearby, arguments: ["place": .string("Pavilion")])]),
+            AssistantResponse(text: "I couldn't search just now.", toolCalls: [])
+        ])
+        let (viewModel, _) = makeViewModel(service)
+        viewModel.composerText = "what's good at Pavilion?"
+        await viewModel.send()
+
+        let sent = try XCTUnwrap(service.receivedTurns.last).flatMap(\.blocks)
+        XCTAssertTrue(sent.contains {
+            if case .toolResult("s", _, true) = $0 { return true }
+            return false
+        })
+        XCTAssertFalse(viewModel.messages.contains {
+            if case .error = $0.kind { return true }
+            return false
+        })
+    }
+
+    func testRevealStopsAtWordEnds() {
+        XCTAssertEqual(AssistantViewModel.revealStops(in: "Hi there  you"), [2, 8, 13])
+        XCTAssertEqual(AssistantViewModel.revealStops(in: "Done. "), [5, 6])
+        XCTAssertEqual(AssistantViewModel.revealStops(in: ""), [0])
+    }
 
     /// The assistant's own replies must be sent back on the next request, or
     /// follow-up questions lose their context.
@@ -791,9 +1032,10 @@ final class AssistantViewModelTests: XCTestCase {
     /// Asking for a change makes the model propose again: the new card
     /// replaces the old one.
     func testAmendmentReplacesTheOpenCard() async throws {
+        var arguments = AssistantToolExecutorTests.tinyArguments
+        arguments["replacesCard"] = .string("toolu_add")
         let amended = AssistantResponse(text: nil, toolCalls: [
-            AssistantToolCall(id: "toolu_add2", tool: .addFoodEntry,
-                              arguments: AssistantToolExecutorTests.tinyArguments)])
+            AssistantToolCall(id: "toolu_add2", tool: .addFoodEntry, arguments: arguments)])
         let service = ScriptedAssistantService([addCall, amended])
         let (viewModel, _) = makeViewModel(service)
 
@@ -806,6 +1048,90 @@ final class AssistantViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.pendingWrite?.id, "toolu_add2")
         XCTAssertTrue(viewModel.replacedWriteIDs.contains(first.id))
+    }
+
+    // MARK: Several cards
+
+    private func dish(_ id: String, _ name: String, grams: Double = 200) -> AssistantToolCall {
+        AssistantToolCall(id: id, tool: .addFoodEntry, arguments: [
+            "name": .string(name),
+            "items": .array([.object(["name": .string(name.lowercased()), "grams": .number(grams),
+                                      "kcalPer100g": .number(100)])])])
+    }
+
+    private var japaneseSet: AssistantResponse {
+        AssistantResponse(text: nil, toolCalls: [dish("miso", "Miso soup"),
+                                                 dish("chawan", "Chawanmushi", grams: 120),
+                                                 dish("don", "Salmon don", grams: 350)])
+    }
+
+    /// A photo of three bowls becomes three cards, each handled on its own.
+    func testEachDishGetsItsOwnCard() async throws {
+        let service = ScriptedAssistantService([japaneseSet])
+        let (viewModel, context) = makeViewModel(service)
+        viewModel.composerText = "I had this set"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.pendingWrites.map(\.id), ["miso", "chawan", "don"])
+        XCTAssertEqual(viewModel.confirmableTogether.count, 3)
+
+        let chawanmushi = try XCTUnwrap(viewModel.pendingWrites.first { $0.id == "chawan" })
+        await viewModel.confirm(chawanmushi)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 1)
+        XCTAssertEqual(viewModel.pendingWrites.map(\.id), ["miso", "don"], "the others stay open")
+
+        let miso = try XCTUnwrap(viewModel.pendingWrites.first)
+        await viewModel.decline(miso)
+        await viewModel.confirmAllAdditions()
+        XCTAssertTrue(viewModel.pendingWrites.isEmpty)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 2)
+
+        // Every card's outcome goes back together, once all are answered.
+        viewModel.composerText = "thanks"
+        await viewModel.send()
+        let request = try XCTUnwrap(service.receivedTurns.last)
+        let results = toolResults(in: request)
+        XCTAssertEqual(Set(results.map(\.id)), ["miso", "chawan", "don"])
+        XCTAssertTrue(results.contains { $0.id == "miso" && $0.content.contains("declined") })
+    }
+
+    /// "I actually had 3 chawanmushi": only that card is replaced.
+    func testAmendingOneCardLeavesTheOthersOpen() async throws {
+        var amended = dish("chawan2", "Chawanmushi", grams: 360)
+        amended = AssistantToolCall(id: amended.id, tool: amended.tool,
+                                    arguments: amended.arguments.merging(
+                                        ["replacesCard": .string("chawan")]) { $1 })
+        let service = ScriptedAssistantService([
+            japaneseSet, AssistantResponse(text: nil, toolCalls: [amended])])
+        let (viewModel, _) = makeViewModel(service)
+        viewModel.composerText = "I had this set"
+        await viewModel.send()
+        viewModel.composerText = "I had 3 chawanmushi"
+        await viewModel.send()
+
+        // The model heard all three cards were waiting, with ids to amend by.
+        let request = try XCTUnwrap(service.receivedTurns.last)
+        let waiting = toolResults(in: request).filter { $0.content.contains("awaiting_user") }
+        XCTAssertEqual(Set(waiting.map(\.id)), ["miso", "chawan", "don"])
+        XCTAssertTrue(waiting.contains { $0.content.contains("\"cardID\":\"chawan\"") })
+
+        XCTAssertEqual(viewModel.pendingWrites.map(\.id), ["miso", "don", "chawan2"])
+        XCTAssertEqual(viewModel.replacedWriteIDs, ["chawan"])
+    }
+
+    /// Adding another dish to the meal doesn't close the cards already open.
+    func testANewDishDoesNotReplaceOpenCards() async throws {
+        let service = ScriptedAssistantService([
+            AssistantResponse(text: nil, toolCalls: [dish("miso", "Miso soup")]),
+            AssistantResponse(text: nil, toolCalls: [dish("tea", "Green tea")])])
+        let (viewModel, _) = makeViewModel(service)
+        viewModel.composerText = "miso soup"
+        await viewModel.send()
+        viewModel.composerText = "and a green tea"
+        await viewModel.send()
+
+        XCTAssertEqual(viewModel.pendingWrites.map(\.id), ["miso", "tea"])
+        XCTAssertTrue(viewModel.replacedWriteIDs.isEmpty)
     }
 
     /// Confirming a card after chatting on: the model learns via a note with
@@ -956,5 +1282,62 @@ final class AssistantViewModelTests: XCTestCase {
             if case .error = $0.kind { return true }
             return false
         })
+    }
+}
+
+// MARK: - Web search
+
+final class AssistantWebSearchTests: XCTestCase {
+
+    func testSearchResponseGivesTextAndUniqueSources() throws {
+        let json = """
+        {"candidates":[{"content":{"parts":[{"text":"Stall A: chicken rice RM12. "},{"text":"Stall B: soup RM10."}]},
+          "groundingMetadata":{"groundingChunks":[
+            {"web":{"uri":"https://a.example","title":"A"}},
+            {"web":{"uri":"https://a.example","title":"A again"}},
+            {"web":{"uri":"https://b.example"}}]}}]}
+        """
+        let result = try OpenAICompatibleAssistantService.decodeSearch(data: Data(json.utf8))
+        XCTAssertEqual(result.summary, "Stall A: chicken rice RM12. Stall B: soup RM10.")
+        XCTAssertEqual(result.sources.map(\.url), ["https://a.example", "https://b.example"])
+        XCTAssertEqual(result.sources.last?.title, "https://b.example", "falls back to the link")
+    }
+
+    func testEmptySearchResponseThrows() {
+        XCTAssertThrowsError(try OpenAICompatibleAssistantService.decodeSearch(
+            data: Data(#"{"candidates":[{"content":{"parts":[]}}]}"#.utf8)))
+    }
+
+    func testSearchUsesGeminisOwnAPI() {
+        let gemini = OpenAICompatibleAssistantService(
+            baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/", pinnedModel: nil)
+        XCTAssertEqual(gemini.nativeGeminiRoot, "https://generativelanguage.googleapis.com/v1beta")
+        let other = OpenAICompatibleAssistantService(baseURL: "https://api.deepseek.com", pinnedModel: nil)
+        XCTAssertNil(other.nativeGeminiRoot, "no search on other providers")
+    }
+
+    @MainActor
+    func testBrandLookupAsksForPer100gFactsOfThatProduct() {
+        let (question, activity) = AssistantViewModel.webQuestion(for: AssistantToolCall(
+            id: "p", tool: .lookUpProductNutrition,
+            arguments: ["product": .string("Farm Fresh fresh milk"), "country": .string("Malaysia")]))
+        XCTAssertTrue(question.contains("Farm Fresh fresh milk"))
+        XCTAssertTrue(question.contains("per 100 g"))
+        XCTAssertTrue(question.contains("Malaysia"))
+        XCTAssertEqual(activity, "Looked up nutrition for Farm Fresh fresh milk")
+        XCTAssertTrue(AssistantTool.lookUpProductNutrition.usesWebSearch)
+        XCTAssertFalse(AssistantTool.lookUpProductNutrition.isWrite)
+    }
+
+    @MainActor
+    func testQuestionOnlyMentionsBudgetWhenGiven() {
+        let withBudget = AssistantViewModel.nearbyFoodQuestion(
+            place: "Mid Valley", budget: "RM15", preferences: "high protein")
+        XCTAssertTrue(withBudget.contains("Mid Valley"))
+        XCTAssertTrue(withBudget.contains("Budget: RM15"))
+        XCTAssertTrue(withBudget.contains("Prefer: high protein"))
+        let without = AssistantViewModel.nearbyFoodQuestion(place: "Mid Valley", budget: " ",
+                                                            preferences: nil)
+        XCTAssertFalse(without.contains("Budget"))
     }
 }

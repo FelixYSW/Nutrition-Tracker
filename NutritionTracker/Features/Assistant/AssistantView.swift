@@ -15,6 +15,11 @@ struct AssistantView: View {
     @State private var isShowingCamera = false
     @State private var cameraProblem: String?
     @State private var isShowingHistory = false
+    // Chat scrolling: whether the end of the chat is on screen, and whether
+    // new content should keep it there (off once the user scrolls away).
+    @State private var isAtBottom = true
+    @State private var isFollowingBottom = true
+    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -99,33 +104,100 @@ struct AssistantView: View {
     private func transcript(viewModel: AssistantViewModel) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if viewModel.messages.isEmpty {
-                        suggestionsCard(viewModel: viewModel)
-                    }
+                VStack(spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        if viewModel.messages.isEmpty {
+                            suggestionsCard(viewModel: viewModel)
+                        }
 
-                    ForEach(viewModel.messages) { message in
-                        messageRow(message: message, viewModel: viewModel)
-                            .id(message.id)
-                    }
+                        ForEach(viewModel.messages) { message in
+                            messageRow(message: message, viewModel: viewModel)
+                                .id(message.id)
+                        }
 
-                    if viewModel.isSending {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Thinking\u{2026}")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                        if viewModel.isSending {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Thinking\u{2026}")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    .padding(.horizontal, AppTheme.cardPadding)
+                    .padding(.vertical, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // The very end of the chat, below "Thinking…". Its position
+                    // tells whether the user is looking at the bottom.
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.bottomID)
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: BottomEdgeKey.self,
+                                value: geometry.frame(in: .named(Self.scrollSpace)).minY)
+                        })
                 }
-                .padding(.horizontal, AppTheme.cardPadding)
-                .padding(.vertical, 16)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .onChange(of: viewModel.messages.count) { _, _ in
-                if let last = viewModel.messages.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+            .coordinateSpace(name: Self.scrollSpace)
+            .background(GeometryReader { geometry in
+                Color.clear.preference(key: ViewportHeightKey.self, value: geometry.size.height)
+            })
+            .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
+            .onPreferenceChange(BottomEdgeKey.self) { bottomEdge in
+                let atBottom = bottomEdge <= viewportHeight + 40
+                if atBottom != isAtBottom { isAtBottom = atBottom }
+            }
+            .modifier(UserScrollDetector(
+                onScrollStart: { isFollowingBottom = false },
+                onScrollEnd: { if isAtBottom { isFollowingBottom = true } }))
+            // Sending always jumps to the bottom and starts following again.
+            .onChange(of: viewModel.messages.count) { oldCount, newCount in
+                if newCount > oldCount, case .user? = viewModel.messages.last?.kind {
+                    isFollowingBottom = true
                 }
+                followBottom(proxy, animated: true)
+            }
+            .onChange(of: viewModel.isSending) { _, _ in followBottom(proxy, animated: true) }
+            .onChange(of: viewModel.revealedLength) { _, _ in followBottom(proxy, animated: false) }
+            .onChange(of: viewModel.conversationID) { _, _ in
+                isFollowingBottom = true
+                followBottom(proxy, animated: false)
+            }
+            .overlay(alignment: .bottom) {
+                if !isAtBottom && !viewModel.messages.isEmpty {
+                    Button {
+                        isFollowingBottom = true
+                        withAnimation(.snappy) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(width: 38, height: 38)
+                            .appGlass(in: Circle(), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Scroll to the latest message")
+                    .padding(.bottom, 10)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: isAtBottom)
+        }
+    }
+
+    private static let bottomID = "transcript-bottom"
+    private static let scrollSpace = "transcript"
+
+    /// Keeps the newest content in view unless the user has scrolled away.
+    private func followBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard isFollowingBottom else { return }
+        // Wait a beat so the new row has been laid out before scrolling to it.
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.snappy) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
+            } else {
+                proxy.scrollTo(Self.bottomID, anchor: .bottom)
             }
         }
     }
@@ -204,7 +276,7 @@ struct AssistantView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
 
         case .assistant(let text):
-            Text(text)
+            MarkdownText(viewModel.displayedText(text, for: message.id))
                 .font(.subheadline)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -218,10 +290,10 @@ struct AssistantView: View {
             // Only render as actionable while it is still the pending one.
             AssistantConfirmationCard(
                 write: write,
-                isActive: viewModel.pendingWrite?.id == write.id,
+                isActive: viewModel.pendingWrites.contains { $0.id == write.id },
                 isReplaced: viewModel.replacedWriteIDs.contains(write.id),
-                onConfirm: { Task { await viewModel.confirmPendingWrite() } },
-                onDecline: { Task { await viewModel.declinePendingWrite() } })
+                onConfirm: { Task { await viewModel.confirm(write) } },
+                onDecline: { Task { await viewModel.decline(write) } })
 
         case .proposalResolved(let summary, let confirmed):
             HStack(spacing: 6) {
@@ -263,11 +335,25 @@ struct AssistantView: View {
     /// on the left and send on the right - the layout Claude and ChatGPT use.
     private func composer(viewModel: AssistantViewModel) -> some View {
         VStack(spacing: 8) {
-            if viewModel.pendingWrite != nil {
-                Text("Confirm the card above, or tell the assistant what to change.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if !viewModel.pendingWrites.isEmpty {
+                HStack(spacing: 8) {
+                    Text(viewModel.pendingWrites.count > 1
+                         ? "Confirm the cards above, or tell the assistant what to change."
+                         : "Confirm the card above, or tell the assistant what to change.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // One tap for a meal split into several dishes.
+                    let together = viewModel.confirmableTogether.count
+                    if together > 1 {
+                        Button("Add all \(together)") {
+                            Task { await viewModel.confirmAllAdditions() }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
             }
 
             HStack(alignment: .bottom, spacing: 8) {
@@ -527,6 +613,14 @@ struct AssistantConfirmationCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            // Logged for another time, e.g. a shake "before midnight" after
+            // midnight: shown so a wrong day is caught before saving.
+            if abs(draft.consumedAt.timeIntervalSinceNow) > 30 * 60 {
+                Label("For \(ChatHistoryView.lastMessageLabel(draft.consumedAt).lowercasedFirstWord)",
+                      systemImage: "clock")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(AppTheme.accent)
+            }
             NutritionSummaryView(nutrition: draft.total, showsFibre: false)
             if !draft.ingredients.isEmpty {
                 // The breakdown the total is built from, so a wrong amount is
@@ -543,6 +637,11 @@ struct AssistantConfirmationCard: View {
                                 Text("est.")
                                     .foregroundStyle(.orange)
                                     .accessibilityLabel("estimate")
+                            }
+                            if item.provenance.isDeclared {
+                                Text("label")
+                                    .foregroundStyle(AppTheme.within)
+                                    .accessibilityLabel(item.provenance.displayName)
                             }
                         }
                         .font(.caption)
@@ -688,5 +787,49 @@ struct ZoomablePhoto: View {
                 .accessibilityLabel("Attached photo")
         }
         #endif
+    }
+}
+
+// MARK: - Chat scrolling
+
+private struct BottomEdgeKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct ViewportHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Reports when the user starts and stops scrolling the chat themselves, as
+/// opposed to the app scrolling it to follow a reply.
+private struct UserScrollDetector: ViewModifier {
+    let onScrollStart: () -> Void
+    let onScrollEnd: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onScrollPhaseChange { _, phase in
+                switch phase {
+                case .interacting: onScrollStart()
+                case .idle: onScrollEnd()
+                default: break
+                }
+            }
+        } else {
+            content.simultaneousGesture(DragGesture(minimumDistance: 8)
+                .onChanged { _ in onScrollStart() }
+                .onEnded { _ in onScrollEnd() })
+        }
+    }
+}
+
+private extension String {
+    /// "Yesterday, 11:45 PM" -> "yesterday, 11:45 PM", to read as "For yesterday, …".
+    /// Dates such as "13 Oct, …" are left as they are.
+    var lowercasedFirstWord: String {
+        guard hasPrefix("Today") || hasPrefix("Yesterday") else { return self }
+        return prefix(1).lowercased() + dropFirst()
     }
 }

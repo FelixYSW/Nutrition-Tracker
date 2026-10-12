@@ -1,6 +1,6 @@
 import Foundation
 
-/// The five tools exposed to the model (spec section 29A).
+/// The tools exposed to the model (spec section 29A).
 ///
 /// Read tools execute immediately. Write tools never commit on their own: they
 /// produce a proposal that the user must confirm, exactly as the photo pipeline
@@ -11,12 +11,19 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     case deleteFoodEntry
     case queryEntries
     case getTrends
+    case findFoodNearby
+    case lookUpProductNutrition
+
+    /// Tools answered from a live web search rather than the local database.
+    var usesWebSearch: Bool {
+        self == .findFoodNearby || self == .lookUpProductNutrition
+    }
 
     /// Whether executing this tool changes the database.
     var isWrite: Bool {
         switch self {
         case .addFoodEntry, .editFoodEntry, .deleteFoodEntry: true
-        case .queryEntries, .getTrends: false
+        case .queryEntries, .getTrends, .findFoodNearby, .lookUpProductNutrition: false
         }
     }
 
@@ -26,21 +33,37 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
             "Propose logging a food the user says they ate or asks to log - never "
                 + "just because they shared a photo or asked what to eat. Shown to the "
                 + "user as a confirmation card; nothing is saved until they confirm. "
-                + "Calling it again while a card is open replaces that card. "
+                + "Call it once per separate dish or drink, in the same reply, so each "
+                + "gets its own card. To amend an open card, pass its cardID as replacesCard. "
                 + "List every component separately with the grams actually eaten - "
                 + "including cooking oil, sauces and drinks - and never give a total for "
                 + "the whole dish: the app works out the totals itself from its nutrition "
                 + "database. For each component also give your best per-100 g estimate; "
-                + "it is only used when the database has no match."
+                + "it is only used when the database has no match. Not for something the "
+                + "user forgot from a meal already logged - edit that entry instead."
         case .editFoodEntry:
-            "Propose changing an existing food entry, identified by its id. "
-                + "Requires user confirmation."
+            "Propose changing an existing food entry, identified by its id - "
+                + "including when the user mentions something they forgot that was part "
+                + "of a logged meal. To change what is in it, send items: the complete "
+                + "new component list with grams (every existing ingredient plus the "
+                + "added or changed ones), never a total. The app recalculates the "
+                + "nutrition. Requires user confirmation."
         case .deleteFoodEntry:
             "Propose deleting an existing food entry by id. Requires user confirmation."
         case .queryEntries:
             "Read the user's logged food entries within a date range. Read-only."
         case .getTrends:
             "Read aggregated calorie and macro trends. Read-only."
+        case .findFoodNearby:
+            "Search the web for places to eat at or near a named place (a mall, street, "
+                + "area) and their menus and prices. Use it when the user says where they "
+                + "are and asks what to eat there. Returns a summary with sources."
+        case .lookUpProductNutrition:
+            "Search the web for a branded or packaged product's published nutrition "
+                + "facts (e.g. \"Farm Fresh full cream milk\", \"Milo 3in1\", \"Gardenia "
+                + "Original Classic bread\"). Use it before logging any named brand or "
+                + "chain item the user didn't give a label for, then log it with "
+                + "nutritionSource \"brand\". Returns a summary with sources."
         }
     }
 
@@ -50,32 +73,52 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     /// value types (e.g. a string next to an array) cannot be type-inferred.
     var inputSchema: [String: Any] {
         let units = ServingUnit.allCases.map(\.rawValue)
+        let replacesCard = Self.field("string", "Only when amending a card that is still "
+                                      + "open: its cardID from the awaiting_user result. "
+                                      + "Omit for a new card.")
+        let item = Self.object([
+            "name": Self.field("string", "One component, e.g. \"konjac knots\", \"egg\", "
+                               + "\"cooking oil\". Plain food names match the database best."),
+            "grams": Self.field("number", "Grams of this component actually eaten. "
+                                + "Convert pieces to grams (e.g. 2 eggs = 100)."),
+            "kcalPer100g": Self.field("number", "Per 100 g (or 100 ml) of this component: "
+                                      + "from its nutrition label when there is one, "
+                                      + "otherwise your estimate."),
+            "proteinPer100g": Self.field("number", "Per 100 g."),
+            "carbsPer100g": Self.field("number", "Per 100 g."),
+            "fatPer100g": Self.field("number", "Per 100 g."),
+            "fibrePer100g": Self.field("number", "Per 100 g."),
+            "nutritionSource": Self.field(
+                "string",
+                "Where the per-100 g figures come from. \"label\": a nutrition table the user "
+                    + "typed or photographed. \"brand\": the brand's published values found with "
+                    + "lookUpProductNutrition. Both are used exactly as given, ahead of the app's "
+                    + "database. \"estimate\" (default): your guess, replaced by the database "
+                    + "when it knows the food.",
+                allowed: ["label", "brand", "estimate"])
+        ], required: ["name", "grams"])
+
         switch self {
         case .addFoodEntry:
-            let item = Self.object([
-                "name": Self.field("string", "One component, e.g. \"konjac knots\", \"egg\", "
-                                   + "\"cooking oil\". Plain food names match the database best."),
-                "grams": Self.field("number", "Grams of this component actually eaten. "
-                                    + "Convert pieces to grams (e.g. 2 eggs = 100)."),
-                "kcalPer100g": Self.field("number", "Your estimate, per 100 g of this component."),
-                "proteinPer100g": Self.field("number", "Your estimate, per 100 g."),
-                "carbsPer100g": Self.field("number", "Your estimate, per 100 g."),
-                "fatPer100g": Self.field("number", "Your estimate, per 100 g."),
-                "fibrePer100g": Self.field("number", "Your estimate, per 100 g.")
-            ], required: ["name", "grams"])
-
             return Self.object([
                 "name": Self.field("string", "Name for the whole food, e.g. \"Tomato egg with konjac\"."),
                 "items": Self.array(of: item, "Every component with its grams. One item for a "
                                     + "single food; several for a mixed dish."),
-                "consumedAt": Self.field("string", "ISO 8601 timestamp. Omit for now.")
+                "consumedAt": Self.field("string", "ISO 8601 timestamp. Omit for now."),
+                "replacesCard": replacesCard
             ], required: ["name", "items"])
 
         case .editFoodEntry:
             return Self.object([
                 "id": Self.field("string", "UUID of the entry to change."),
+                "replacesCard": replacesCard,
                 "name": Self.field("string"),
-                "quantity": Self.field("number"),
+                "items": Self.array(of: item, "The complete updated component list: every "
+                                    + "existing ingredient with its grams plus anything added "
+                                    + "or changed. Replaces the entry's ingredients."),
+                "quantity": Self.field("number", "How much of the entry was eaten, in its "
+                                       + "unit. To log part of it, multiply the current "
+                                       + "quantity by the share eaten (half of 1 serving = 0.5)."),
                 "servingSize": Self.field("number"),
                 "unit": Self.field("string", allowed: units),
                 "calories": Self.field("number"),
@@ -88,7 +131,8 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         case .deleteFoodEntry:
             return Self.object([
-                "id": Self.field("string", "UUID of the entry to delete.")
+                "id": Self.field("string", "UUID of the entry to delete."),
+                "replacesCard": replacesCard
             ], required: ["id"])
 
         case .queryEntries:
@@ -96,6 +140,24 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 "startDate": Self.field("string", "ISO 8601 date. Defaults to today."),
                 "endDate": Self.field("string", "ISO 8601 date, exclusive. Defaults to tomorrow.")
             ], required: [])
+
+        case .lookUpProductNutrition:
+            return Self.object([
+                "product": Self.field("string", "Brand and product as specific as the user "
+                                      + "said, e.g. \"Farm Fresh Fresh Milk full cream\"."),
+                "country": Self.field("string", "Where it's sold, if known, e.g. \"Malaysia\" - "
+                                      + "recipes differ between countries.")
+            ], required: ["product"])
+
+        case .findFoodNearby:
+            return Self.object([
+                "place": Self.field("string", "Where the user is, as they said it, e.g. "
+                                    + "\"Mid Valley Megamall, Kuala Lumpur\"."),
+                "budget": Self.field("string", "The user's budget if they gave one, e.g. "
+                                     + "\"RM15 per person\"."),
+                "preferences": Self.field("string", "What to look for, e.g. \"high protein, "
+                                          + "under 600 kcal, halal\".")
+            ], required: ["place"])
 
         case .getTrends:
             return Self.object([
@@ -282,20 +344,29 @@ extension JSONValue: Codable {
 /// than a corrupt entry (spec section 34).
 enum AssistantArgumentParser {
 
+    /// Writes times in the user's own time zone (e.g. 2026-10-13T23:45:00+08:00),
+    /// so the model reasons about "last night" in local time, not UTC.
     static let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = .autoupdatingCurrent
         return formatter
     }()
 
-    static func parseDate(_ value: JSONValue?) -> Date? {
-        guard let string = value?.stringValue else { return nil }
+    /// Accepts a full timestamp with any offset, a local time without one
+    /// ("2026-10-13T23:45"), or a bare date.
+    static func parseDate(_ value: JSONValue?, timeZone: TimeZone = .autoupdatingCurrent) -> Date? {
+        guard let string = value?.stringValue?.trimmingCharacters(in: .whitespaces) else { return nil }
         if let date = isoFormatter.date(from: string) { return date }
-        // Also accept a bare date, which models produce frequently.
-        let dateOnly = DateFormatter()
-        dateOnly.calendar = .autoupdatingCurrent
-        dateOnly.dateFormat = "yyyy-MM-dd"
-        return dateOnly.date(from: string)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm:ss",
+                       "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: string) { return date }
+        }
+        return nil
     }
 
     static func parseUnit(_ value: JSONValue?) -> ServingUnit? {
@@ -335,28 +406,42 @@ enum AssistantArgumentParser {
                 tool: tool, detail: "list each component with the grams eaten")
         }
 
-        let consumedAt = parseDate(arguments["consumedAt"]) ?? .now
+        var draft = FoodEntryDraft(name: name,
+                                   consumedAt: parseDate(arguments["consumedAt"]) ?? .now,
+                                   source: .assistant)
+        setComponents(items, on: &draft)
+        return draft
+    }
 
-        // One component: a simple food measured in grams.
-        if items.count == 1, let only = items.first {
-            return FoodEntryDraft(name: name,
-                                  consumedAt: consumedAt,
-                                  quantity: only.quantity,
-                                  servingSize: 100,
-                                  unit: .gram,
-                                  nutritionPerServing: only.nutritionPerServing,
-                                  source: .assistant,
-                                  canonicalID: only.canonicalID)
+    /// The model's component list for an edit, or nil when the edit doesn't
+    /// change what's in the food.
+    static func parseItems(_ value: JSONValue?,
+                           resolve: (IngredientDraft) -> IngredientDraft = { $0 }) -> [IngredientDraft]? {
+        let items = (value?.arrayValue ?? []).compactMap {
+            parseItem($0.objectValue ?? [:]).map(resolve)
         }
+        return items.isEmpty ? nil : items
+    }
 
-        // Several: a composite dish, one serving, nutrition from its parts.
-        return FoodEntryDraft(name: name,
-                              consumedAt: consumedAt,
-                              quantity: 1,
-                              servingSize: 1,
-                              unit: .serving,
-                              ingredients: items,
-                              source: .assistant)
+    /// Shapes a draft around its components: one component is a simple food
+    /// measured in grams; several make a composite dish of one serving whose
+    /// nutrition comes from its parts.
+    static func setComponents(_ items: [IngredientDraft], on draft: inout FoodEntryDraft) {
+        if items.count == 1, let only = items.first {
+            draft.quantity = only.quantity
+            draft.servingSize = 100
+            draft.unit = .gram
+            draft.nutritionPerServing = only.nutritionPerServing
+            draft.canonicalID = only.canonicalID
+            draft.ingredients = []
+        } else {
+            draft.quantity = 1
+            draft.servingSize = 1
+            draft.unit = .serving
+            draft.nutritionPerServing = .zero
+            draft.canonicalID = nil
+            draft.ingredients = items
+        }
     }
 
     /// Largest believable mass for one component of one meal, in grams.
@@ -370,18 +455,49 @@ enum AssistantArgumentParser {
             return nil
         }
 
-        let estimate = Nutrition(calories: arguments["kcalPer100g"]?.doubleValue ?? 0,
-                                 protein: arguments["proteinPer100g"]?.doubleValue ?? 0,
-                                 carbs: arguments["carbsPer100g"]?.doubleValue ?? 0,
-                                 fat: arguments["fatPer100g"]?.doubleValue ?? 0,
-                                 fibre: arguments["fibrePer100g"]?.doubleValue ?? 0)
+        let figures = Nutrition(calories: arguments["kcalPer100g"]?.doubleValue ?? 0,
+                                protein: arguments["proteinPer100g"]?.doubleValue ?? 0,
+                                carbs: arguments["carbsPer100g"]?.doubleValue ?? 0,
+                                fat: arguments["fatPer100g"]?.doubleValue ?? 0,
+                                fibre: arguments["fibrePer100g"]?.doubleValue ?? 0)
+
+        // Label and brand figures are the most accurate there are, so they are
+        // kept as declared - only impossible values are capped. A "label" with
+        // no figures at all is treated as a guess.
+        let declared: NutritionProvenance? = switch arguments["nutritionSource"]?.stringValue?.lowercased() {
+        case "label": .nutritionLabel
+        case "brand": .brandPublished
+        default: nil
+        }
+        if let declared, figures.calories > 0 || figures.energyFromMacros > 0 {
+            return IngredientDraft(name: name,
+                                   quantity: grams.rounded(),
+                                   servingSize: 100,
+                                   unit: .gram,
+                                   nutritionPerServing: declaredPer100g(figures),
+                                   provenance: declared)
+        }
 
         return IngredientDraft(name: name,
                                quantity: grams.rounded(),
                                servingSize: 100,
                                unit: .gram,
-                               nutritionPerServing: plausiblePer100g(estimate),
+                               nutritionPerServing: plausiblePer100g(figures),
                                provenance: .modelEstimate)
+    }
+
+    /// Label figures as declared. Calories are only worked out from the
+    /// macros when the label figure is missing, and nothing can exceed what
+    /// 100 g can physically hold.
+    static func declaredPer100g(_ label: Nutrition) -> Nutrition {
+        var value = label.sanitised
+        value.protein = min(value.protein, 100)
+        value.carbs = min(value.carbs, 100)
+        value.fat = min(value.fat, 100)
+        value.fibre = min(value.fibre, 100)
+        if value.calories <= 0 { value.calories = value.energyFromMacros.rounded() }
+        value.calories = min(value.calories, 900)
+        return value
     }
 
     /// Repairs a per-100 g estimate that can't be physically right.

@@ -80,7 +80,7 @@ struct ChatHistoryView: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(conversation.updatedAt, format: .relative(presentation: .named))
+                Text(Self.lastMessageLabel(conversation.updatedAt))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -98,6 +98,24 @@ struct ChatHistoryView: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+
+    /// When the chat's last message was sent: "Today, 3:42 PM",
+    /// "Yesterday, 9:05 AM", "13 Oct, 3:42 PM", or with the year once it's
+    /// not this year.
+    static func lastMessageLabel(_ date: Date, now: Date = .now,
+                                 calendar: Calendar = .autoupdatingCurrent) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return "Today, \(time)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday, \(time)"
+        }
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        let day = sameYear
+            ? date.formatted(.dateTime.day().month(.abbreviated))
+            : date.formatted(.dateTime.day().month(.abbreviated).year())
+        return "\(day), \(time)"
     }
 
     private func delete(_ conversation: SavedConversation) {

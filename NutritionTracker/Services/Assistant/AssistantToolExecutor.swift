@@ -44,6 +44,9 @@ final class AssistantToolExecutor {
                 return .result(try queryEntries(arguments: call.arguments))
             case .getTrends:
                 return .result(try getTrends(arguments: call.arguments))
+            case .findFoodNearby, .lookUpProductNutrition:
+                // Needs the network: the view model runs it through the service.
+                return .failure("Web search is not run by the local executor.")
             case .addFoodEntry:
                 return .awaitingConfirmation(try proposeAdd(call: call))
             case .editFoodEntry:
@@ -204,6 +207,9 @@ final class AssistantToolExecutor {
     /// then MyFCD, then the generic table (spec section 23). Unknown foods keep
     /// the - already sanity-checked - estimate, marked as an estimate.
     static func resolve(_ item: IngredientDraft, with repository: NutritionRepository) -> IngredientDraft {
+        // A nutrition label - typed, photographed or the brand's own - beats
+        // any database row, so those figures are never replaced.
+        guard !item.provenance.isDeclared else { return item }
         guard let hit = repository.lookup(canonicalID: nil, name: item.name) else { return item }
         var resolved = item
         resolved.nutritionPerServing = hit.nutritionPer100g
@@ -230,6 +236,50 @@ final class AssistantToolExecutor {
             .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             draft.name = name
         }
+        if let consumedAt = AssistantArgumentParser.parseDate(arguments["consumedAt"]) {
+            draft.consumedAt = consumedAt
+        }
+
+        let repository = NutritionRepository(context: context)
+        if let items = AssistantArgumentParser.parseItems(arguments["items"], resolve: {
+            Self.resolve($0, with: repository)
+        }) {
+            // A new component list - e.g. with an ingredient the user forgot -
+            // replaces what's in the food, and the totals follow from it.
+            AssistantArgumentParser.setComponents(Self.keepingKnownFigures(items, from: draft),
+                                                  on: &draft)
+        } else {
+            applyAmountAndNutrition(arguments, to: &draft)
+        }
+
+        return PendingAssistantWrite(id: call.id, tool: .editFoodEntry,
+                                     action: .edit(entryID: id, draft: draft,
+                                                   originalName: entry.name))
+    }
+
+    /// Components that were already in the entry keep their identity and
+    /// figures - which may have been corrected by hand - and take only the new
+    /// amount. Everything else comes from the nutrition database as usual.
+    static func keepingKnownFigures(_ items: [IngredientDraft],
+                                    from draft: FoodEntryDraft) -> [IngredientDraft] {
+        var existing = draft.ingredients.filter { $0.unit == .gram }
+        return items.map { item in
+            // Newly given label figures replace whatever was there before.
+            guard !item.provenance.isDeclared else { return item }
+            let key = item.name.trimmingCharacters(in: .whitespaces).lowercased()
+            guard let index = existing.firstIndex(where: {
+                $0.name.trimmingCharacters(in: .whitespaces).lowercased() == key
+            }) else { return item }
+            var kept = existing.remove(at: index)
+            kept.quantity = item.quantity
+            return kept
+        }
+    }
+
+    /// An edit without a component list: amount, unit and - for a simple
+    /// food only - the nutrition figures.
+    private func applyAmountAndNutrition(_ arguments: [String: JSONValue],
+                                         to draft: inout FoodEntryDraft) {
         if let quantity = arguments["quantity"]?.doubleValue, quantity > 0 {
             draft.quantity = quantity
         }
@@ -238,9 +288,6 @@ final class AssistantToolExecutor {
         }
         if let unit = AssistantArgumentParser.parseUnit(arguments["unit"]) {
             draft.unit = unit
-        }
-        if let consumedAt = AssistantArgumentParser.parseDate(arguments["consumedAt"]) {
-            draft.consumedAt = consumedAt
         }
 
         // Nutrition fields are only touched for a simple food: rewriting the
@@ -255,10 +302,6 @@ final class AssistantToolExecutor {
             if let value = arguments["fibre"]?.doubleValue { nutrition.fibre = value }
             draft.nutritionPerServing = nutrition.sanitised
         }
-
-        return PendingAssistantWrite(id: call.id, tool: .editFoodEntry,
-                                     action: .edit(entryID: id, draft: draft,
-                                                   originalName: entry.name))
     }
 
     private func proposeDelete(call: AssistantToolCall) throws -> PendingAssistantWrite {

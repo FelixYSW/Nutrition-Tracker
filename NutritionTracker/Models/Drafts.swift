@@ -229,10 +229,16 @@ enum NutritionProvenance: String, Codable, Equatable, Sendable {
     case myFCD
     case genericDatabase
     case modelEstimate
+    /// Read off a nutrition table the user typed out or photographed.
+    case nutritionLabel
+    /// The brand's own published figures, found by a web search.
+    case brandPublished
 
     var displayName: String {
         switch self {
         case .manual: "Entered by you"
+        case .nutritionLabel: "Nutrition label"
+        case .brandPublished: "Brand's published values"
         case .localVerified: "Your saved food"
         case .barcode: "Product label"
         case .myFCD: "MyFCD"
@@ -245,5 +251,11 @@ enum NutritionProvenance: String, Codable, Equatable, Sendable {
     /// label-declared value.
     var isEstimate: Bool {
         self == .modelEstimate
+    }
+
+    /// Figures declared on a product's nutrition label, read by the user or
+    /// published by the brand - the most accurate source there is.
+    var isDeclared: Bool {
+        self == .nutritionLabel || self == .brandPublished || self == .barcode
     }
 }

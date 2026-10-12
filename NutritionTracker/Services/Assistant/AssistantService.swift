@@ -73,6 +73,27 @@ protocol AssistantServing: Sendable {
     func send(turns: [AssistantTurn],
               contextJSON: String,
               tools: [AssistantTool]) async throws -> AssistantResponse
+
+    /// Answers a question from a live web search, with the pages it used.
+    func searchWeb(_ question: String) async throws -> WebSearchResult
+}
+
+extension AssistantServing {
+    /// Providers without a search tool simply report that it isn't available.
+    func searchWeb(_ question: String) async throws -> WebSearchResult {
+        throw AssistantServiceError.requestFailed(detail: "web search isn't available")
+    }
+}
+
+/// A written answer from a web search and the pages it came from.
+struct WebSearchResult: Codable, Equatable, Sendable {
+    struct Source: Codable, Equatable, Sendable {
+        var title: String
+        var url: String
+    }
+
+    var summary: String
+    var sources: [Source]
 }
 
 /// Reports unconfigured. Used so the UI can render an "unavailable" state without
@@ -199,12 +220,86 @@ struct OpenAICompatibleAssistantService: AssistantServing {
         // clear within seconds, so retry a couple of times with a growing pause
         // before giving up. The request was never processed, so a retry can't
         // log anything twice.
+        return try await performRetryingBusy(request)
+    }
+
+    private func performRetryingBusy(_ request: URLRequest) async throws -> (Data, Int) {
         var result = try await perform(request)
         for delay in Self.busyRetryDelays where Self.isTransient(result.1) {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             result = try await perform(request)
         }
         return result
+    }
+
+    // MARK: Web search
+
+    /// Gemini's own API (the OpenAI-compatible layer has no search tool), or
+    /// nil for other providers.
+    var nativeGeminiRoot: String? {
+        guard baseURL.contains("generativelanguage.googleapis.com") else { return nil }
+        return baseURL.hasSuffix("/openai") ? String(baseURL.dropLast("/openai".count)) : baseURL
+    }
+
+    /// One request to Gemini with Google Search grounding turned on. Separate
+    /// from the chat request, so the chat itself keeps its function tools.
+    func searchWeb(_ question: String) async throws -> WebSearchResult {
+        guard let apiKey = BundledAPIKey.assistant else { throw AssistantServiceError.notConfigured }
+        guard let root = nativeGeminiRoot,
+              let url = URL(string: "\(root)/models/\(currentModel):generateContent") else {
+            throw AssistantServiceError.requestFailed(detail: "web search isn't available")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        let body: [String: Any] = [
+            "contents": [["role": "user", "parts": [["text": question]]]],
+            "tools": [["google_search": [String: Any]()]]
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let (data, status) = try await performRetryingBusy(request)
+        try Self.check(status: status, model: currentModel, body: data)
+        return try Self.decodeSearch(data: data)
+    }
+
+    static func decodeSearch(data: Data) throws -> WebSearchResult {
+        struct Body: Decodable {
+            struct Candidate: Decodable {
+                struct Content: Decodable {
+                    struct Part: Decodable { let text: String? }
+                    let parts: [Part]?
+                }
+                struct Grounding: Decodable {
+                    struct Chunk: Decodable {
+                        struct Web: Decodable { let uri: String?; let title: String? }
+                        let web: Web?
+                    }
+                    let groundingChunks: [Chunk]?
+                }
+                let content: Content?
+                let groundingMetadata: Grounding?
+            }
+            let candidates: [Candidate]?
+        }
+        guard let body = try? JSONDecoder().decode(Body.self, from: data),
+              let candidate = body.candidates?.first else {
+            throw AssistantServiceError.malformedResponse(detail: "no search result")
+        }
+        let summary = (candidate.content?.parts ?? []).compactMap(\.text).joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else {
+            throw AssistantServiceError.malformedResponse(detail: "empty search result")
+        }
+        var seen = Set<String>()
+        let sources = (candidate.groundingMetadata?.groundingChunks ?? []).compactMap { chunk in
+            chunk.web.flatMap { web -> WebSearchResult.Source? in
+                guard let uri = web.uri, seen.insert(uri).inserted else { return nil }
+                return .init(title: web.title ?? uri, url: uri)
+            }
+        }
+        return WebSearchResult(summary: summary, sources: Array(sources.prefix(6)))
     }
 
     /// Pauses before each retry of a busy response, in seconds: three tries in

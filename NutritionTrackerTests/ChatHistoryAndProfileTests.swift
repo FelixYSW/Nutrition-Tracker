@@ -192,6 +192,38 @@ final class ConversationSwitchingTests: XCTestCase {
         XCTAssertEqual(viewModel.messages, saved.messages)
     }
 
+    /// The list shows when the chat last had a message, not when it was last
+    /// saved - saving also happens on opening history or leaving the app.
+    func testChatTimeIsTheLastMessageNotTheLastSave() async throws {
+        let store = temporaryStore()
+        let viewModel = makeViewModel(store: store, responses: [
+            AssistantResponse(text: "Try the soup.", toolCalls: [])])
+        viewModel.composerText = "what should I eat?"
+        await viewModel.send()
+        let lastMessageTime = try XCTUnwrap(viewModel.messages.last?.timestamp)
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        viewModel.persist()   // e.g. leaving the app later
+
+        XCTAssertEqual(store.all().first?.updatedAt, lastMessageTime)
+    }
+
+    func testLastMessageLabels() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        let now = TestSupport.date(2026, 10, 13, 15, calendar: calendar)
+        let label = { (date: Date) in
+            ChatHistoryView.lastMessageLabel(date, now: now, calendar: calendar)
+        }
+        XCTAssertTrue(label(TestSupport.date(2026, 10, 13, 9, calendar: calendar)).hasPrefix("Today, "))
+        XCTAssertTrue(label(TestSupport.date(2026, 10, 12, 21, calendar: calendar)).hasPrefix("Yesterday, "))
+        let older = label(TestSupport.date(2026, 9, 2, 8, calendar: calendar))
+        XCTAssertFalse(older.hasPrefix("Today") || older.hasPrefix("Yesterday"))
+        XCTAssertTrue(older.contains(","), "date, then time")
+        XCTAssertTrue(label(TestSupport.date(2025, 9, 2, 8, calendar: calendar)).contains("2025"),
+                      "the year appears once it's not this year")
+    }
+
     func testEmptyChatsAreNotSaved() {
         let store = temporaryStore()
         let viewModel = makeViewModel(store: store, responses: [])
