@@ -101,6 +101,10 @@ struct AssistantContextBuilder {
 
         let dateFormatter = DateFormatter()
         dateFormatter.calendar = calendar
+        // A formatter ignores its calendar's time zone and uses the device's
+        // unless told otherwise (UTC on CI), which can shift the date by a day.
+        dateFormatter.timeZone = calendar.timeZone
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         dateFormatter.dateFormat = "yyyy-MM-dd"
 
         var ranges: [AssistantContext.RangeSummary] = []

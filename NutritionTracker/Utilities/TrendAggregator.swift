@@ -190,6 +190,7 @@ enum TrendAggregator {
                       calendar: Calendar = .autoupdatingCurrent) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
         switch scale {
         case .daily:
             formatter.setLocalizedDateFormatFromTemplate("dMMM")
