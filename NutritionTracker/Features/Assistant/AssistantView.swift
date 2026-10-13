@@ -19,7 +19,6 @@ struct AssistantView: View {
     // new content should keep it there (off once the user scrolls away).
     @State private var isAtBottom = true
     @State private var isFollowingBottom = true
-    @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -104,51 +103,41 @@ struct AssistantView: View {
     private func transcript(viewModel: AssistantViewModel) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        if viewModel.messages.isEmpty {
-                            suggestionsCard(viewModel: viewModel)
-                        }
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if viewModel.messages.isEmpty {
+                        suggestionsCard(viewModel: viewModel)
+                    }
 
-                        ForEach(viewModel.messages) { message in
-                            messageRow(message: message, viewModel: viewModel)
-                                .id(message.id)
-                        }
+                    ForEach(viewModel.messages) { message in
+                        messageRow(message: message, viewModel: viewModel)
+                            .id(message.id)
+                    }
 
-                        if viewModel.isSending {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
-                                Text("Thinking\u{2026}")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                    if viewModel.isSending {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Thinking\u{2026}")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.horizontal, AppTheme.cardPadding)
-                    .padding(.vertical, 16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    // The very end of the chat, below "Thinking…". Its position
-                    // tells whether the user is looking at the bottom.
+                    // The very end of the chat, below "Thinking…": what the
+                    // button and auto-follow scroll to. A row of the list
+                    // itself, so scrolling to it lands exactly.
                     Color.clear
                         .frame(height: 1)
                         .id(Self.bottomID)
-                        .background(GeometryReader { geometry in
-                            Color.clear.preference(
-                                key: BottomEdgeKey.self,
-                                value: geometry.frame(in: .named(Self.scrollSpace)).minY)
-                        })
+                        .onAppear { legacyAnchorVisible(true) }
+                        .onDisappear { legacyAnchorVisible(false) }
                 }
+                .padding(.horizontal, AppTheme.cardPadding)
+                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .coordinateSpace(name: Self.scrollSpace)
-            .background(GeometryReader { geometry in
-                Color.clear.preference(key: ViewportHeightKey.self, value: geometry.size.height)
-            })
-            .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
-            .onPreferenceChange(BottomEdgeKey.self) { bottomEdge in
-                let atBottom = bottomEdge <= viewportHeight + 40
+            .modifier(BottomEdgeTracker { atBottom in
                 if atBottom != isAtBottom { isAtBottom = atBottom }
-            }
+            })
             .modifier(UserScrollDetector(
                 onScrollStart: { isFollowingBottom = false },
                 onScrollEnd: { if isAtBottom { isFollowingBottom = true } }))
@@ -187,7 +176,15 @@ struct AssistantView: View {
     }
 
     private static let bottomID = "transcript-bottom"
-    private static let scrollSpace = "transcript"
+
+    /// iOS 17 only: without scroll geometry, being at the bottom is judged by
+    /// whether the end-of-chat row is on screen. iOS 18+ measures it exactly
+    /// (see `BottomEdgeTracker`) and ignores this.
+    private func legacyAnchorVisible(_ visible: Bool) {
+        if #unavailable(iOS 18) {
+            if visible != isAtBottom { isAtBottom = visible }
+        }
+    }
 
     /// Keeps the newest content in view unless the user has scrolled away.
     private func followBottom(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -792,14 +789,37 @@ struct ZoomablePhoto: View {
 
 // MARK: - Chat scrolling
 
-private struct BottomEdgeKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
+/// Reports whether the chat is scrolled to (within a few points of) the end.
+/// Uses the scroll view's own geometry on iOS 18+, which stays accurate as
+/// replies grow and the keyboard opens; iOS 17 falls back to the end-of-chat
+/// row's visibility.
+struct BottomEdgeTracker: ViewModifier {
+    let onChange: (Bool) -> Void
 
-private struct ViewportHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    /// How close counts as "at the bottom", in points.
+    static let tolerance: CGFloat = 40
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content.onScrollGeometryChange(for: Bool.self) { geometry in
+                Self.isAtBottom(visibleMaxY: geometry.visibleRect.maxY,
+                                contentHeight: geometry.contentSize.height,
+                                bottomInset: geometry.contentInsets.bottom)
+            } action: { _, atBottom in
+                onChange(atBottom)
+            }
+        } else {
+            content
+        }
+    }
+
+    /// The visible area reaches the end of the content, allowing for the
+    /// bottom inset (the tab bar) and a little slack. Short chats that don't
+    /// fill the screen count as at the bottom.
+    static func isAtBottom(visibleMaxY: CGFloat, contentHeight: CGFloat,
+                           bottomInset: CGFloat) -> Bool {
+        visibleMaxY - bottomInset >= contentHeight - tolerance
+    }
 }
 
 /// Reports when the user starts and stops scrolling the chat themselves, as

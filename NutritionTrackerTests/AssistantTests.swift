@@ -1341,3 +1341,29 @@ final class AssistantWebSearchTests: XCTestCase {
         XCTAssertFalse(without.contains("Budget"))
     }
 }
+
+// MARK: - Chat scrolling
+
+@MainActor
+final class ChatBottomEdgeTests: XCTestCase {
+
+    /// At the very end the visible area runs past the content by the bottom
+    /// inset (the tab bar), which must still count as "at the bottom".
+    func testScrolledToTheEndIsAtTheBottom() {
+        XCTAssertTrue(BottomEdgeTracker.isAtBottom(visibleMaxY: 1083, contentHeight: 1000,
+                                                   bottomInset: 83))
+        XCTAssertTrue(BottomEdgeTracker.isAtBottom(visibleMaxY: 1060, contentHeight: 1000,
+                                                   bottomInset: 83), "within the tolerance")
+    }
+
+    func testScrolledUpIsNotAtTheBottom() {
+        XCTAssertFalse(BottomEdgeTracker.isAtBottom(visibleMaxY: 983, contentHeight: 1000,
+                                                    bottomInset: 83),
+                       "100 pt up is away from the bottom, even though the tab bar is 83 pt")
+    }
+
+    func testShortChatIsAtTheBottom() {
+        XCTAssertTrue(BottomEdgeTracker.isAtBottom(visibleMaxY: 700, contentHeight: 300,
+                                                   bottomInset: 83))
+    }
+}
