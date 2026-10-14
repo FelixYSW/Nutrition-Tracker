@@ -96,6 +96,10 @@ final class AssistantViewModel {
     /// Tool results for the latest model turn, held until every card in it has
     /// an answer (or the user sends another message).
     private var deferredResults: [AssistantTurn.Block] = []
+    /// Outcomes of cards whose call made several cards, until all are answered.
+    private var cardOutcomes: [String: [String]] = [:]
+    /// Products looked up with lookUpProductNutrition in this chat.
+    private var lookedUpProducts: [String] = []
 
     private let service: AssistantServing
     private let executor: AssistantToolExecutor
@@ -295,6 +299,7 @@ final class AssistantViewModel {
             var resultBlocks: [AssistantTurn.Block] = []
             var proposals: [PendingAssistantWrite] = []
             var replacing: [String: String] = [:]   // new card id -> card it replaces
+            var keepsTime: Set<String> = []         // new cards sent without a time
 
             for call in response.toolCalls {
                 // Web search goes out over the network, so it runs here rather
@@ -303,7 +308,33 @@ final class AssistantViewModel {
                     let (question, activity) = Self.webQuestion(for: call)
                     append(.toolActivity(activity))
                     let (content, failed) = await searchWeb(question)
+                    if call.tool == .lookUpProductNutrition, !failed,
+                       let product = call.arguments["product"]?.stringValue {
+                        lookedUpProducts.append(product)
+                    }
                     resultBlocks.append(.toolResult(id: call.id, content: content, isError: failed))
+                    continue
+                }
+
+                // A product that was just looked up must be logged with its
+                // published figures, not a guess.
+                if call.tool == .addFoodEntry || call.tool == .editFoodEntry,
+                   let detail = Self.unusedBrandFigures(in: call.arguments,
+                                                        lookedUp: lookedUpProducts) {
+                    resultBlocks.append(.toolResult(id: call.id, content: detail, isError: true))
+                    continue
+                }
+
+                // An edit or delete aimed at a card that hasn't been saved yet
+                // uses the card's id, which is not an entry. Steer the model
+                // to amend the card instead of failing.
+                if call.tool == .editFoodEntry || call.tool == .deleteFoodEntry,
+                   let target = call.arguments["id"]?.stringValue,
+                   let card = pendingWrites.first(where: { $0.id == target }) {
+                    resultBlocks.append(.toolResult(
+                        id: call.id,
+                        content: Self.unsavedCardResult(for: card, tool: call.tool),
+                        isError: true))
                     continue
                 }
 
@@ -313,7 +344,9 @@ final class AssistantViewModel {
                     resultBlocks.append(.toolResult(id: call.id, content: json, isError: false))
 
                 case .failure(let message):
-                    append(.error(message))
+                    // Told to the model, which corrects itself (wrong id,
+                    // missing figures, misread label) or explains in its reply.
+                    // Not shown in the chat: it's the assistant's mistake to fix.
                     resultBlocks.append(.toolResult(
                         id: call.id,
                         content: "{\"status\":\"error\",\"detail\":\"\(Self.escape(message))\"}",
@@ -321,14 +354,27 @@ final class AssistantViewModel {
 
                 case .awaitingConfirmation(let write):
                     proposals.append(write)
-                    if let target = call.arguments["replacesCard"]?.stringValue {
+                    let food = AssistantToolExecutor.foods(in: call.arguments).first ?? call.arguments
+                    if let target = food["replacesCard"]?.stringValue {
                         replacing[write.id] = target
+                    }
+                    if food["consumedAt"] == nil { keepsTime.insert(write.id) }
+
+                case .awaitingConfirmations(let writes):
+                    // One card per food; each food may name a card it amends.
+                    let foods = AssistantToolExecutor.foods(in: call.arguments)
+                    for (write, food) in zip(writes, foods) {
+                        proposals.append(write)
+                        if let target = food["replacesCard"]?.stringValue {
+                            replacing[write.id] = target
+                        }
+                        if food["consumedAt"] == nil { keepsTime.insert(write.id) }
                     }
                 }
             }
 
             if !proposals.isEmpty {
-                openCards(proposals, replacing: replacing)
+                openCards(proposals, replacing: replacing, keepsTime: keepsTime)
                 // Held until the user answers every card, or sends another message.
                 deferredResults = resultBlocks
                 unansweredCardIDs = proposals.map(\.id)
@@ -347,6 +393,13 @@ final class AssistantViewModel {
     /// The search question for a web tool, and the activity line shown in the chat.
     static func webQuestion(for call: AssistantToolCall) -> (question: String, activity: String) {
         let arguments = call.arguments
+        if call.tool == .findProducts {
+            let query = arguments["query"]?.stringValue ?? ""
+            return (productSearchQuestion(query: query,
+                                          country: arguments["country"]?.stringValue,
+                                          goal: arguments["goal"]?.stringValue),
+                    "Searched for \(query)")
+        }
         if call.tool == .lookUpProductNutrition {
             let product = arguments["product"]?.stringValue ?? ""
             return (productNutritionQuestion(product: product,
@@ -360,6 +413,20 @@ final class AssistantViewModel {
                                    budget: arguments["budget"]?.stringValue,
                                    preferences: arguments["preferences"]?.stringValue),
                 "Searched for food near \(place)")
+    }
+
+    static func productSearchQuestion(query: String, country: String?, goal: String?) -> String {
+        var lines = [
+            "Find real products currently sold\(country.map { " in \($0)" } ?? ""): \(query).",
+            "List up to 6, each with the exact brand and product name as on the pack, and "
+                + "its published nutrition per serving and per 100 g: kcal, protein, carbs, fat.",
+            "Only include products you found on the manufacturer's site, a retailer or the "
+                + "label. Never invent a product or its figures; say if you found fewer."
+        ]
+        if let goal = goal?.trimmingCharacters(in: .whitespaces), !goal.isEmpty {
+            lines.append("Rank them by: \(goal).")
+        }
+        return lines.joined(separator: "\n")
     }
 
     static func productNutritionQuestion(product: String, country: String?) -> String {
@@ -469,12 +536,21 @@ final class AssistantViewModel {
 
     /// Shows the new cards. A card the model says it amends - or one with the
     /// same name - closes as replaced; all others stay open alongside.
-    private func openCards(_ proposals: [PendingAssistantWrite], replacing: [String: String]) {
-        for write in proposals {
+    ///
+    /// An amended card sent without a time keeps the time of the card it
+    /// replaces: correcting the brand of last night's shake mustn't move it
+    /// to now.
+    private func openCards(_ proposals: [PendingAssistantWrite], replacing: [String: String],
+                           keepsTime: Set<String> = []) {
+        for proposal in proposals {
+            var write = proposal
             let target = replacing[write.id] ?? pendingWrites.first {
                 Self.cardTitle(for: $0).caseInsensitiveCompare(Self.cardTitle(for: write)) == .orderedSame
             }?.id
             if let target, let index = pendingWrites.firstIndex(where: { $0.id == target }) {
+                if keepsTime.contains(write.id) {
+                    write = Self.retimed(write, like: pendingWrites[index])
+                }
                 replacedWriteIDs.insert(target)
                 pendingWrites.remove(at: index)
             }
@@ -483,13 +559,34 @@ final class AssistantViewModel {
         }
     }
 
+    /// The write with its time taken from another card.
+    static func retimed(_ write: PendingAssistantWrite,
+                        like other: PendingAssistantWrite) -> PendingAssistantWrite {
+        guard case .add(var draft) = write.action else { return write }
+        let time: Date? = switch other.action {
+        case .add(let old), .edit(_, let old, _): old.consumedAt
+        case .delete: nil
+        }
+        guard let time else { return write }
+        draft.consumedAt = time
+        return PendingAssistantWrite(id: write.id, tool: write.tool, action: .add(draft))
+    }
+
     /// Closes one card and records its outcome without calling the model.
     private func record(_ write: PendingAssistantWrite, resultJSON: String,
                         isError: Bool, note: String) {
         pendingWrites.removeAll { $0.id == write.id }
         if let index = unansweredCardIDs.firstIndex(of: write.id) {
             unansweredCardIDs.remove(at: index)
-            deferredResults.append(.toolResult(id: write.id, content: resultJSON, isError: isError))
+            let call = Self.callID(ofCard: write.id)
+            cardOutcomes[call, default: []].append(resultJSON)
+            // A call that made several cards gets one result, once all its
+            // cards are answered.
+            if !unansweredCardIDs.contains(where: { Self.callID(ofCard: $0) == call }) {
+                let parts = cardOutcomes.removeValue(forKey: call) ?? []
+                deferredResults.append(.toolResult(id: call, content: Self.combined(parts),
+                                                   isError: isError && parts.count == 1))
+            }
             if unansweredCardIDs.isEmpty { flushDeferredResults() }
         } else {
             // The model was already told the card was waiting (the user kept
@@ -512,13 +609,72 @@ final class AssistantViewModel {
     /// what each card holds lets it amend one if the user asks.
     private func notePendingCardBeforeNewMessage() {
         guard !unansweredCardIDs.isEmpty else { return }
+        var callOrder: [String] = []
         for id in unansweredCardIDs {
             guard let write = pendingWrites.first(where: { $0.id == id }) else { continue }
-            deferredResults.append(.toolResult(id: id, content: Self.awaitingResult(for: write),
+            let call = Self.callID(ofCard: id)
+            if !callOrder.contains(call) { callOrder.append(call) }
+            cardOutcomes[call, default: []].append(Self.awaitingResult(for: write))
+        }
+        for call in callOrder {
+            let parts = cardOutcomes.removeValue(forKey: call) ?? []
+            deferredResults.append(.toolResult(id: call, content: Self.combined(parts),
                                                isError: false))
         }
         unansweredCardIDs = []
         flushDeferredResults()
+    }
+
+    /// Cards made from one call are "<call id>#1", "#2", ...; the model's
+    /// tool call is the part before the "#".
+    static func callID(ofCard cardID: String) -> String {
+        cardID.split(separator: "#", maxSplits: 1).first.map(String.init) ?? cardID
+    }
+
+    /// One tool result for a call: a single card's JSON, or an array of them.
+    static func combined(_ parts: [String]) -> String {
+        parts.count == 1 ? parts[0] : "[" + parts.joined(separator: ",") + "]"
+    }
+
+    /// An error result when an item matches a looked-up product but was sent
+    /// as an estimate, or nil when all is well.
+    static func unusedBrandFigures(in arguments: [String: JSONValue],
+                                   lookedUp products: [String]) -> String? {
+        guard !products.isEmpty else { return nil }
+        let items = AssistantToolExecutor.foods(in: arguments)
+            .flatMap { $0["items"]?.arrayValue ?? [] }
+            .compactMap(\.objectValue)
+        let unused = items.compactMap { item -> String? in
+            let source = item["nutritionSource"]?.stringValue?.lowercased()
+            guard source != "brand", source != "label",
+                  let name = item["name"]?.stringValue,
+                  let product = products.first(where: { matches(name, $0) }) else { return nil }
+            return "\(name) (looked up as \(product))"
+        }
+        guard !unused.isEmpty else { return nil }
+        return "{\"status\":\"error\",\"detail\":\"" + escape(
+            "Nothing was logged. You looked up the published nutrition for "
+                + unused.joined(separator: ", ") + " but sent an estimate. Send it again "
+                + "with the per-100 g figures from that lookup and nutritionSource \"brand\".")
+            + "\"}"
+    }
+
+    /// Two product names share at least two significant words.
+    static func matches(_ name: String, _ product: String) -> Bool {
+        func words(_ text: String) -> Set<String> {
+            Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }
+                .map(String.init).filter { $0.count >= 3 })
+        }
+        return words(name).intersection(words(product)).count >= 2
+    }
+
+    static func unsavedCardResult(for card: PendingAssistantWrite, tool: AssistantTool) -> String {
+        let action = tool == .deleteFoodEntry
+            ? "To drop it, just tell the user it won't be saved unless they confirm it."
+            : "To change it, call addFoodEntry with the complete amended entry and "
+                + "replacesCard set to \(card.id)."
+        return "{\"status\":\"error\",\"detail\":\"\(escape(card.id)) is a card the user hasn't "
+            + "confirmed yet, not a saved entry, so it has no entry id. \(escape(action))\"}"
     }
 
     static func cardTitle(for write: PendingAssistantWrite) -> String {
@@ -618,6 +774,8 @@ final class AssistantViewModel {
         pendingWrites = []
         unansweredCardIDs = []
         contextNotes = []
+        lookedUpProducts = []
+        cardOutcomes = [:]
         replacedWriteIDs = []
         attachments = []
         composerText = ""

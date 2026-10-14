@@ -146,6 +146,30 @@
       "sodium": 61
     },
     {
+      "canonicalID": "gen.chicken.roast_with_skin",
+      "displayName": "Roast Chicken (with skin)",
+      "calories": 239,
+      "protein": 27.3,
+      "carbs": 0,
+      "fat": 13.6,
+      "source": "generic",
+      "fibre": 0,
+      "sugar": 0,
+      "sodium": 82
+    },
+    {
+      "canonicalID": "gen.whey_protein",
+      "displayName": "Whey Protein Powder",
+      "calories": 390,
+      "protein": 78,
+      "carbs": 9,
+      "fat": 5,
+      "source": "generic",
+      "fibre": 0,
+      "sugar": 5,
+      "sodium": 300
+    },
+    {
       "canonicalID": "gen.konjac",
       "displayName": "Konjac (Shirataki)",
       "calories": 9,

@@ -452,6 +452,37 @@
       "isMalaysian": false
     },
     {
+      "canonicalID": "gen.chicken.roast_with_skin",
+      "displayName": "Roast Chicken (with skin)",
+      "aliases": [
+        "chicken with skin",
+        "roast chicken",
+        "roasted chicken",
+        "rotisserie chicken",
+        "whole chicken",
+        "quarter chicken",
+        "chicken quarter",
+        "roasted chicken with skin",
+        "chicken leg",
+        "chicken thigh"
+      ],
+      "sources": [],
+      "isMalaysian": false
+    },
+    {
+      "canonicalID": "gen.whey_protein",
+      "displayName": "Whey Protein Powder",
+      "aliases": [
+        "whey",
+        "whey protein",
+        "whey protein powder",
+        "protein powder",
+        "whey isolate"
+      ],
+      "sources": [],
+      "isMalaysian": false
+    },
+    {
       "canonicalID": "gen.konjac",
       "displayName": "Konjac (Shirataki)",
       "aliases": [

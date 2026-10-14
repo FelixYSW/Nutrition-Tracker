@@ -16,11 +16,14 @@ struct MarkdownText: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(Self.blocks(from: source).enumerated()), id: \.offset) { _, block in
+        let blocks = Self.blocks(from: source)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 view(for: block)
+                    .padding(.top, index == 0 ? 0 : Self.gap(before: block, after: blocks[index - 1]))
             }
         }
+        .lineSpacing(3)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -30,7 +33,6 @@ struct MarkdownText: View {
         case .heading(let text):
             Text(Self.inline(text))
                 .fontWeight(.semibold)
-                .padding(.top, 2)
         case .bullet(let text, let level):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(level == 0 ? "\u{2022}" : "\u{25E6}")
@@ -50,6 +52,17 @@ struct MarkdownText: View {
         case .paragraph(let text):
             Text(Self.inline(text))
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Room between blocks: a clear break around headings and between a
+    /// paragraph and a list, a smaller one between items of the same list.
+    static func gap(before block: Block, after previous: Block) -> CGFloat {
+        switch (previous, block) {
+        case (_, .heading): 16
+        case (.heading, _): 6
+        case (.bullet, .bullet), (.numbered, .numbered): 8
+        default: 12
         }
     }
 

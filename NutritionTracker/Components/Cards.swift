@@ -10,23 +10,38 @@ struct NutritionSummaryView: View {
     }
 
     var body: some View {
-        // A grid rather than an HStack so it reflows instead of clipping at
-        // large Dynamic Type sizes.
-        let columns = [GridItem(.adaptive(minimum: 72), spacing: 12)]
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-            ForEach(items) { nutrient in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(nutrient.displayName.uppercased())
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text("\(AppFormatters.amount(nutrition[nutrient]))\(nutrient == .calories ? "" : "g")")
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                        .monospacedDigit()
+        // One row when it fits - all the macros side by side - and a grid
+        // that reflows at large Dynamic Type sizes, rather than clipping.
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(items) { nutrient in
+                    cell(for: nutrient)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)],
+                      alignment: .leading, spacing: 12) {
+                ForEach(items) { nutrient in
+                    cell(for: nutrient)
+                }
             }
         }
+    }
+
+    private func cell(for nutrient: Nutrient) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(nutrient.displayName.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
+            Text("\(AppFormatters.amount(nutrition[nutrient]))\(nutrient == .calories ? "" : "g")")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -77,10 +92,10 @@ struct FoodEntryCard: View {
                     withAnimation(.snappy) { isExpanded.toggle() }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(isExpanded ? "Hide ingredients"
-                                        : "\(entry.ingredients.count) ingredients")
                         DisclosureChevron(isExpanded: isExpanded)
                             .font(.caption2)
+                        Text(isExpanded ? "Hide ingredients"
+                                        : "\(entry.ingredients.count) ingredients")
                     }
                     .font(.footnote.weight(.medium))
                 }
@@ -88,22 +103,23 @@ struct FoodEntryCard: View {
                 .foregroundStyle(AppTheme.accent)
 
                 if isExpanded {
-                    VStack(alignment: .leading, spacing: 6) {
+                    // A grid, so every portion and every kcal figure lines up
+                    // in its own right-aligned column whatever the name length.
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                         ForEach(entry.orderedIngredients) { ingredient in
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            GridRow(alignment: .firstTextBaseline) {
                                 Text(ingredient.name)
                                     .font(.footnote)
                                     .fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 4)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 Text("\(AppFormatters.quantity(ingredient.quantity, unit: ingredient.unit))\(ingredient.unit.shortLabel)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
+                                    .gridColumnAlignment(.trailing)
                                 Text("\(AppFormatters.amount(ingredient.total.calories)) kcal")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
+                                    .gridColumnAlignment(.trailing)
                             }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
                             .accessibilityElement(children: .combine)
                         }
                     }

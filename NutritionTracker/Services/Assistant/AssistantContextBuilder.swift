@@ -66,6 +66,9 @@ struct AssistantContext: Codable, Equatable, Sendable {
     var localDate: String
     /// The user's clock and weekday, e.g. "00:32, Wednesday".
     var localTime: String
+    /// Spelled out so the model never has to work out "yesterday" itself,
+    /// e.g. "2026-10-14 (Wednesday)".
+    var yesterdayDate: String
     var timezone: String
     var profile: ProfileSummary?
     var targetRanges: [RangeSummary]
@@ -127,7 +130,7 @@ struct AssistantContextBuilder {
         timeFormatter.calendar = calendar
         timeFormatter.timeZone = calendar.timeZone
         timeFormatter.locale = Locale(identifier: "en_US_POSIX")
-        timeFormatter.dateFormat = "HH:mm, EEEE"
+        timeFormatter.dateFormat = "HH:mm, EEEE d MMMM yyyy"
 
         var yesterdaysEntries: [FoodEntry]?
         if calendar.component(.hour, from: now) < Self.lateNightEndHour,
@@ -139,6 +142,7 @@ struct AssistantContextBuilder {
             generatedAt: AssistantArgumentParser.isoFormatter.string(from: now),
             localDate: dateFormatter.string(from: now),
             localTime: timeFormatter.string(from: now),
+            yesterdayDate: yesterdayLabel(now: now),
             timezone: calendar.timeZone.identifier,
             profile: profile.map {
                 .init(age: $0.age(on: now, calendar: calendar),
@@ -153,6 +157,16 @@ struct AssistantContextBuilder {
             entriesYesterday: yesterdaysEntries?.map(Self.summary(of:)),
             trend: buildTrend(target: target, now: now),
             note: Self.note)
+    }
+
+    private func yesterdayLabel(now: Date) -> String {
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: now) else { return "" }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd (EEEE)"
+        return formatter.string(from: yesterday)
     }
 
     /// Before this hour, yesterday's entries go in the context too.
@@ -274,8 +288,9 @@ struct AssistantContextBuilder {
     they say what they actually had.
     - When you propose an entry, write no text with it: the app shows a \
     confirmation card, and that card is your whole reply.
-    - One card per separate dish, bowl, drink or item - make one \
-    addFoodEntry call for each, all in the same reply. A miso soup, a \
+    - One card per separate dish, bowl, drink or item: list each one as its \
+    own entry in addFoodEntry's foods. A banana, a spoon of yoghurt and a \
+    protein shake are three foods; a miso soup, a \
     chawanmushi and a salmon don are three cards, not one; 3 chawanmushi \
     are one chawanmushi card with all 3. Only the parts of one dish (rice, \
     salmon, sauce in the don) go together in one card.
@@ -284,9 +299,10 @@ struct AssistantContextBuilder {
     tool result says so.
 
     When it was eaten:
-    - Use localTime and localDate from the context: they are the user's own \
-    clock. Every consumedAt you send must be local time with its offset, as \
-    in generatedAt.
+    - Use localTime, localDate and yesterdayDate from the context: they are \
+    the user's own clock. Never work out a date yourself - "yesterday" is \
+    exactly yesterdayDate. Every consumedAt you send must be local time with \
+    its offset, as in generatedAt.
     - If the user says when they ate - "last night", "before midnight", "this \
     morning", "at 3pm", "yesterday lunch" - set consumedAt to that time. Just \
     after midnight, "last night" or "before midnight" means yesterday's date, \
@@ -414,6 +430,15 @@ struct AssistantContextBuilder {
     (one cup is about 250 ml; ml count as grams for drinks).
     - Only fall back to your own estimate when no label or brand figures can \
     be found, and say that the figures are generic.
+    - When amending a card (e.g. the user names the brand), keep every other \
+    food and item as it was, and keep its time.
+
+    Recommending products:
+    - Never name a brand or product from memory - it may not exist or be sold \
+    there. Before recommending specific products (breads, wraps, yoghurts, \
+    protein bars), call findProducts and only name products it returns, with \
+    their figures. If it finds nothing, describe what to look for instead \
+    (e.g. "a wholemeal bread with at least 8 g protein per 2 slices").
 
     How to write replies:
     - Whenever you give nutrition figures, give all the major ones together: \

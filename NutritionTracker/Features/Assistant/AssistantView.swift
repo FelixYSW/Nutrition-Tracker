@@ -19,6 +19,8 @@ struct AssistantView: View {
     // new content should keep it there (off once the user scrolls away).
     @State private var isAtBottom = true
     @State private var isFollowingBottom = true
+    // Bumped to ask the scroll view to jump to the end.
+    @State private var jumpRequest = 0
 
     var body: some View {
         NavigationStack {
@@ -100,95 +102,119 @@ struct AssistantView: View {
         .background(AppTheme.background.ignoresSafeArea())
     }
 
+    @ViewBuilder
     private func transcript(viewModel: AssistantViewModel) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if viewModel.messages.isEmpty {
-                        suggestionsCard(viewModel: viewModel)
-                    }
-
-                    ForEach(viewModel.messages) { message in
-                        messageRow(message: message, viewModel: viewModel)
-                            .id(message.id)
-                    }
-
-                    if viewModel.isSending {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Thinking\u{2026}")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    // The very end of the chat, below "Thinking…": what the
-                    // button and auto-follow scroll to. A row of the list
-                    // itself, so scrolling to it lands exactly.
-                    Color.clear
-                        .frame(height: 1)
-                        .id(Self.bottomID)
-                        .onAppear { legacyAnchorVisible(true) }
-                        .onDisappear { legacyAnchorVisible(false) }
+        Group {
+            if #available(iOS 18, *) {
+                FollowingScrollView(isAtBottom: $isAtBottom,
+                                    isFollowing: $isFollowingBottom,
+                                    jumpRequest: jumpRequest) {
+                    transcriptRows(viewModel: viewModel)
                 }
-                .padding(.horizontal, AppTheme.cardPadding)
-                .padding(.vertical, 16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                legacyTranscript(viewModel: viewModel)
             }
-            .modifier(BottomEdgeTracker { atBottom in
-                if atBottom != isAtBottom { isAtBottom = atBottom }
-            })
-            .modifier(UserScrollDetector(
-                onScrollStart: { isFollowingBottom = false },
-                onScrollEnd: { if isAtBottom { isFollowingBottom = true } }))
-            // Sending always jumps to the bottom and starts following again.
-            .onChange(of: viewModel.messages.count) { oldCount, newCount in
-                if newCount > oldCount, case .user? = viewModel.messages.last?.kind {
-                    isFollowingBottom = true
-                }
-                followBottom(proxy, animated: true)
-            }
-            .onChange(of: viewModel.isSending) { _, _ in followBottom(proxy, animated: true) }
-            .onChange(of: viewModel.revealedLength) { _, _ in followBottom(proxy, animated: false) }
-            .onChange(of: viewModel.conversationID) { _, _ in
-                isFollowingBottom = true
-                followBottom(proxy, animated: false)
-            }
-            .overlay(alignment: .bottom) {
-                if !isAtBottom && !viewModel.messages.isEmpty {
-                    Button {
-                        isFollowingBottom = true
-                        withAnimation(.snappy) { proxy.scrollTo(Self.bottomID, anchor: .bottom) }
-                    } label: {
-                        Image(systemName: "arrow.down")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(width: 38, height: 38)
-                            .appGlass(in: Circle(), interactive: true)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Scroll to the latest message")
-                    .padding(.bottom, 10)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-                }
-            }
-            .animation(.snappy(duration: 0.2), value: isAtBottom)
         }
+        // Sending always jumps to the bottom and starts following again.
+        .onChange(of: viewModel.messages.count) { oldCount, newCount in
+            if newCount > oldCount, case .user? = viewModel.messages.last?.kind {
+                jumpToBottom()
+            }
+        }
+        .onChange(of: viewModel.conversationID) { _, _ in jumpToBottom() }
+        .overlay(alignment: .bottom) {
+            if !isAtBottom && !viewModel.messages.isEmpty {
+                Button {
+                    jumpToBottom()
+                } label: {
+                    Image(systemName: "arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 38, height: 38)
+                        .appGlass(in: Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Scroll to the latest message")
+                .padding(.bottom, 10)
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: isAtBottom)
+    }
+
+    /// The messages, then "Thinking…", then an end-of-chat marker.
+    private func transcriptRows(viewModel: AssistantViewModel) -> some View {
+        LazyVStack(alignment: .leading, spacing: 14) {
+            if viewModel.messages.isEmpty {
+                suggestionsCard(viewModel: viewModel)
+            }
+
+            ForEach(viewModel.messages) { message in
+                messageRow(message: message, viewModel: viewModel)
+                    .id(message.id)
+            }
+
+            if viewModel.isSending {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Thinking\u{2026}")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Only used on iOS 17, which has no scroll geometry: its
+            // visibility stands in for "at the bottom", and it's the jump target.
+            Color.clear
+                .frame(height: 1)
+                .id(Self.bottomID)
+                .onAppear { legacyAnchorVisible(true) }
+                .onDisappear { legacyAnchorVisible(false) }
+        }
+        .padding(.horizontal, AppTheme.cardPadding)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Scrolls to the end and keeps following new content.
+    private func jumpToBottom() {
+        isFollowingBottom = true
+        jumpRequest += 1
     }
 
     private static let bottomID = "transcript-bottom"
 
-    /// iOS 17 only: without scroll geometry, being at the bottom is judged by
-    /// whether the end-of-chat row is on screen. iOS 18+ measures it exactly
-    /// (see `BottomEdgeTracker`) and ignores this.
+    // MARK: iOS 17 scrolling
+
+    private func legacyTranscript(viewModel: AssistantViewModel) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                transcriptRows(viewModel: viewModel)
+            }
+            .modifier(UserScrollDetector(
+                onScrollStart: { isFollowingBottom = false },
+                onScrollEnd: { if isAtBottom { isFollowingBottom = true } }))
+            .onChange(of: jumpRequest) { _, _ in legacyScroll(proxy, animated: true) }
+            .onChange(of: viewModel.isSending) { _, _ in legacyFollow(proxy) }
+            .onChange(of: viewModel.revealedLength) { _, _ in legacyFollow(proxy) }
+            .onChange(of: viewModel.messages.count) { _, _ in legacyFollow(proxy) }
+        }
+    }
+
     private func legacyAnchorVisible(_ visible: Bool) {
         if #unavailable(iOS 18) {
             if visible != isAtBottom { isAtBottom = visible }
         }
     }
 
-    /// Keeps the newest content in view unless the user has scrolled away.
-    private func followBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard isFollowingBottom else { return }
+    /// Follows growing content - but only once it has pushed the end off
+    /// screen, so a short chat never jumps.
+    private func legacyFollow(_ proxy: ScrollViewProxy) {
+        guard isFollowingBottom, !isAtBottom else { return }
+        legacyScroll(proxy, animated: false)
+    }
+
+    private func legacyScroll(_ proxy: ScrollViewProxy, animated: Bool) {
         // Wait a beat so the new row has been laid out before scrolling to it.
         DispatchQueue.main.async {
             if animated {
@@ -622,31 +648,40 @@ struct AssistantConfirmationCard: View {
             if !draft.ingredients.isEmpty {
                 // The breakdown the total is built from, so a wrong amount is
                 // easy to spot before saving.
-                VStack(alignment: .leading, spacing: 4) {
+                // Columns, so grams, kcal and the source tag line up row to row.
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
                     ForEach(draft.ingredients) { item in
-                        HStack(spacing: 6) {
+                        GridRow(alignment: .firstTextBaseline) {
                             Text(item.name)
-                            Spacer(minLength: 4)
-                            Text("\(AppFormatters.amount(item.quantity)) g \u{00B7} "
-                                 + "\(AppFormatters.amount(item.total.calories)) kcal")
-                                .monospacedDigit()
-                            if item.provenance.isEstimate {
-                                Text("est.")
-                                    .foregroundStyle(.orange)
-                                    .accessibilityLabel("estimate")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(AppFormatters.amount(item.quantity)) g")
+                                .gridColumnAlignment(.trailing)
+                            Text("\(AppFormatters.amount(item.total.calories)) kcal")
+                                .gridColumnAlignment(.trailing)
+                            Group {
+                                if item.provenance.isEstimate {
+                                    Text("est.")
+                                        .foregroundStyle(.orange)
+                                        .accessibilityLabel("estimate")
+                                } else if item.provenance.isDeclared {
+                                    Text("label")
+                                        .foregroundStyle(AppTheme.within)
+                                        .accessibilityLabel(item.provenance.displayName)
+                                } else {
+                                    Text("")
+                                }
                             }
-                            if item.provenance.isDeclared {
-                                Text("label")
-                                    .foregroundStyle(AppTheme.within)
-                                    .accessibilityLabel(item.provenance.displayName)
-                            }
+                            .gridColumnAlignment(.leading)
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .monospacedDigit()
                     }
                 }
             }
-            Text("Figures are estimates. You can edit this entry afterwards.")
+            Text(!draft.ingredients.isEmpty && draft.ingredients.allSatisfy(\.provenance.isDeclared)
+                 ? "Figures from the label. You can edit this entry afterwards."
+                 : "Figures are estimates. You can edit this entry afterwards.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -789,29 +824,10 @@ struct ZoomablePhoto: View {
 
 // MARK: - Chat scrolling
 
-/// Reports whether the chat is scrolled to (within a few points of) the end.
-/// Uses the scroll view's own geometry on iOS 18+, which stays accurate as
-/// replies grow and the keyboard opens; iOS 17 falls back to the end-of-chat
-/// row's visibility.
-struct BottomEdgeTracker: ViewModifier {
-    let onChange: (Bool) -> Void
-
+/// Where the chat sits relative to its end, from the scroll view's geometry.
+enum BottomEdgeTracker {
     /// How close counts as "at the bottom", in points.
     static let tolerance: CGFloat = 40
-
-    func body(content: Content) -> some View {
-        if #available(iOS 18, *) {
-            content.onScrollGeometryChange(for: Bool.self) { geometry in
-                Self.isAtBottom(visibleMaxY: geometry.visibleRect.maxY,
-                                contentHeight: geometry.contentSize.height,
-                                bottomInset: geometry.contentInsets.bottom)
-            } action: { _, atBottom in
-                onChange(atBottom)
-            }
-        } else {
-            content
-        }
-    }
 
     /// The visible area reaches the end of the content, allowing for the
     /// bottom inset (the tab bar) and a little slack. Short chats that don't
@@ -819,6 +835,76 @@ struct BottomEdgeTracker: ViewModifier {
     static func isAtBottom(visibleMaxY: CGFloat, contentHeight: CGFloat,
                            bottomInset: CGFloat) -> Bool {
         visibleMaxY - bottomInset >= contentHeight - tolerance
+    }
+
+    /// Whether the chat is taller than the space it has, i.e. there is
+    /// anything to scroll at all.
+    static func overflows(contentHeight: CGFloat, containerHeight: CGFloat,
+                          topInset: CGFloat, bottomInset: CGFloat) -> Bool {
+        contentHeight + topInset + bottomInset > containerHeight + 1
+    }
+}
+
+/// The chat's scroll view on iOS 18+.
+///
+/// Scrolls with `ScrollPosition.scrollTo(edge: .bottom)`, which goes to the
+/// true end of the content however the lazy rows were estimated, rather than
+/// to a marker row that may not have been laid out yet. New content is
+/// followed by watching the content height, and only while the chat is
+/// taller than the screen - so a short chat never jumps as a reply appears.
+@available(iOS 18, *)
+private struct FollowingScrollView<Content: View>: View {
+    @Binding var isAtBottom: Bool
+    @Binding var isFollowing: Bool
+    /// Changes whenever the chat should jump to its end (send, button, new chat).
+    let jumpRequest: Int
+    @ViewBuilder let content: Content
+
+    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var overflows = false
+
+    private struct Metrics: Equatable {
+        var atBottom: Bool
+        var overflows: Bool
+        var contentHeight: CGFloat
+    }
+
+    var body: some View {
+        ScrollView {
+            content
+        }
+        .scrollPosition($position)
+        .onScrollGeometryChange(for: Metrics.self) { geometry in
+            Metrics(atBottom: BottomEdgeTracker.isAtBottom(
+                        visibleMaxY: geometry.visibleRect.maxY,
+                        contentHeight: geometry.contentSize.height,
+                        bottomInset: geometry.contentInsets.bottom),
+                    overflows: BottomEdgeTracker.overflows(
+                        contentHeight: geometry.contentSize.height,
+                        containerHeight: geometry.containerSize.height,
+                        topInset: geometry.contentInsets.top,
+                        bottomInset: geometry.contentInsets.bottom),
+                    contentHeight: geometry.contentSize.height)
+        } action: { old, new in
+            overflows = new.overflows
+            if new.atBottom != isAtBottom { isAtBottom = new.atBottom }
+            // The reply grew (or a row was added) while following: keep the
+            // end in view.
+            if new.contentHeight > old.contentHeight, isFollowing, new.overflows {
+                position.scrollTo(edge: .bottom)
+            }
+        }
+        .onScrollPhaseChange { _, phase in
+            switch phase {
+            case .interacting: isFollowing = false
+            case .idle: if isAtBottom { isFollowing = true }
+            default: break
+            }
+        }
+        .onChange(of: jumpRequest) { _, _ in
+            guard overflows else { return }
+            withAnimation(.snappy) { position.scrollTo(edge: .bottom) }
+        }
     }
 }
 

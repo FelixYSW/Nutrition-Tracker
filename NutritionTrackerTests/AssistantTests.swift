@@ -554,6 +554,7 @@ final class AssistantToolExecutorTests: XCTestCase {
                 "items": .array([
                     .object(["name": .string("konjac knots"), "grams": .number(200),
                              "kcalPer100g": .number(9), "carbsPer100g": .number(3),
+                             "proteinPer100g": .number(0.2), "fatPer100g": .number(0.1),
                              "nutritionSource": .string("label")]),
                     .object(["name": .string("Farm Fresh fresh milk"), "grams": .number(250),
                              "kcalPer100g": .number(64), "proteinPer100g": .number(3.2),
@@ -1365,5 +1366,148 @@ final class ChatBottomEdgeTests: XCTestCase {
     func testShortChatIsAtTheBottom() {
         XCTAssertTrue(BottomEdgeTracker.isAtBottom(visibleMaxY: 700, contentHeight: 300,
                                                    bottomInset: 83))
+    }
+
+    /// A short chat has nothing to scroll, so a growing reply never moves it.
+    func testShortChatDoesNotOverflow() {
+        XCTAssertFalse(BottomEdgeTracker.overflows(contentHeight: 300, containerHeight: 700,
+                                                   topInset: 0, bottomInset: 83))
+        XCTAssertTrue(BottomEdgeTracker.overflows(contentHeight: 680, containerHeight: 700,
+                                                  topInset: 0, bottomInset: 83),
+                      "taller than the space above the tab bar")
+    }
+}
+
+// MARK: - Safeguards against the model's mistakes
+
+@MainActor
+final class AssistantSafeguardTests: XCTestCase {
+
+    private func makeViewModel(_ service: ScriptedAssistantService) -> (AssistantViewModel, ModelContext) {
+        let context = TestSupport.makeContext()
+        return (AssistantViewModel(service: service,
+                                   executor: AssistantToolExecutor(context: context),
+                                   contextBuilder: AssistantContextBuilder(context: context)),
+                context)
+    }
+
+    private func food(_ name: String, grams: JSONValue = .number(100),
+                      extra: [String: JSONValue] = [:]) -> JSONValue {
+        .object(["name": .string(name),
+                 "items": .array([.object(["name": .string(name.lowercased()), "grams": grams,
+                                           "kcalPer100g": .number(100)])])]
+                .merging(extra) { $1 })
+    }
+
+    /// "A banana, a yoghurt and a shake" in one call still makes one card each.
+    func testFoodsListMakesOneCardPerFood() async throws {
+        let service = ScriptedAssistantService([AssistantResponse(text: nil, toolCalls: [
+            AssistantToolCall(id: "c", tool: .addFoodEntry, arguments: [
+                "foods": .array([food("Banana"), food("Greek yoghurt"), food("Protein shake")])])
+        ])])
+        let (viewModel, context) = makeViewModel(service)
+        viewModel.composerText = "banana, yoghurt and a shake"
+        await viewModel.send()
+        XCTAssertEqual(viewModel.pendingWrites.map(\.id), ["c#1", "c#2", "c#3"])
+
+        await viewModel.confirmAllAdditions()
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<FoodEntry>()), 3)
+
+        // The model gets one result for its one call, covering all three cards.
+        viewModel.composerText = "thanks"
+        await viewModel.send()
+        let ids = (service.receivedTurns.last ?? []).flatMap(\.blocks).compactMap { block -> String? in
+            if case .toolResult(let id, _, _) = block { return id }
+            return nil
+        }
+        XCTAssertEqual(ids, ["c"])
+    }
+
+    /// One bad item used to be dropped and the rest logged - the shake vanished.
+    func testABadItemRejectsTheCardInsteadOfVanishing() {
+        let executor = AssistantToolExecutor(context: TestSupport.makeContext())
+        let outcome = executor.execute(AssistantToolCall(id: "a", tool: .addFoodEntry, arguments: [
+            "name": .string("Snack"),
+            "items": .array([
+                .object(["name": .string("banana"), "grams": .number(118)]),
+                .object(["name": .string("whey isolate"), "servings": .number(1)])
+            ])]))
+        guard case .failure(let message) = outcome else { return XCTFail("expected a failure") }
+        XCTAssertTrue(message.contains("whey isolate"))
+    }
+
+    func testGramsWithUnitsAreRead() {
+        XCTAssertEqual(JSONValue.string("250 g").doubleValue, 250)
+        XCTAssertEqual(JSONValue.string("~30g").doubleValue, 30)
+        XCTAssertNil(JSONValue.string("one cup").doubleValue)
+    }
+
+    /// No database match and no figures would log 0 kcal; the model is asked again.
+    func testItemsWithNoNutritionAreSentBack() {
+        let executor = AssistantToolExecutor(context: TestSupport.makeContext())
+        let outcome = executor.execute(AssistantToolCall(id: "a", tool: .addFoodEntry, arguments: [
+            "name": .string("Mystery"),
+            "items": .array([.object(["name": .string("zorbleberry"), "grams": .number(100)])])]))
+        guard case .failure(let message) = outcome else { return XCTFail("expected a failure") }
+        XCTAssertTrue(message.contains("zorbleberry"))
+    }
+
+    /// Label figures with protein missing (shown as 0 g) are a misread label.
+    func testIncompleteLabelFiguresAreSentBack() {
+        XCTAssertThrowsError(try AssistantToolExecutor.checkLabelFigures(.array([.object([
+            "name": .string("chicken breast"), "kcalPer100g": .number(118),
+            "carbsPer100g": .number(2), "fatPer100g": .number(3),
+            "nutritionSource": .string("label")])]), tool: .addFoodEntry))
+    }
+
+    func testLookedUpProductMustUseItsFigures() {
+        let detail = AssistantViewModel.unusedBrandFigures(
+            in: ["foods": .array([food("Optimum Nutrition whey isolate")])],
+            lookedUp: ["Optimum Nutrition Gold Standard 100% Isolate"])
+        XCTAssertNotNil(detail)
+        XCTAssertNil(AssistantViewModel.unusedBrandFigures(
+            in: ["foods": .array([food("Optimum Nutrition whey isolate",
+                                       extra: [:])])],
+            lookedUp: []), "nothing looked up, nothing to enforce")
+    }
+
+    /// Correcting the brand of last night's shake keeps last night's time.
+    func testAmendedCardWithoutATimeKeepsTheOldTime() {
+        let lastNight = Date.now.addingTimeInterval(-3 * 3600)
+        let old = PendingAssistantWrite(id: "a", tool: .addFoodEntry,
+                                        action: .add(FoodEntryDraft(name: "Shake", consumedAt: lastNight)))
+        let new = PendingAssistantWrite(id: "b", tool: .addFoodEntry,
+                                        action: .add(FoodEntryDraft(name: "Shake")))
+        guard case .add(let draft) = AssistantViewModel.retimed(new, like: old).action else {
+            return XCTFail()
+        }
+        XCTAssertEqual(draft.consumedAt, lastNight)
+    }
+
+    /// Editing an unconfirmed card by its card id steers the model instead of
+    /// showing "not a valid entry identifier".
+    func testEditAimedAtAnUnsavedCardIsRedirected() async throws {
+        let service = ScriptedAssistantService([
+            AssistantResponse(text: nil, toolCalls: [AssistantToolCall(
+                id: "card", tool: .addFoodEntry, arguments: ["foods": .array([food("Wrap")])])]),
+            AssistantResponse(text: nil, toolCalls: [AssistantToolCall(
+                id: "e", tool: .editFoodEntry, arguments: ["id": .string("card")])]),
+            AssistantResponse(text: "Fixed.", toolCalls: [])
+        ])
+        let (viewModel, _) = makeViewModel(service)
+        viewModel.composerText = "a wrap"
+        await viewModel.send()
+        viewModel.composerText = "why protein 0"
+        await viewModel.send()
+
+        XCTAssertFalse(viewModel.messages.contains {
+            if case .error = $0.kind { return true }
+            return false
+        })
+        let sent = (service.receivedTurns.last ?? []).flatMap(\.blocks)
+        XCTAssertTrue(sent.contains {
+            if case .toolResult("e", let content, true) = $0 { return content.contains("replacesCard") }
+            return false
+        })
     }
 }

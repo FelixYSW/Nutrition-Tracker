@@ -92,12 +92,14 @@ private func rangeCaption(nutrient: Nutrient, consumed: Double, range: NutrientR
     guard range.max > 0 else { return "No target" }
     let unit = nutrient == .calories ? " kcal" : " g"
     switch range.state(consumed: consumed) {
+    // Worked out from the whole numbers on screen, like the state itself, so
+    // the gap is always at least 1 and matches the figures shown.
     case .under:
-        return "\(AppFormatters.amount(max(0, range.min - consumed)))\(unit) to go"
+        return "\(AppFormatters.amount(range.min.rounded() - consumed.rounded()))\(unit) to go"
     case .within:
         return "In range"
     case .over:
-        return "\(AppFormatters.amount(consumed - range.max))\(unit) over"
+        return "\(AppFormatters.amount(consumed.rounded() - range.max.rounded()))\(unit) over"
     }
 }
 

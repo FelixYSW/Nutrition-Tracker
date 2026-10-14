@@ -13,17 +13,19 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     case getTrends
     case findFoodNearby
     case lookUpProductNutrition
+    case findProducts
 
     /// Tools answered from a live web search rather than the local database.
     var usesWebSearch: Bool {
-        self == .findFoodNearby || self == .lookUpProductNutrition
+        self == .findFoodNearby || self == .lookUpProductNutrition || self == .findProducts
     }
 
     /// Whether executing this tool changes the database.
     var isWrite: Bool {
         switch self {
         case .addFoodEntry, .editFoodEntry, .deleteFoodEntry: true
-        case .queryEntries, .getTrends, .findFoodNearby, .lookUpProductNutrition: false
+        case .queryEntries, .getTrends, .findFoodNearby, .lookUpProductNutrition, .findProducts:
+            false
         }
     }
 
@@ -33,8 +35,10 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
             "Propose logging a food the user says they ate or asks to log - never "
                 + "just because they shared a photo or asked what to eat. Shown to the "
                 + "user as a confirmation card; nothing is saved until they confirm. "
-                + "Call it once per separate dish or drink, in the same reply, so each "
-                + "gets its own card. To amend an open card, pass its cardID as replacesCard. "
+                + "Put each separate dish, drink or snack in foods as its own entry - "
+                + "each becomes its own card (a banana, a yoghurt and a protein shake are 3 "
+                + "foods, not one). To amend an open card, give that food its cardID as "
+                + "replacesCard. "
                 + "List every component separately with the grams actually eaten - "
                 + "including cooking oil, sauces and drinks - and never give a total for "
                 + "the whole dish: the app works out the totals itself from its nutrition "
@@ -64,6 +68,11 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 + "Original Classic bread\"). Use it before logging any named brand or "
                 + "chain item the user didn't give a label for, then log it with "
                 + "nutritionSource \"brand\". Returns a summary with sources."
+        case .findProducts:
+            "Search the web for real products the user can buy - e.g. \"high protein bread "
+                + "in Malaysia\", \"low sugar yoghurt\" - with their brand names and published "
+                + "nutrition. Use it before recommending any specific brand or product: only "
+                + "name products it returns. Returns a summary with sources."
         }
     }
 
@@ -100,13 +109,21 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         switch self {
         case .addFoodEntry:
-            return Self.object([
-                "name": Self.field("string", "Name for the whole food, e.g. \"Tomato egg with konjac\"."),
-                "items": Self.array(of: item, "Every component with its grams. One item for a "
-                                    + "single food; several for a mixed dish."),
-                "consumedAt": Self.field("string", "ISO 8601 timestamp. Omit for now."),
+            let food = Self.object([
+                "name": Self.field("string", "Name of this one dish, drink or snack, e.g. "
+                                   + "\"Tomato egg with konjac\", \"Banana\"."),
+                "items": Self.array(of: item, "Its components with their grams: one item for "
+                                    + "a simple food, several only for a mixed dish."),
+                "consumedAt": Self.field("string", "Local ISO 8601 time it was eaten, e.g. "
+                                         + "2026-10-14T23:45:00+08:00. Omit for just now."),
                 "replacesCard": replacesCard
             ], required: ["name", "items"])
+            return Self.object([
+                "foods": Self.array(of: food, "One entry per separate dish, drink or snack; "
+                                    + "each gets its own card."),
+                "consumedAt": Self.field("string", "Local ISO 8601 time shared by all the "
+                                         + "foods, if they were eaten together. Omit for now.")
+            ], required: ["foods"])
 
         case .editFoodEntry:
             return Self.object([
@@ -140,6 +157,15 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 "startDate": Self.field("string", "ISO 8601 date. Defaults to today."),
                 "endDate": Self.field("string", "ISO 8601 date, exclusive. Defaults to tomorrow.")
             ], required: [])
+
+        case .findProducts:
+            return Self.object([
+                "query": Self.field("string", "What to find, e.g. \"high protein wholemeal "
+                                    + "bread\" or \"protein wraps\"."),
+                "country": Self.field("string", "Where the user shops, e.g. \"Malaysia\"."),
+                "goal": Self.field("string", "What matters most, e.g. \"most protein per "
+                                   + "slice, under 100 kcal\".")
+            ], required: ["query"])
 
         case .lookUpProductNutrition:
             return Self.object([
@@ -285,10 +311,21 @@ enum JSONValue: Equatable, Sendable {
     var doubleValue: Double? {
         switch self {
         case .number(let value): value.isFinite ? value : nil
-        case .string(let value): Double(value.replacingOccurrences(of: ",", with: "."))
+        case .string(let value): Self.leadingNumber(in: value)
         case .bool(let value): value ? 1 : 0
         default: nil
         }
+    }
+
+    /// Models sometimes send numbers as text with a unit or a tilde: "250 g",
+    /// "~30g", "1,5". Reads the number at the start and ignores the rest.
+    static func leadingNumber(in text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "~≈ "))
+            .replacingOccurrences(of: ",", with: ".")
+        let number = trimmed.prefix { $0.isNumber || $0 == "." }
+        guard let value = Double(number), value.isFinite else { return nil }
+        return value
     }
 
     var arrayValue: [JSONValue]? {
@@ -402,13 +439,25 @@ enum AssistantArgumentParser {
             parseItem($0.objectValue ?? [:]).map(resolve)
         }
         guard !items.isEmpty else {
-            throw AssistantToolError.malformedArguments(
-                tool: tool, detail: "list each component with the grams eaten")
+            // Say exactly what was wrong, so the model's retry gets it right.
+            let raw = (arguments["items"]?.arrayValue ?? []).compactMap(\.objectValue)
+            let detail = raw.isEmpty
+                ? "items is empty - list each component with its grams"
+                : "every item needs a \"grams\" number between 1 and "
+                    + "\(Int(maximumItemGrams)): the weight eaten, not a count of servings "
+                    + "(for one sandwich, its weight such as 180)"
+            throw AssistantToolError.malformedArguments(tool: tool, detail: detail)
         }
 
-        var draft = FoodEntryDraft(name: name,
-                                   consumedAt: parseDate(arguments["consumedAt"]) ?? .now,
-                                   source: .assistant)
+        let consumedAt = parseDate(arguments["consumedAt"]) ?? .now
+        // Food can't be eaten in the future; a time ahead of now is a date
+        // the model worked out wrongly.
+        if consumedAt.timeIntervalSinceNow > 15 * 60 {
+            throw AssistantToolError.malformedArguments(
+                tool: tool, detail: "consumedAt is in the future - use localDate, yesterdayDate "
+                    + "and localTime from the context, or omit it for now")
+        }
+        var draft = FoodEntryDraft(name: name, consumedAt: consumedAt, source: .assistant)
         setComponents(items, on: &draft)
         return draft
     }
@@ -447,10 +496,34 @@ enum AssistantArgumentParser {
     /// Largest believable mass for one component of one meal, in grams.
     static let maximumItemGrams: Double = 3000
 
+    /// Every item must be usable. Dropping a bad one quietly and logging the
+    /// rest loses food the user ate (a protein shake vanished this way), so
+    /// the model is told which items to fix instead.
+    static func checkItems(_ value: JSONValue?, tool: AssistantTool) throws {
+        let raw = (value?.arrayValue ?? []).compactMap(\.objectValue)
+        let unusable = raw.filter { parseItem($0) == nil }
+            .map { $0["name"]?.stringValue ?? "an unnamed item" }
+        guard !unusable.isEmpty else { return }
+        throw AssistantToolError.malformedArguments(
+            tool: tool.rawValue,
+            detail: "these items have no usable \"grams\" (a weight between 1 and "
+                + "\(Int(maximumItemGrams)), not a count): \(unusable.joined(separator: ", ")). "
+                + "Send them again with their weight - nothing was logged")
+    }
+
+    /// The weight eaten. Models don't always use the schema's name for it, so
+    /// the common alternatives are accepted too ("250 g" as text included).
+    static func gramsValue(in arguments: [String: JSONValue]) -> Double? {
+        for key in ["grams", "gram", "g", "weightGrams", "weight", "amountGrams", "ml"] {
+            if let value = arguments[key]?.doubleValue { return value }
+        }
+        return nil
+    }
+
     static func parseItem(_ arguments: [String: JSONValue]) -> IngredientDraft? {
         guard let name = arguments["name"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
-              let grams = arguments["grams"]?.doubleValue,
+              let grams = gramsValue(in: arguments),
               grams > 0, grams <= maximumItemGrams else {
             return nil
         }

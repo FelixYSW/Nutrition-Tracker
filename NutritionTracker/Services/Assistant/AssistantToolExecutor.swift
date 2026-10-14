@@ -8,12 +8,16 @@ enum AssistantToolOutcome: Equatable, Sendable {
     /// A write was proposed and is waiting for the user. Nothing has been
     /// written yet.
     case awaitingConfirmation(PendingAssistantWrite)
+    /// Several separate foods from one call, one card each.
+    case awaitingConfirmations([PendingAssistantWrite])
     /// The tool call could not be used at all.
     case failure(String)
 
     var isWriteProposal: Bool {
-        if case .awaitingConfirmation = self { return true }
-        return false
+        switch self {
+        case .awaitingConfirmation, .awaitingConfirmations: true
+        default: false
+        }
     }
 }
 
@@ -44,11 +48,12 @@ final class AssistantToolExecutor {
                 return .result(try queryEntries(arguments: call.arguments))
             case .getTrends:
                 return .result(try getTrends(arguments: call.arguments))
-            case .findFoodNearby, .lookUpProductNutrition:
+            case .findFoodNearby, .lookUpProductNutrition, .findProducts:
                 // Needs the network: the view model runs it through the service.
                 return .failure("Web search is not run by the local executor.")
             case .addFoodEntry:
-                return .awaitingConfirmation(try proposeAdd(call: call))
+                let writes = try proposeAdd(call: call)
+                return writes.count == 1 ? .awaitingConfirmation(writes[0]) : .awaitingConfirmations(writes)
             case .editFoodEntry:
                 return .awaitingConfirmation(try proposeEdit(call: call))
             case .deleteFoodEntry:
@@ -198,13 +203,108 @@ final class AssistantToolExecutor {
 
     // MARK: Write proposals (still no writes)
 
-    private func proposeAdd(call: AssistantToolCall) throws -> PendingAssistantWrite {
+    /// One card per food. A call listing several separate foods in `foods`
+    /// gives each its own card, with ids "<call id>#1", "#2", ...; a single
+    /// food (or the older name + items form) keeps the call id.
+    private func proposeAdd(call: AssistantToolCall) throws -> [PendingAssistantWrite] {
+        let foods = Self.foods(in: call.arguments)
+        return try foods.enumerated().map { index, arguments in
+            let id = foods.count == 1 ? call.id : "\(call.id)#\(index + 1)"
+            return PendingAssistantWrite(id: id, tool: .addFoodEntry,
+                                         action: .add(try proposeDraft(arguments)))
+        }
+    }
+
+    /// The separate foods in an add call. Each inherits the call-wide time
+    /// when it has none of its own.
+    static func foods(in arguments: [String: JSONValue]) -> [[String: JSONValue]] {
+        guard let list = arguments["foods"]?.arrayValue, !list.isEmpty else { return [arguments] }
+        return list.compactMap(\.objectValue).map { food in
+            var food = food
+            if food["consumedAt"] == nil, let shared = arguments["consumedAt"] {
+                food["consumedAt"] = shared
+            }
+            return food
+        }
+    }
+
+    private func proposeDraft(_ arguments: [String: JSONValue]) throws -> FoodEntryDraft {
         let repository = NutritionRepository(context: context)
-        let draft = try AssistantArgumentParser.parseAdd(arguments: call.arguments) { item in
+        try AssistantArgumentParser.checkItems(arguments["items"], tool: .addFoodEntry)
+        try Self.checkLabelFigures(arguments["items"], tool: .addFoodEntry)
+        let items = AssistantArgumentParser.parseItems(arguments["items"]) {
+            Self.resolve($0, with: repository)
+        } ?? []
+        try Self.requireNutrition(items, tool: .addFoodEntry)
+        return try AssistantArgumentParser.parseAdd(arguments: arguments) { item in
             Self.resolve(item, with: repository)
         }
-        return PendingAssistantWrite(id: call.id, tool: .addFoodEntry, action: .add(draft))
     }
+
+    // MARK: Sanity checks on the model's figures
+
+    /// Words for drinks and foods that really have next to no energy, so zero
+    /// figures for them are believable.
+    static let nearZeroEnergyWords: Set<String> = [
+        "water", "tea", "coffee", "americano", "espresso", "diet", "zero", "sparkling",
+        "ice", "unsweetened", "sugarless"
+    ]
+
+    /// Items left with no energy at all - no database match and no figures from
+    /// the model - would log as 0 kcal. The model is asked to supply them.
+    static func requireNutrition(_ items: [IngredientDraft], tool: AssistantTool) throws {
+        let missing = items.filter { item in
+            let value = item.nutritionPerServing
+            guard value.calories <= 0, value.energyFromMacros <= 0 else { return false }
+            let words = Set(item.name.lowercased().split { !$0.isLetter }.map(String.init))
+            return words.isDisjoint(with: nearZeroEnergyWords)
+        }.map(\.name)
+        guard !missing.isEmpty else { return }
+        throw AssistantToolError.malformedArguments(
+            tool: tool.rawValue,
+            detail: "no nutrition figures for \(missing.joined(separator: ", ")). Send "
+                + "kcalPer100g, proteinPer100g, carbsPer100g and fatPer100g for each - for a "
+                + "brand, the figures from lookUpProductNutrition with nutritionSource \"brand\"")
+    }
+
+    /// Label and brand figures are used exactly as given, so they must be
+    /// complete and add up: a label always states energy, protein, carbs and
+    /// fat, and its energy is close to 4/4/9 kcal per gram of them. A missing
+    /// value (e.g. protein left out, showing as 0 g) or a big mismatch means the
+    /// label was misread, and the model is asked to read it again.
+    static func checkLabelFigures(_ itemsValue: JSONValue?, tool: AssistantTool) throws {
+        var problems: [String] = []
+        for value in itemsValue?.arrayValue ?? [] {
+            guard let item = value.objectValue,
+                  let source = item["nutritionSource"]?.stringValue?.lowercased(),
+                  source == "label" || source == "brand" else { continue }
+            let name = item["name"]?.stringValue ?? "an item"
+            let keys = ["kcalPer100g", "proteinPer100g", "carbsPer100g", "fatPer100g"]
+            let absent = keys.filter { item[$0]?.doubleValue == nil }
+            if !absent.isEmpty {
+                problems.append("\(name) is missing \(absent.joined(separator: ", "))")
+                continue
+            }
+            let kcal = item["kcalPer100g"]?.doubleValue ?? 0
+            let fromMacros = 4 * (item["proteinPer100g"]?.doubleValue ?? 0)
+                + 4 * (item["carbsPer100g"]?.doubleValue ?? 0)
+                + 9 * (item["fatPer100g"]?.doubleValue ?? 0)
+            if kcal > 20, abs(kcal - fromMacros) / kcal > Self.labelEnergyTolerance {
+                problems.append("\(name): \(Int(kcal)) kcal doesn't match its protein, carbs "
+                                + "and fat (about \(Int(fromMacros.rounded())) kcal)")
+            }
+        }
+        guard !problems.isEmpty else { return }
+        throw AssistantToolError.malformedArguments(
+            tool: tool.rawValue,
+            detail: "label figures look misread - \(problems.joined(separator: "; ")). Read "
+                + "the label again and send every value per 100 g (convert from per serving "
+                + "if needed)")
+    }
+
+    /// Fibre, sugar alcohols and rounding make real labels differ from 4/4/9
+    /// a little, but rarely by this much.
+    static let labelEnergyTolerance = 0.3
 
     /// Swaps the model's per-100 g guess for the app's own figures wherever the
     /// nutrition data layer knows the food: the user's saved products first,
@@ -245,9 +345,12 @@ final class AssistantToolExecutor {
         }
 
         let repository = NutritionRepository(context: context)
+        try AssistantArgumentParser.checkItems(arguments["items"], tool: .editFoodEntry)
+        try Self.checkLabelFigures(arguments["items"], tool: .editFoodEntry)
         if let items = AssistantArgumentParser.parseItems(arguments["items"], resolve: {
             Self.resolve($0, with: repository)
         }) {
+            try Self.requireNutrition(items, tool: .editFoodEntry)
             // A new component list - e.g. with an ingredient the user forgot -
             // replaces what's in the food, and the totals follow from it.
             AssistantArgumentParser.setComponents(Self.keepingKnownFigures(items, from: draft),

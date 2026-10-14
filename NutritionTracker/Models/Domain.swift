@@ -313,10 +313,15 @@ struct NutrientRange: Codable, Equatable, Sendable {
 
     /// Three-state classification. Values exactly at either bound count as
     /// in-range (spec section 35 calls for boundary tests).
+    ///
+    /// Judged on whole numbers, as the app shows them: 119.6 g against a
+    /// 120 g minimum displays as 120 g, so it must read "In range" - not
+    /// "0 g to go" - and 150.3 g against a 150 g maximum isn't "0 g over".
     func state(consumed: Double) -> RangeState {
         guard max > 0 else { return .within }
-        if consumed < min { return .under }
-        if consumed > max { return .over }
+        let shown = consumed.rounded()
+        if shown < min.rounded() { return .under }
+        if shown > max.rounded() { return .over }
         return .within
     }
 

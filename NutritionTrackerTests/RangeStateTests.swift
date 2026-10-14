@@ -8,7 +8,7 @@ final class RangeStateTests: XCTestCase {
 
     func testUnderBelowMinimum() {
         XCTAssertEqual(range.state(consumed: 0), .under)
-        XCTAssertEqual(range.state(consumed: 119.99), .under)
+        XCTAssertEqual(range.state(consumed: 119.4), .under, "shows as 119")
     }
 
     func testExactlyAtMinimumIsWithin() {
@@ -20,8 +20,18 @@ final class RangeStateTests: XCTestCase {
     }
 
     func testOverAboveMaximum() {
-        XCTAssertEqual(range.state(consumed: 160.01), .over)
+        XCTAssertEqual(range.state(consumed: 160.6), .over, "shows as 161")
         XCTAssertTrue(range.state(consumed: 200).isFlagged)
+    }
+
+    /// The state follows the whole numbers on screen. Just under the minimum
+    /// shows as the minimum, so it's in range, never "0 g to go"; just over
+    /// the maximum shows as the maximum, so it's never "0 g over".
+    func testBorderlineValuesMatchWhatIsShown() {
+        XCTAssertEqual(range.state(consumed: 119.6), .within)
+        XCTAssertEqual(range.state(consumed: 119.99), .within)
+        XCTAssertEqual(range.state(consumed: 160.01), .within)
+        XCTAssertEqual(range.state(consumed: 160.4), .within)
     }
 
     func testUnderIsNotFlagged() {
