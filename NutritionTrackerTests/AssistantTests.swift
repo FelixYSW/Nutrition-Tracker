@@ -1523,9 +1523,11 @@ private struct FixedLocator: CurrentLocating {
 final class AssistantReachTests: XCTestCase {
 
     private func makeViewModel(_ service: ScriptedAssistantService,
-                               locator: CurrentLocating? = nil,
-                               context: ModelContext = TestSupport.makeContext()) -> AssistantViewModel {
-        AssistantViewModel(service: service,
+                               locator: CurrentLocating? = nil) -> AssistantViewModel {
+        // Made here, not as a default argument: default values are evaluated
+        // outside the main actor, where makeContext() can't be called.
+        let context = TestSupport.makeContext()
+        return AssistantViewModel(service: service,
                            executor: AssistantToolExecutor(context: context),
                            contextBuilder: AssistantContextBuilder(context: context),
                            locator: locator)
