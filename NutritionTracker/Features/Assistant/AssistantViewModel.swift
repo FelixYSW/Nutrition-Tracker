@@ -120,6 +120,8 @@ final class AssistantViewModel {
 
     /// Where chats are saved; nil keeps them in memory only (tests, previews).
     private let historyStore: ChatHistoryStore?
+    /// Finds where the user is, for food nearby when they don't name a place.
+    private let locator: CurrentLocating?
     /// The chat on screen. Changes when starting a new chat or opening an old one.
     private(set) var conversationID = UUID()
     private var conversationCreatedAt = Date.now
@@ -128,7 +130,9 @@ final class AssistantViewModel {
          executor: AssistantToolExecutor,
          contextBuilder: AssistantContextBuilder,
          photoAnalyser: PhotoAnalyser? = nil,
-         historyStore: ChatHistoryStore? = nil) {
+         historyStore: ChatHistoryStore? = nil,
+         locator: CurrentLocating? = nil) {
+        self.locator = locator
         self.service = service
         self.executor = executor
         self.contextBuilder = contextBuilder
@@ -144,50 +148,14 @@ final class AssistantViewModel {
             ? OpenAICompatibleAssistantService()
             : UnconfiguredAssistantService()
 
-        let pipeline = PhotoAnalysisPipeline.make(context: context)
-        // An if-statement rather than `cond ? { closure } : nil`: Swift can't
-        // infer a closure's type through a ternary with an optional
-        // @MainActor async function type ("type of expression is ambiguous").
-        var analyser: PhotoAnalyser?
-        if pipeline.canRecogniseFoods {
-            analyser = { @MainActor (data: Data) async -> String? in
-                await Self.describePhoto(data, using: pipeline)
-            }
-        }
-
+        // Photos go straight to the assistant's model: the app no longer runs
+        // its own food recognition models on them.
         return AssistantViewModel(
             service: service,
             executor: AssistantToolExecutor(context: context),
             contextBuilder: AssistantContextBuilder(context: context),
-            photoAnalyser: analyser,
-            historyStore: .shared)
-    }
-
-    /// Plain-text summary of the on-device photo analysis: each food with its
-    /// estimated grams and the calories the app calculated for it.
-    @MainActor
-    static func describePhoto(_ data: Data, using pipeline: PhotoAnalysisPipeline) async -> String? {
-        #if canImport(UIKit)
-        guard let image = UIImage(data: data),
-              let result = try? await pipeline.analyse(image: image, retainImage: false),
-              !result.isEmpty else { return nil }
-
-        var lines = ["On-device photo analysis (the app's own food recognition and "
-                     + "portion models):"]
-        for item in result.resolvedNutrition {
-            let source = item.provenance.isEstimate ? "estimate" : item.provenance.displayName
-            lines.append("- \(item.displayName): \(AppFormatters.amount(item.grams)) g, "
-                         + "\(AppFormatters.amount(item.total.calories)) kcal (\(source))")
-        }
-        let total = result.resolvedNutrition.reduce(Nutrition.zero) { $0 + $1.total }
-        lines.append("Total about \(AppFormatters.amount(total.calories)) kcal. "
-                     + (result.portionsEstimated
-                        ? "Portions are estimates from one photo."
-                        : "Portion sizes are defaults; ask the user to confirm them."))
-        return lines.joined(separator: "\n")
-        #else
-        return nil
-        #endif
+            historyStore: .shared,
+            locator: CurrentLocationProvider())
     }
 
     // MARK: Availability
@@ -305,7 +273,24 @@ final class AssistantViewModel {
                 // Web search goes out over the network, so it runs here rather
                 // than in the executor, which only reads the local database.
                 if call.tool.usesWebSearch {
-                    let (question, activity) = Self.webQuestion(for: call)
+                    // Food nearby with no place named searches around the
+                    // user's current location instead of guessing a place.
+                    var here: CurrentPlace?
+                    if call.tool == .findFoodNearby, Self.namedPlace(in: call.arguments) == nil {
+                        do {
+                            guard let locator else { throw CurrentLocationError.unavailable }
+                            here = try await locator.currentPlace()
+                        } catch {
+                            resultBlocks.append(.toolResult(
+                                id: call.id,
+                                content: "{\"status\":\"error\",\"detail\":\""
+                                    + Self.escape(error.localizedDescription
+                                                  + " Ask the user which area they're in.") + "\"}",
+                                isError: true))
+                            continue
+                        }
+                    }
+                    let (question, activity) = Self.webQuestion(for: call, currentPlace: here)
                     append(.toolActivity(activity))
                     let (content, failed) = await searchWeb(question)
                     if call.tool == .lookUpProductNutrition, !failed,
@@ -318,7 +303,7 @@ final class AssistantViewModel {
 
                 // A product that was just looked up must be logged with its
                 // published figures, not a guess.
-                if call.tool == .addFoodEntry || call.tool == .editFoodEntry,
+                if [.addFoodEntry, .editFoodEntry, .calculateNutrition].contains(call.tool),
                    let detail = Self.unusedBrandFigures(in: call.arguments,
                                                         lookedUp: lookedUpProducts) {
                     resultBlocks.append(.toolResult(id: call.id, content: detail, isError: true))
@@ -391,7 +376,18 @@ final class AssistantViewModel {
     // MARK: Web search
 
     /// The search question for a web tool, and the activity line shown in the chat.
-    static func webQuestion(for call: AssistantToolCall) -> (question: String, activity: String) {
+    /// The area the user named for food nearby, or nil to use where they are.
+    /// "Near me" and the like count as not naming one.
+    static func namedPlace(in arguments: [String: JSONValue]) -> String? {
+        guard let place = arguments["place"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !place.isEmpty else { return nil }
+        let meaningHere = ["near me", "nearby", "here", "around me", "current location",
+                           "my location", "my current location", "where i am"]
+        return meaningHere.contains(place.lowercased()) ? nil : place
+    }
+
+    static func webQuestion(for call: AssistantToolCall,
+                            currentPlace: CurrentPlace? = nil) -> (question: String, activity: String) {
         let arguments = call.arguments
         if call.tool == .findProducts {
             let query = arguments["query"]?.stringValue ?? ""
@@ -408,10 +404,15 @@ final class AssistantViewModel {
         }
         // Places to eat around the user, with menu items and prices, for the
         // model to fit to the user's ranges and budget.
-        let place = arguments["place"]?.stringValue ?? ""
-        return (nearbyFoodQuestion(place: place,
-                                   budget: arguments["budget"]?.stringValue,
-                                   preferences: arguments["preferences"]?.stringValue),
+        let budget = arguments["budget"]?.stringValue
+        let preferences = arguments["preferences"]?.stringValue
+        if let currentPlace, namedPlace(in: arguments) == nil {
+            return (nearbyFoodQuestion(place: currentPlace.searchDescription, budget: budget,
+                                       preferences: preferences, isCurrentLocation: true),
+                    "Searched for food near you" + (currentPlace.name.map { " (\($0))" } ?? ""))
+        }
+        let place = namedPlace(in: arguments) ?? ""
+        return (nearbyFoodQuestion(place: place, budget: budget, preferences: preferences),
                 "Searched for food near \(place)")
     }
 
@@ -460,10 +461,15 @@ final class AssistantViewModel {
         }
     }
 
-    static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?) -> String {
+    static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?,
+                                   isCurrentLocation: Bool = false) -> String {
+        let whereText = isCurrentLocation
+            ? "within about 1.5 km (a short walk or drive) of the user's current location: "
+                + "\(place). Nearest first"
+            : "at or right next to \(place)"
         var lines = [
             "Find restaurants, food court stalls, cafes and kiosks that are open and operating "
-                + "at or right next to \(place). List up to 8 that suit the request.",
+                + "\(whereText). List up to 8 that suit the request.",
             "For each: the name, where it is (floor, wing or street) if known, the cuisine, "
                 + "and 2 to 4 specific menu items with their current prices in local currency "
                 + "and a short portion description.",
@@ -845,6 +851,7 @@ final class AssistantViewModel {
         switch tool {
         case .queryEntries: "Read your food log"
         case .getTrends: "Read your trends"
+        case .calculateNutrition: "Worked out the nutrition"
         default: tool.rawValue
         }
     }

@@ -38,7 +38,7 @@ struct RootView: View {
     }
 }
 
-/// Five destinations in the standard iOS tab bar: Today, Scan, Add, Assistant
+/// Four destinations in the standard iOS tab bar: Today, Add, Assistant
 /// and Calendar. Settings is a button on Today.
 ///
 /// The system tab bar reserves its own space, so page content and bottom
@@ -55,10 +55,6 @@ struct MainTabView: View {
             DashboardView()
                 .tabItem { Label("Today", systemImage: "chart.pie.fill") }
                 .tag(AppRouter.Tab.dashboard)
-
-            ScanView()
-                .tabItem { Label("Scan", systemImage: "camera.viewfinder") }
-                .tag(AppRouter.Tab.scan)
 
             AddMealView()
                 .tabItem { Label("Add", systemImage: "plus.circle.fill") }

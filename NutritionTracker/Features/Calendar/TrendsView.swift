@@ -11,8 +11,9 @@ import Charts
 struct TrendsView: View {
     @Environment(\.modelContext) private var context
 
-    /// Tapping a bar jumps back to the Day view for that date.
-    var onSelectDate: (Date) -> Void
+    /// Tapping a bar opens the Calendar on it: a daily bar on that day, a
+    /// weekly or monthly bar on that whole week or month.
+    var onSelect: (CalendarSelection) -> Void
 
     @Query private var allEntries: [FoodEntry]
     @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
@@ -117,8 +118,11 @@ struct TrendsView: View {
                             x: .value(scale.displayName, bucket.interval.start,
                                       unit: scale.calendarComponent),
                             y: .value(nutrient.displayName, value))
+                            // Short of the minimum is amber once the period is
+                            // over; the current day or week is still grey.
                             .foregroundStyle(
-                                AppTheme.summaryColor(for: range.state(consumed: value)))
+                                AppTheme.summaryColor(for: range.state(consumed: value),
+                                                      isComplete: !bucket.interval.contains(.now)))
                             // A sparse bucket is drawn hollow-ish so an average
                             // over two logged days is not read as a full week.
                             .opacity(bucket.isSparse ? 0.45 : 1)
@@ -144,8 +148,11 @@ struct TrendsView: View {
                             guard let plotFrame = proxy.plotFrame else { return }
                             let origin = geometry[plotFrame].origin
                             guard let date: Date = proxy.value(
-                                atX: location.x - origin.x) else { return }
-                            onSelectDate(date)
+                                atX: location.x - origin.x),
+                                  let bucket = Self.bucket(containing: date, in: buckets) else {
+                                return
+                            }
+                            onSelect(CalendarSelection(interval: bucket.interval, scale: scale))
                             Haptics.selection()
                         }
                 }
@@ -161,6 +168,16 @@ struct TrendsView: View {
             }
         }
         .appCard()
+    }
+
+    /// The bar a tap belongs to: the one whose period contains it, else the
+    /// nearest (taps at a bar's edge can fall just outside its period).
+    static func bucket(containing date: Date, in buckets: [TrendBucket]) -> TrendBucket? {
+        if let match = buckets.first(where: { $0.interval.contains(date) }) { return match }
+        return buckets.min { lhs, rhs in
+            abs(lhs.interval.start.addingTimeInterval(lhs.interval.duration / 2).timeIntervalSince(date))
+                < abs(rhs.interval.start.addingTimeInterval(rhs.interval.duration / 2).timeIntervalSince(date))
+        }
     }
 
     private var axisFormat: Date.FormatStyle {

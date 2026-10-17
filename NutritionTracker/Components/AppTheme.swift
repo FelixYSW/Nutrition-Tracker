@@ -84,12 +84,20 @@ enum AppTheme {
         }
     }
 
+    /// Amber for a finished day or period that fell short of a minimum. The
+    /// minimum is a real target - eating too little is as off track as too
+    /// much - so it gets its own warning colour, distinct from "over" orange.
+    static var belowMinimum: Color { .adaptive(light: 0xB8901C, dark: 0xD9B44A) }
+
+    /// Neutral grey for "under" while the day is still going.
+    static var stillToGo: Color { .adaptive(light: 0xC2BEB6, dark: 0x58554F) }
+
     /// Colour for a bar or dot that summarises a day, week or month against its
-    /// band. Unlike `color(for:nutrient:)`, "under" is a neutral grey here so a
-    /// calorie bar can never be mistaken for an "over" one.
-    static func summaryColor(for state: RangeState) -> Color {
+    /// band. Under the minimum is amber once the period is over, and a
+    /// neutral grey while it's still in progress (today, this week).
+    static func summaryColor(for state: RangeState, isComplete: Bool = true) -> Color {
         switch state {
-        case .under: .adaptive(light: 0xC2BEB6, dark: 0x58554F)
+        case .under: isComplete ? belowMinimum : stillToGo
         case .within: within
         case .over: over
         }

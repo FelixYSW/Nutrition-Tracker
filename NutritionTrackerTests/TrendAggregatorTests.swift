@@ -119,3 +119,48 @@ final class TrendAggregatorTests: XCTestCase {
         XCTAssertEqual(tally.noData, 2, "empty days are not counted as under")
     }
 }
+
+// MARK: - A week or month opened in the Calendar
+
+@MainActor
+final class CalendarPeriodTests: XCTestCase {
+
+    private let calendar = TestSupport.calendar()
+
+    private var week: DateInterval {
+        DateInterval(start: TestSupport.date(2026, 10, 5, 0, calendar: calendar),
+                     end: TestSupport.date(2026, 10, 12, 0, calendar: calendar))
+    }
+
+    /// The summary averages over the days actually logged, not all seven,
+    /// and counts the days calories were in range.
+    func testWeekSummaryAveragesLoggedDays() {
+        let entries = [
+            TestSupport.entry(at: TestSupport.date(2026, 10, 5, 13, calendar: calendar), calories: 1000),
+            TestSupport.entry(at: TestSupport.date(2026, 10, 5, 19, calendar: calendar), calories: 1000),
+            TestSupport.entry(at: TestSupport.date(2026, 10, 8, 12, calendar: calendar), calories: 1000)
+        ]
+        let summary = CalendarSelection.Summary(
+            entries: entries, in: week, calorieRange: NutrientRange(min: 1800, max: 2200),
+            now: TestSupport.date(2026, 10, 18, calendar: calendar), calendar: calendar)
+        XCTAssertEqual(summary.daysLogged, 2)
+        XCTAssertEqual(summary.daysElapsed, 7)
+        XCTAssertEqual(summary.dailyAverage.calories, 1500, accuracy: 0.001)
+        XCTAssertEqual(summary.daysInCalorieRange, 1, "only the 2,000 kcal Monday")
+        XCTAssertEqual(summary.description, "2 of 7 days logged \u{00B7} calories in range on 1.")
+    }
+
+    /// The current week only counts the days that have happened so far.
+    func testCurrentWeekCountsElapsedDaysOnly() {
+        let summary = CalendarSelection.Summary(
+            entries: [], in: week, calorieRange: nil,
+            now: TestSupport.date(2026, 10, 7, 15, calendar: calendar), calendar: calendar)
+        XCTAssertEqual(summary.daysElapsed, 3, "Monday to Wednesday")
+        XCTAssertEqual(summary.description, "No days logged yet.")
+    }
+
+    func testDailyBarsAreNotPeriods() {
+        XCTAssertFalse(CalendarSelection(interval: week, scale: .daily).isPeriod)
+        XCTAssertTrue(CalendarSelection(interval: week, scale: .weekly).isPeriod)
+    }
+}

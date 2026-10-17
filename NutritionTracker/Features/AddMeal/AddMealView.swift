@@ -75,7 +75,7 @@ struct AddMealView: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 AppSectionHeading(title: "Meal total",
                                                   trailing: "\(drafts.count) foods")
-                                NutritionSummaryView(nutrition: combinedTotal, showsFibre: false)
+                                NutritionSummaryView(nutrition: combinedTotal)
                             }
                         }
                     }
@@ -259,7 +259,7 @@ struct FoodDraftCard: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             amountRow
-            NutritionSummaryView(nutrition: draft.total, showsFibre: false)
+            NutritionSummaryView(nutrition: draft.total)
 
             Divider()
 

@@ -1511,3 +1511,115 @@ final class AssistantSafeguardTests: XCTestCase {
         })
     }
 }
+
+// MARK: - Location, longer periods and quoted figures
+
+private struct FixedLocator: CurrentLocating {
+    var result: Result<CurrentPlace, CurrentLocationError>
+    func currentPlace() async throws -> CurrentPlace { try result.get() }
+}
+
+@MainActor
+final class AssistantReachTests: XCTestCase {
+
+    private func makeViewModel(_ service: ScriptedAssistantService,
+                               locator: CurrentLocating? = nil,
+                               context: ModelContext = TestSupport.makeContext()) -> AssistantViewModel {
+        AssistantViewModel(service: service,
+                           executor: AssistantToolExecutor(context: context),
+                           contextBuilder: AssistantContextBuilder(context: context),
+                           locator: locator)
+    }
+
+    private func nearbyCall(_ arguments: [String: JSONValue] = [:]) -> AssistantResponse {
+        AssistantResponse(text: nil, toolCalls: [AssistantToolCall(
+            id: "n", tool: .findFoodNearby, arguments: arguments)])
+    }
+
+    /// "Somewhere to eat?" with no place searches where the user is, not a
+    /// place from an example or earlier in the chat.
+    func testNearbyWithoutAPlaceUsesTheCurrentLocation() async throws {
+        let service = ScriptedAssistantService([nearbyCall(), AssistantResponse(text: "Try A.", toolCalls: [])])
+        service.searchResult = WebSearchResult(summary: "A: nasi kerabu RM9.", sources: [])
+        let here = CurrentPlace(name: "Bangsar, Kuala Lumpur", latitude: 3.1291, longitude: 101.6710)
+        let viewModel = makeViewModel(service, locator: FixedLocator(result: .success(here)))
+        viewModel.composerText = "what can I eat outside?"
+        await viewModel.send()
+
+        let question = try XCTUnwrap(service.searchQuestions.first)
+        XCTAssertTrue(question.contains("Bangsar"))
+        XCTAssertTrue(question.contains("3.1291"))
+        XCTAssertTrue(question.contains("current location"))
+        XCTAssertFalse(question.contains("Mid Valley"))
+    }
+
+    func testANamedAreaIsSearchedInstead() async throws {
+        let service = ScriptedAssistantService([nearbyCall(["place": .string("SS15 Subang")]),
+                                                AssistantResponse(text: "Ok.", toolCalls: [])])
+        service.searchResult = WebSearchResult(summary: "B.", sources: [])
+        let viewModel = makeViewModel(service, locator: FixedLocator(result: .failure(.denied)))
+        viewModel.composerText = "food in SS15?"
+        await viewModel.send()
+        XCTAssertTrue(service.searchQuestions.first?.contains("SS15 Subang") == true)
+    }
+
+    func testNoLocationAccessMakesTheModelAskWhere() async throws {
+        let service = ScriptedAssistantService([nearbyCall(["place": .string("near me")]),
+                                                AssistantResponse(text: "Which area are you in?", toolCalls: [])])
+        let viewModel = makeViewModel(service, locator: FixedLocator(result: .failure(.denied)))
+        viewModel.composerText = "anything nearby?"
+        await viewModel.send()
+
+        XCTAssertTrue(service.searchQuestions.isEmpty, "nothing searched without a place")
+        let sent = (service.receivedTurns.last ?? []).flatMap(\.blocks)
+        XCTAssertTrue(sent.contains {
+            if case .toolResult("n", let content, true) = $0 { return content.contains("which area") }
+            return false
+        })
+    }
+
+    /// The figures quoted in an answer come from the same calculation as the card.
+    func testCalculatedFiguresMatchTheCard() throws {
+        let executor = AssistantToolExecutor(context: TestSupport.makeContext())
+        let food: [String: JSONValue] = [
+            "name": .string("Egg fried rice"),
+            "items": .array([.object(["name": .string("rice"), "grams": .number(200)]),
+                             .object(["name": .string("egg"), "grams": .number(50)])])]
+        guard case .result(let json) = executor.execute(AssistantToolCall(
+            id: "c", tool: .calculateNutrition, arguments: ["foods": .array([.object(food)])])),
+              case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
+            id: "a", tool: .addFoodEntry, arguments: ["foods": .array([.object(food)])])),
+              case .add(let draft) = write.action else { return XCTFail() }
+        XCTAssertTrue(json.contains("\"calories\":\(Int(draft.total.calories.rounded()))"))
+        XCTAssertTrue(json.contains("\"protein\":\(Int(draft.total.protein.rounded()))"))
+    }
+
+    /// Weekly views say how consistently each range was met, not just averages.
+    func testWeeklyTrendsIncludeDayCountsAndWeekdayWeekend() throws {
+        let context = TestSupport.makeContext()
+        context.insert(NutritionTarget(ranges: TestSupport.ranges()))
+        for daysAgo in 0..<10 {
+            let date = Calendar.autoupdatingCurrent.date(byAdding: .day, value: -daysAgo, to: .now)!
+            context.insert(TestSupport.entry(at: date, calories: 1900, protein: 140))
+        }
+        try context.save()
+        let executor = AssistantToolExecutor(context: context)
+        guard case .result(let json) = executor.execute(AssistantToolCall(
+            id: "t", tool: .getTrends,
+            arguments: ["timeframe": .string("weekly"), "periods": .number(3)])) else {
+            return XCTFail()
+        }
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual((payload["buckets"] as? [Any])?.count, 3, "three weeks, as asked")
+        let summary = try XCTUnwrap(payload["summary"] as? [String: Any])
+        XCTAssertEqual(summary["daysLogged"] as? Int, 10)
+        XCTAssertNotNil(summary["dayStates"])
+        XCTAssertNotNil(summary["weekdayAverage"])
+    }
+
+    func testNearMeDoesNotCountAsANamedPlace() {
+        XCTAssertNil(AssistantViewModel.namedPlace(in: ["place": .string("Near me")]))
+        XCTAssertNil(AssistantViewModel.namedPlace(in: [:]))
+        XCTAssertEqual(AssistantViewModel.namedPlace(in: ["place": .string("Pavilion KL")]), "Pavilion KL")
+    }
+}

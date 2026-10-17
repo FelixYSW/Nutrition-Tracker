@@ -115,13 +115,20 @@ struct AssistantView: View {
                 legacyTranscript(viewModel: viewModel)
             }
         }
+        // A fresh scroll view per chat, laid out from the bottom up. Jumping
+        // an existing one to the end of a newly opened chat went by estimated
+        // row heights and overshot, leaving a gap until the next scroll.
+        .id(viewModel.conversationID)
         // Sending always jumps to the bottom and starts following again.
         .onChange(of: viewModel.messages.count) { oldCount, newCount in
             if newCount > oldCount, case .user? = viewModel.messages.last?.kind {
                 jumpToBottom()
             }
         }
-        .onChange(of: viewModel.conversationID) { _, _ in jumpToBottom() }
+        .onChange(of: viewModel.conversationID) { _, _ in
+            isFollowingBottom = true
+            isAtBottom = true
+        }
         .overlay(alignment: .bottom) {
             if !isAtBottom && !viewModel.messages.isEmpty {
                 Button {
@@ -191,6 +198,7 @@ struct AssistantView: View {
             ScrollView {
                 transcriptRows(viewModel: viewModel)
             }
+            .defaultScrollAnchor(.bottom)   // a newly opened chat starts at its end
             .modifier(UserScrollDetector(
                 onScrollStart: { isFollowingBottom = false },
                 onScrollEnd: { if isAtBottom { isFollowingBottom = true } }))
@@ -530,7 +538,7 @@ struct AssistantView: View {
     /// photo is never sent whole.
     private static func downsized(_ image: UIImage) async -> Data? {
         await Task.detached(priority: .userInitiated) {
-            (try? ImagePreparer.prepare(image: image))?.jpegData
+            ImagePreparer.assistantJPEG(from: image)
         }.value
     }
     #else
@@ -644,7 +652,7 @@ struct AssistantConfirmationCard: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.accent)
             }
-            NutritionSummaryView(nutrition: draft.total, showsFibre: false)
+            NutritionSummaryView(nutrition: draft.total)
             if !draft.ingredients.isEmpty {
                 // The breakdown the total is built from, so a wrong amount is
                 // easy to spot before saving.
@@ -873,6 +881,9 @@ private struct FollowingScrollView<Content: View>: View {
         ScrollView {
             content
         }
+        // Lay the chat out from its last message, so opening a long chat
+        // measures the rows on screen rather than guessing at all of them.
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
         .scrollPosition($position)
         .onScrollGeometryChange(for: Metrics.self) { geometry in
             Metrics(atBottom: BottomEdgeTracker.isAtBottom(
@@ -888,9 +899,10 @@ private struct FollowingScrollView<Content: View>: View {
         } action: { old, new in
             overflows = new.overflows
             if new.atBottom != isAtBottom { isAtBottom = new.atBottom }
-            // The reply grew (or a row was added) while following: keep the
-            // end in view.
-            if new.contentHeight > old.contentHeight, isFollowing, new.overflows {
+            // The content changed height while following - a reply grew, a
+            // row was added, or estimated rows were measured and came out
+            // shorter: keep exactly at the end, with no gap below it.
+            if new.contentHeight != old.contentHeight, isFollowing, new.overflows {
                 position.scrollTo(edge: .bottom)
             }
         }

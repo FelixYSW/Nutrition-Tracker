@@ -107,6 +107,19 @@ enum ImagePreparer {
                              jpegData: jpegData)
     }
 
+    /// Long edge for photos sent to the assistant. Far larger than the food
+    /// model's input: at 640 px a menu's small print and tick marks blur, and
+    /// the model guesses selections that aren't there. 1600 px keeps menu text
+    /// and labels readable while staying a few hundred KB.
+    static let assistantEdge: CGFloat = 1600
+
+    /// JPEG for the assistant only - no pixel buffer, which only Core ML needs.
+    static func assistantJPEG(from image: UIImage) -> Data? {
+        image.normalisedOrientation()
+            .resized(longestEdge: assistantEdge)
+            .jpegData(compressionQuality: 0.8)
+    }
+
     static func prepare(data: Data,
                         targetEdge: CGFloat = PreparedImage.targetEdge) throws -> PreparedImage {
         guard let image = UIImage(data: data) else { throw AIServiceError.invalidImage }

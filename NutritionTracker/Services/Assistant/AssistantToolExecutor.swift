@@ -48,6 +48,8 @@ final class AssistantToolExecutor {
                 return .result(try queryEntries(arguments: call.arguments))
             case .getTrends:
                 return .result(try getTrends(arguments: call.arguments))
+            case .calculateNutrition:
+                return .result(try calculateNutrition(arguments: call.arguments))
             case .findFoodNearby, .lookUpProductNutrition, .findProducts:
                 // Needs the network: the view model runs it through the service.
                 return .failure("Web search is not run by the local executor.")
@@ -128,12 +130,55 @@ final class AssistantToolExecutor {
         return try encode(payload)
     }
 
+    /// The figures a card would show for these foods, with nothing logged, so
+    /// what the assistant says matches the card it later proposes.
+    private func calculateNutrition(arguments: [String: JSONValue]) throws -> String {
+        struct Food: Encodable {
+            struct Item: Encodable {
+                let name: String
+                let grams: Double
+                let calories: Double
+                let source: String
+            }
+            let name: String
+            let calories: Double
+            let protein: Double
+            let carbs: Double
+            let fat: Double
+            let fibre: Double
+            let items: [Item]
+        }
+        let foods = try Self.foods(in: arguments).map { food -> Food in
+            let draft = try proposeDraft(food)
+            let total = draft.total
+            let items = draft.isComposite
+                ? draft.ingredients
+                : [IngredientDraft(name: draft.name, quantity: draft.quantity, servingSize: 100,
+                                   nutritionPerServing: draft.nutritionPerServing)]
+            return Food(name: draft.name,
+                        calories: total.calories.rounded(),
+                        protein: total.protein.rounded(),
+                        carbs: total.carbs.rounded(),
+                        fat: total.fat.rounded(),
+                        fibre: total.fibre.rounded(),
+                        items: items.map {
+                            .init(name: $0.name, grams: $0.quantity,
+                                  calories: $0.total.calories.rounded(),
+                                  source: $0.provenance.isEstimate ? "estimate"
+                                      : $0.provenance.displayName)
+                        })
+        }
+        return try encode(["foods": foods])
+    }
+
     private func getTrends(arguments: [String: JSONValue]) throws -> String {
         let scale = AssistantArgumentParser.parseTrendScale(arguments["timeframe"])
         let now = Date.now
+        let periods = min(AssistantTool.maxTrendPeriods,
+                          max(1, Int(arguments["periods"]?.doubleValue ?? Double(scale.bucketCount))))
 
         let intervals = TrendAggregator.intervals(scale: scale, endingOn: now,
-                                                   count: scale.bucketCount,
+                                                   count: periods,
                                                    calendar: calendar)
         guard let windowStart = intervals.first?.start,
               let windowEnd = intervals.last?.end else {
@@ -142,8 +187,14 @@ final class AssistantToolExecutor {
 
         let entries = context.fetchEntries(from: windowStart, to: windowEnd)
         let buckets = TrendAggregator.buckets(entries: entries, scale: scale,
-                                               endingOn: now, calendar: calendar)
+                                               endingOn: now, count: periods, calendar: calendar)
         let ranges = context.loadNutritionTarget()?.ranges
+
+        // Each logged day's totals: weekly and monthly views need more than
+        // one average per period - how consistently each range was met.
+        let dayTotals = Dictionary(grouping: entries) {
+            LocalDay.start(of: $0.consumedAt, calendar: calendar)
+        }.mapValues { $0.reduce(Nutrition.zero) { $0 + $1.total } }
 
         struct Payload: Encodable {
             struct Bucket: Encodable {
@@ -159,11 +210,54 @@ final class AssistantToolExecutor {
                 let fat: Double
                 let fibre: Double
                 let states: [String: String]?
+                /// Per nutrient, how many logged days were under, within or over.
+                let dayStates: [String: [String: Int]]?
+            }
+            struct Summary: Encodable {
+                let daysLogged: Int
+                let averagePerLoggedDay: [String: Double]
+                let weekdayAverage: [String: Double]?
+                let weekendAverage: [String: Double]?
+                let dayStates: [String: [String: Int]]?
             }
             let timeframe: String
             let plots: String
             let buckets: [Bucket]
+            let summary: Summary
         }
+
+        func averages(_ days: [Nutrition]) -> [String: Double]? {
+            guard !days.isEmpty else { return nil }
+            let total = days.reduce(Nutrition.zero, +)
+            let count = Double(days.count)
+            return Dictionary(uniqueKeysWithValues: Nutrient.allCases.map {
+                ($0.rawValue, (total[$0] / count).rounded())
+            })
+        }
+
+        func tallies(_ days: [Nutrition]) -> [String: [String: Int]]? {
+            guard let ranges, !days.isEmpty else { return nil }
+            return Dictionary(uniqueKeysWithValues: Nutrient.allCases.map { nutrient in
+                var counts = ["under": 0, "within": 0, "over": 0]
+                for day in days {
+                    counts[ranges[nutrient].state(consumed: day[nutrient]).rawValue, default: 0] += 1
+                }
+                return (nutrient.rawValue, counts)
+            })
+        }
+
+        func days(in interval: DateInterval) -> [Nutrition] {
+            dayTotals.filter { interval.contains($0.key) }.map(\.value)
+        }
+
+        let allDays = Array(dayTotals.values)
+        let weekend = dayTotals.filter { calendar.isDateInWeekend($0.key) }.map(\.value)
+        let weekday = dayTotals.filter { !calendar.isDateInWeekend($0.key) }.map(\.value)
+        let summary = Payload.Summary(daysLogged: allDays.count,
+                                      averagePerLoggedDay: averages(allDays) ?? [:],
+                                      weekdayAverage: averages(weekday),
+                                      weekendAverage: averages(weekend),
+                                      dayStates: tallies(allDays))
 
         let dateFormatter = DateFormatter()
         dateFormatter.calendar = calendar
@@ -195,8 +289,10 @@ final class AssistantToolExecutor {
                              carbs: value.carbs.rounded(),
                              fat: value.fat.rounded(),
                              fibre: value.fibre.rounded(),
-                             states: states)
-            })
+                             states: states,
+                             dayStates: scale == .daily ? nil : tallies(days(in: bucket.interval)))
+            },
+            summary: summary)
 
         return try encode(payload)
     }

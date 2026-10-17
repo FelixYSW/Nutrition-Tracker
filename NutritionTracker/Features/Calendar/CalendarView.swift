@@ -12,6 +12,8 @@ struct CalendarView: View {
     @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
 
     @State private var selectedDate = Date.now
+    /// A week or month opened from Trends; nil shows the single selected day.
+    @State private var period: CalendarSelection?
     @State private var section: Section = .day
     @State private var editingDraft: FoodEntryDraft?
     @State private var entryPendingDeletion: FoodEntry?
@@ -42,9 +44,8 @@ struct CalendarView: View {
 
                     switch section {
                     case .day: daySection
-                    case .trends: TrendsView(onSelectDate: { date in
-                        selectedDate = date
-                        withAnimation(.snappy) { section = .day }
+                    case .trends: TrendsView(onSelect: { selection in
+                        open(selection)
                     })
                     }
                 }
@@ -71,18 +72,114 @@ struct CalendarView: View {
         }
     }
 
+    /// Opens a bar from Trends: a day on its own, or a whole week or month.
+    private func open(_ selection: CalendarSelection) {
+        if selection.isPeriod {
+            period = selection
+            // Shows the grid on the period's month (its start, never the future).
+            selectedDate = min(selection.interval.start, .now)
+        } else {
+            period = nil
+            selectedDate = selection.interval.start
+        }
+        withAnimation(.snappy) { section = .day }
+    }
+
     private var daySection: some View {
         VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
             CalendarMonthGrid(selectedDate: $selectedDate,
                               entries: allEntries,
-                              calorieRange: targets.first?.ranges.calories ?? .zero)
+                              calorieRange: targets.first?.ranges.calories ?? .zero,
+                              highlightedPeriod: period?.interval,
+                              onDayTapped: { withAnimation(.snappy) { period = nil } })
                 .appCard()
 
+            if let period {
+                periodContent(period)
+            } else {
+                dayContent
+            }
+        }
+    }
+
+    // MARK: A week or month
+
+    private func periodContent(_ period: CalendarSelection) -> some View {
+        let periodEntries = allEntries.filter { period.interval.contains($0.consumedAt) }
+        let summary = CalendarSelection.Summary(entries: periodEntries, in: period.interval,
+                                                calorieRange: targets.first?.ranges.calories)
+        let byDay = Dictionary(grouping: periodEntries) { LocalDay.start(of: $0.consumedAt) }
+        let days = byDay.keys.sorted(by: >)
+
+        return VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+            VStack(alignment: .leading, spacing: 12) {
+                AppSectionHeading(title: period.title, trailing: period.containsToday ? "Now" : nil)
+                if summary.daysLogged > 0 {
+                    Text("Daily average")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    NutritionRangeSummaryView(nutrition: summary.dailyAverage,
+                                              ranges: targets.first?.ranges,
+                                              isComplete: !period.containsToday)
+                }
+                Text(summary.description)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .appSkyCard()
+
+            AppSectionHeading(title: "Food log",
+                              trailing: periodEntries.isEmpty ? nil
+                                : "\(periodEntries.count) item\(periodEntries.count == 1 ? "" : "s")")
+
+            if periodEntries.isEmpty {
+                EmptyStateView(title: "No food recorded.",
+                               message: "Nothing was logged in this \(period.unitName).",
+                               systemImage: "calendar.badge.exclamationmark")
+                    .appCard()
+            } else {
+                // Newest day first, each under its own heading with its total.
+                ForEach(days, id: \.self) { day in
+                    let dayEntries = byDay[day] ?? []
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(AppFormatters.dayTitle.string(from: day))
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text("\(AppFormatters.amount(LocalDay.total(dayEntries).calories)) kcal")
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 4)
+                        ForEach(dayEntries) { entry in
+                            FoodEntryCard(entry: entry,
+                                          onEdit: { editingDraft = FoodEntryDraft(entry: entry) },
+                                          onDelete: { entryPendingDeletion = entry })
+                        }
+                    }
+                }
+            }
+
+            Text("Tap a day in the calendar to see just that day.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    // MARK: A single day
+
+    private var dayContent: some View {
+        VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
             VStack(alignment: .leading, spacing: 12) {
                 AppSectionHeading(
                     title: AppFormatters.dayAndMonth.string(from: selectedDate),
                     trailing: LocalDay.isToday(selectedDate) ? "Today" : nil)
-                NutritionSummaryView(nutrition: LocalDay.total(entries))
+                NutritionRangeSummaryView(nutrition: LocalDay.total(entries),
+                                          ranges: targets.first?.ranges,
+                                          isComplete: LocalDay.start(of: selectedDate) < LocalDay.start(of: .now))
             }
             .appSkyCard()
 
@@ -107,6 +204,7 @@ struct CalendarView: View {
 
     private func applyRequestedDate() {
         guard let requested = router.calendarRequestedDate else { return }
+        period = nil
         selectedDate = requested
         section = .day
         router.calendarRequestedDate = nil
@@ -122,6 +220,78 @@ struct CalendarView: View {
     }
 }
 
+// MARK: - Selection
+
+/// What a tapped Trends bar opens in the Calendar: a day, week or month.
+struct CalendarSelection: Equatable {
+    var interval: DateInterval
+    var scale: TrendScale
+
+    var isPeriod: Bool { scale != .daily }
+
+    var unitName: String {
+        switch scale {
+        case .daily: "day"
+        case .weekly: "week"
+        case .monthly: "month"
+        }
+    }
+
+    /// "6 Oct – 12 Oct" for a week, "October 2026" for a month.
+    var title: String {
+        switch scale {
+        case .daily:
+            AppFormatters.dayAndMonth.string(from: interval.start)
+        case .weekly:
+            AppFormatters.dayAndMonth.string(from: interval.start) + " \u{2013} "
+                + AppFormatters.dayAndMonth.string(from: interval.end.addingTimeInterval(-1))
+        case .monthly:
+            AppFormatters.monthAndYear.string(from: interval.start)
+        }
+    }
+
+    var containsToday: Bool { interval.contains(.now) }
+
+    /// The period's figures for the summary card.
+    struct Summary: Equatable {
+        var daysLogged: Int
+        /// Days of the period that have happened so far (the current week or
+        /// month isn't over yet).
+        var daysElapsed: Int
+        var dailyAverage: Nutrition
+        /// Logged days with calories within range, or nil without a target.
+        var daysInCalorieRange: Int?
+
+        init(entries: [FoodEntry], in interval: DateInterval, calorieRange: NutrientRange?,
+             now: Date = .now, calendar: Calendar = LocalDay.calendar()) {
+            let totals = Dictionary(grouping: entries) { calendar.startOfDay(for: $0.consumedAt) }
+                .mapValues { LocalDay.total($0) }
+            daysLogged = totals.count
+            let end = min(interval.end, calendar.startOfDay(for: now).addingTimeInterval(86_400))
+            daysElapsed = max(0, calendar.dateComponents([.day], from: interval.start, to: end).day ?? 0)
+            let sum = totals.values.reduce(Nutrition.zero, +)
+            dailyAverage = daysLogged > 0 ? sum * (1 / Double(daysLogged)) : .zero
+            if let calorieRange, calorieRange.max > 0 {
+                daysInCalorieRange = totals.values.filter {
+                    calorieRange.state(consumed: $0.calories) == .within
+                }.count
+            } else {
+                daysInCalorieRange = nil
+            }
+        }
+
+        /// "5 of 7 days logged · calories in range on 3."
+        var description: String {
+            guard daysLogged > 0 else { return "No days logged yet." }
+            var text = "\(daysLogged) of \(daysElapsed) day\(daysElapsed == 1 ? "" : "s") logged"
+            if let daysInCalorieRange {
+                text += " \u{00B7} calories in range on \(daysInCalorieRange)"
+            }
+            return text + "."
+        }
+    }
+}
+
 // MARK: - Month grid
 
 /// A month of days, each tinted by how that day's calories sat against the
@@ -132,13 +302,21 @@ struct CalendarMonthGrid: View {
     @Binding var selectedDate: Date
     let entries: [FoodEntry]
     let calorieRange: NutrientRange
+    /// A week or month shown as a whole: its days are highlighted together
+    /// instead of one selected day.
+    var highlightedPeriod: DateInterval?
+    /// Called when a day is tapped, which leaves week or month mode.
+    var onDayTapped: () -> Void = {}
 
     @State private var month: Date
 
-    init(selectedDate: Binding<Date>, entries: [FoodEntry], calorieRange: NutrientRange) {
+    init(selectedDate: Binding<Date>, entries: [FoodEntry], calorieRange: NutrientRange,
+         highlightedPeriod: DateInterval? = nil, onDayTapped: @escaping () -> Void = {}) {
         _selectedDate = selectedDate
         self.entries = entries
         self.calorieRange = calorieRange
+        self.highlightedPeriod = highlightedPeriod
+        self.onDayTapped = onDayTapped
         _month = State(initialValue: Self.firstOfMonth(selectedDate.wrappedValue))
     }
 
@@ -226,19 +404,22 @@ struct CalendarMonthGrid: View {
 
     private func dayCell(_ date: Date, kcal: Double) -> some View {
         let state = rangeState(forCalories: kcal)
-        let isSelected = calendar.isDate(date, inSameDayAs: selectedDate)
+        let inPeriod = highlightedPeriod?.contains(date) ?? false
+        let isSelected = highlightedPeriod == nil && calendar.isDate(date, inSameDayAs: selectedDate)
         let isToday = LocalDay.isToday(date)
         let day = calendar.component(.day, from: date)
 
         let fill: Color = switch state {
         case .within: AppTheme.within.opacity(0.3)
-        case .under: AppTheme.subtleFill
+        // A past day short of the minimum is a miss (amber); today is still going.
+        case .under: isToday ? AppTheme.subtleFill : AppTheme.belowMinimum.opacity(0.28)
         case .over: AppTheme.over.opacity(0.28)
         case nil: Color.clear
         }
 
         return Button {
             selectedDate = date
+            onDayTapped()
             Haptics.selection()
         } label: {
             Text("\(day)")
@@ -249,18 +430,21 @@ struct CalendarMonthGrid: View {
                 .background(fill, in: Circle())
                 .overlay(Circle().stroke(AppTheme.accent, lineWidth: isSelected ? 2 : 0))
                 .frame(maxWidth: .infinity, minHeight: 44)
+                // The week or month shown: a tinted band behind its days.
+                .background(inPeriod ? AppTheme.accent.opacity(0.12) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(AppFormatters.dayAndMonth.string(from: date)), \(description(of: state))")
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected || inPeriod ? [.isButton, .isSelected] : .isButton)
     }
 
     private func description(of state: RangeState?) -> String {
         switch state {
         case .within: "calories in range"
-        case .under: "calories under range"
-        case .over: "calories over range"
+        case .under: "calories below the minimum"
+        case .over: "calories over the maximum"
         case nil: "no data"
         }
     }
@@ -268,8 +452,8 @@ struct CalendarMonthGrid: View {
     private var legend: some View {
         HStack(spacing: 16) {
             legendItem("In range", AppTheme.within.opacity(0.45))
-            legendItem("Under", AppTheme.subtleFill)
-            legendItem("Over", AppTheme.over.opacity(0.45))
+            legendItem("Below min", AppTheme.belowMinimum.opacity(0.45))
+            legendItem("Over max", AppTheme.over.opacity(0.45))
         }
         .font(.caption2.weight(.semibold))
         .foregroundStyle(.secondary)

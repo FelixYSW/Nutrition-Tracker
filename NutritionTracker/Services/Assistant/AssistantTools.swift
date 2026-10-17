@@ -14,6 +14,7 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     case findFoodNearby
     case lookUpProductNutrition
     case findProducts
+    case calculateNutrition
 
     /// Tools answered from a live web search rather than the local database.
     var usesWebSearch: Bool {
@@ -24,7 +25,8 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     var isWrite: Bool {
         switch self {
         case .addFoodEntry, .editFoodEntry, .deleteFoodEntry: true
-        case .queryEntries, .getTrends, .findFoodNearby, .lookUpProductNutrition, .findProducts:
+        case .queryEntries, .getTrends, .findFoodNearby, .lookUpProductNutrition, .findProducts,
+             .calculateNutrition:
             false
         }
     }
@@ -57,11 +59,18 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
         case .queryEntries:
             "Read the user's logged food entries within a date range. Read-only."
         case .getTrends:
-            "Read aggregated calorie and macro trends. Read-only."
+            "Read the user's intake over a longer period - days, weeks or months - with "
+                + "averages, how many days each nutrient was under, within or over its range, "
+                + "and weekday vs weekend averages. Use it for any question about this week, "
+                + "this month, trends, progress or habits. Read-only."
         case .findFoodNearby:
-            "Search the web for places to eat at or near a named place (a mall, street, "
-                + "area) and their menus and prices. Use it when the user says where they "
-                + "are and asks what to eat there. Returns a summary with sources."
+            "Search the web for places to eat and their menus and prices - around the "
+                + "user's current location, or in an area they name. Returns a summary with "
+                + "sources."
+        case .calculateNutrition:
+            "Work out kcal, protein, carbs and fat for foods with the app's own nutrition "
+                + "data - exactly what a card would show - without logging anything. Call it "
+                + "before quoting figures for specific foods, and quote its numbers. Read-only."
         case .lookUpProductNutrition:
             "Search the web for a branded or packaged product's published nutrition "
                 + "facts (e.g. \"Farm Fresh full cream milk\", \"Milo 3in1\", \"Gardenia "
@@ -109,21 +118,7 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         switch self {
         case .addFoodEntry:
-            let food = Self.object([
-                "name": Self.field("string", "Name of this one dish, drink or snack, e.g. "
-                                   + "\"Tomato egg with konjac\", \"Banana\"."),
-                "items": Self.array(of: item, "Its components with their grams: one item for "
-                                    + "a simple food, several only for a mixed dish."),
-                "consumedAt": Self.field("string", "Local ISO 8601 time it was eaten, e.g. "
-                                         + "2026-10-14T23:45:00+08:00. Omit for just now."),
-                "replacesCard": replacesCard
-            ], required: ["name", "items"])
-            return Self.object([
-                "foods": Self.array(of: food, "One entry per separate dish, drink or snack; "
-                                    + "each gets its own card."),
-                "consumedAt": Self.field("string", "Local ISO 8601 time shared by all the "
-                                         + "foods, if they were eaten together. Omit for now.")
-            ], required: ["foods"])
+            return addFoodsSchema(item: item, replacesCard: replacesCard)
 
         case .editFoodEntry:
             return Self.object([
@@ -177,20 +172,57 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         case .findFoodNearby:
             return Self.object([
-                "place": Self.field("string", "Where the user is, as they said it, e.g. "
-                                    + "\"Mid Valley Megamall, Kuala Lumpur\"."),
+                "place": Self.field("string", "Only when the user names an area, street, mall "
+                                    + "or city in this message - exactly as they said it. "
+                                    + "Omit it to search around their current location."),
                 "budget": Self.field("string", "The user's budget if they gave one, e.g. "
                                      + "\"RM15 per person\"."),
                 "preferences": Self.field("string", "What to look for, e.g. \"high protein, "
                                           + "under 600 kcal, halal\".")
-            ], required: ["place"])
+            ], required: [])
 
         case .getTrends:
             return Self.object([
-                "timeframe": Self.field("string", "Aggregation scale.",
-                                        allowed: TrendScale.allCases.map(\.rawValue))
+                "timeframe": Self.field("string", "daily: one row per day; weekly: one per "
+                                        + "week; monthly: one per month.",
+                                        allowed: TrendScale.allCases.map(\.rawValue)),
+                "periods": Self.field("number", "How many days, weeks or months back, "
+                                      + "including the current one (default 14 days, 8 weeks "
+                                      + "or 6 months; at most \(Self.maxTrendPeriods)).")
             ], required: ["timeframe"])
+
+        case .calculateNutrition:
+            return addFoodsSchema(item: item, replacesCard: nil)
         }
+    }
+
+    /// Furthest back getTrends looks, in its own periods.
+    static let maxTrendPeriods = 24
+
+    /// Foods with their components, shared by addFoodEntry (which makes a card
+    /// per food) and calculateNutrition (which only works the figures out).
+    private func addFoodsSchema(item: [String: Any], replacesCard: [String: Any]?) -> [String: Any] {
+        var foodFields: [String: Any] = [
+            "name": Self.field("string", "Name of this one dish, drink or snack, e.g. "
+                               + "\"Tomato egg with konjac\", \"Banana\"."),
+            "items": Self.array(of: item, "Its components with their grams: one item for "
+                                + "a simple food, several only for a mixed dish.")
+        ]
+        var fields: [String: Any] = [:]
+        if let replacesCard {
+            foodFields["consumedAt"] = Self.field("string", "Local ISO 8601 time it was eaten, "
+                                                  + "e.g. 2026-10-14T23:45:00+08:00. Omit for "
+                                                  + "just now.")
+            foodFields["replacesCard"] = replacesCard
+            fields["consumedAt"] = Self.field("string", "Local ISO 8601 time shared by all the "
+                                              + "foods, if they were eaten together. Omit for now.")
+        }
+        let food = Self.object(foodFields, required: ["name", "items"])
+        fields["foods"] = Self.array(of: food, replacesCard == nil
+                                     ? "The foods to work out, one entry per dish, drink or snack."
+                                     : "One entry per separate dish, drink or snack; each gets "
+                                         + "its own card.")
+        return Self.object(fields, required: ["foods"])
     }
 
     private static func field(_ type: String, _ description: String? = nil,

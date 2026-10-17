@@ -30,7 +30,9 @@ struct ChatHistoryView: View {
                                 row(for: conversation)
                             }
                             .buttonStyle(.plain)
-                            .listRowBackground(AppTheme.cardBackground)
+                            // The open chat is highlighted - a tinted row
+                            // with an accent bar - instead of a small label.
+                            .listRowBackground(rowBackground(isOpen: conversation.id == currentID))
                             .swipeActions {
                                 if conversation.id != currentID {
                                     Button("Delete", systemImage: "trash", role: .destructive) {
@@ -84,11 +86,7 @@ struct ChatHistoryView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if conversation.id == currentID {
-                Text("Open now")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.accent)
-            } else if let preview = conversation.preview {
+            if let preview = conversation.preview {
                 Text(preview)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -98,6 +96,22 @@ struct ChatHistoryView: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+        .accessibilityValue(conversation.id == currentID ? "Open now" : "")
+        .accessibilityAddTraits(conversation.id == currentID ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func rowBackground(isOpen: Bool) -> some View {
+        if isOpen {
+            ZStack(alignment: .leading) {
+                AppTheme.cardBackground
+                AppTheme.accent.opacity(0.12)
+                AppTheme.accent
+                    .frame(width: 4)
+            }
+        } else {
+            AppTheme.cardBackground
+        }
     }
 
     /// When the chat's last message was sent: "Today, 3:42 PM",

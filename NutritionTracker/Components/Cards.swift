@@ -4,9 +4,18 @@ import SwiftUI
 struct NutritionSummaryView: View {
     let nutrition: Nutrition
     var showsFibre: Bool = true
+    /// Off where calories are already shown beside it, e.g. a food card's
+    /// header, so the number never appears twice.
+    var showsCalories: Bool = true
 
     private var items: [Nutrient] {
-        showsFibre ? Nutrient.allCases : Nutrient.allCases.filter(\.isPrimary)
+        Nutrient.allCases.filter { nutrient in
+            switch nutrient {
+            case .calories: showsCalories
+            case .fibre: showsFibre
+            default: true
+            }
+        }
     }
 
     var body: some View {
@@ -42,6 +51,69 @@ struct NutritionSummaryView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// What was eaten against each target range, one row per nutrient: the
+/// amount, the min-max band, and whether it's below, within or over.
+///
+/// For a finished day (or a period's average), falling short of a minimum
+/// is shown as a miss - the minimum is a real target, not optional. While
+/// the day is still going it reads as "to go".
+struct NutritionRangeSummaryView: View {
+    let nutrition: Nutrition
+    let ranges: NutritionTargetRanges?
+    var isComplete: Bool = true
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+            ForEach(Nutrient.allCases) { nutrient in
+                row(for: nutrient)
+            }
+        }
+    }
+
+    private func row(for nutrient: Nutrient) -> some View {
+        let unit = nutrient == .calories ? "kcal" : "g"
+        let value = nutrition[nutrient]
+        let range = ranges?[nutrient]
+        return GridRow(alignment: .firstTextBaseline) {
+            Text(nutrient.displayName)
+                .font(.subheadline)
+            Text("\(AppFormatters.amount(value)) \(unit)")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .monospacedDigit()
+                .gridColumnAlignment(.trailing)
+            Text(range.map { $0.max > 0 ? "of \(AppFormatters.range($0))" : "" } ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(range.map { status(value: value, range: $0, unit: unit) } ?? "")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(range.map { statusColor(value: value, range: $0) } ?? .secondary)
+                .gridColumnAlignment(.trailing)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func status(value: Double, range: NutrientRange, unit: String) -> String {
+        guard range.max > 0 else { return "" }
+        switch range.state(consumed: value) {
+        case .under:
+            let gap = AppFormatters.amount(range.min.rounded() - value.rounded())
+            return isComplete ? "\(gap) \(unit) short" : "\(gap) \(unit) to go"
+        case .within: return "In range"
+        case .over: return "\(AppFormatters.amount(value.rounded() - range.max.rounded())) \(unit) over"
+        }
+    }
+
+    private func statusColor(value: Double, range: NutrientRange) -> Color {
+        switch range.state(consumed: value) {
+        case .under: isComplete ? AppTheme.belowMinimum : .secondary
+        case .within: AppTheme.within
+        case .over: AppTheme.over
+        }
     }
 }
 
@@ -85,7 +157,8 @@ struct FoodEntryCard: View {
                     .monospacedDigit()
             }
 
-            NutritionSummaryView(nutrition: entry.total, showsFibre: false)
+            // Calories are in the header; the row has every macro plus fibre.
+            NutritionSummaryView(nutrition: entry.total, showsFibre: true, showsCalories: false)
 
             if entry.isComposite {
                 Button {
