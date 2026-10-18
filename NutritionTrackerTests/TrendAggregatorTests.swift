@@ -164,3 +164,21 @@ final class CalendarPeriodTests: XCTestCase {
         XCTAssertTrue(CalendarSelection(interval: week, scale: .weekly).isPeriod)
     }
 }
+
+@MainActor
+final class CalendarPeriodHighlightTests: XCTestCase {
+
+    /// A week is exactly 7 outlined days: next Monday, where the week's
+    /// interval ends, isn't part of it.
+    func testWeekOutlinesExactlySevenDays() {
+        let calendar = TestSupport.calendar()
+        let week = DateInterval(start: TestSupport.date(2026, 10, 5, 0, calendar: calendar),
+                                end: TestSupport.date(2026, 10, 12, 0, calendar: calendar))
+        let outlined = (0..<10).compactMap { offset -> Date? in
+            let day = calendar.date(byAdding: .day, value: offset, to: week.start)!
+            return CalendarMonthGrid.day(day, isIn: week) ? day : nil
+        }
+        XCTAssertEqual(outlined.count, 7)
+        XCTAssertFalse(CalendarMonthGrid.day(week.end, isIn: week), "next Monday is excluded")
+    }
+}

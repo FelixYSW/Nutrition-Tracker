@@ -247,7 +247,8 @@ final class AssistantToolExecutor {
         }
 
         func days(in interval: DateInterval) -> [Nutrition] {
-            dayTotals.filter { interval.contains($0.key) }.map(\.value)
+            // Half-open: the next period's first day starts exactly at `end`.
+            dayTotals.filter { $0.key >= interval.start && $0.key < interval.end }.map(\.value)
         }
 
         let allDays = Array(dayTotals.values)

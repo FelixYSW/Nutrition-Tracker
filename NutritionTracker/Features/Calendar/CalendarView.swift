@@ -105,7 +105,9 @@ struct CalendarView: View {
     // MARK: A week or month
 
     private func periodContent(_ period: CalendarSelection) -> some View {
-        let periodEntries = allEntries.filter { period.interval.contains($0.consumedAt) }
+        let periodEntries = allEntries.filter {
+            CalendarMonthGrid.day($0.consumedAt, isIn: period.interval)
+        }
         let summary = CalendarSelection.Summary(entries: periodEntries, in: period.interval,
                                                 calorieRange: targets.first?.ranges.calories)
         let byDay = Dictionary(grouping: periodEntries) { LocalDay.start(of: $0.consumedAt) }
@@ -402,10 +404,22 @@ struct CalendarMonthGrid: View {
         return calorieRange.state(consumed: kcal)
     }
 
+    /// Whether a day falls in a week or month. The period's end is the first
+    /// moment *after* it (next Monday 00:00, the 1st of next month), so it is
+    /// excluded - `DateInterval.contains` includes it, which used to outline
+    /// one day too many.
+    static func day(_ date: Date, isIn period: DateInterval) -> Bool {
+        date >= period.start && date < period.end
+    }
+
     private func dayCell(_ date: Date, kcal: Double) -> some View {
         let state = rangeState(forCalories: kcal)
-        let inPeriod = highlightedPeriod?.contains(date) ?? false
-        let isSelected = highlightedPeriod == nil && calendar.isDate(date, inSameDayAs: selectedDate)
+        let inPeriod = highlightedPeriod.map { Self.day(date, isIn: $0) } ?? false
+        // One selected day, or every day of the week or month shown - all
+        // get the same outline.
+        let isSelected = highlightedPeriod == nil
+            ? calendar.isDate(date, inSameDayAs: selectedDate)
+            : inPeriod
         let isToday = LocalDay.isToday(date)
         let day = calendar.component(.day, from: date)
 
@@ -430,14 +444,11 @@ struct CalendarMonthGrid: View {
                 .background(fill, in: Circle())
                 .overlay(Circle().stroke(AppTheme.accent, lineWidth: isSelected ? 2 : 0))
                 .frame(maxWidth: .infinity, minHeight: 44)
-                // The week or month shown: a tinted band behind its days.
-                .background(inPeriod ? AppTheme.accent.opacity(0.12) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(AppFormatters.dayAndMonth.string(from: date)), \(description(of: state))")
-        .accessibilityAddTraits(isSelected || inPeriod ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     private func description(of state: RangeState?) -> String {
