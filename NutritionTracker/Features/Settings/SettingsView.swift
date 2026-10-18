@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var exportURL: URL?
     @State private var importSummary: String?
     @State private var alertMessage: String?
+    @AppStorage("appearance") private var appearance = AppAppearance.light.rawValue
     @State private var isConfirmingDeleteAll = false
     @State private var isConfirmingImport: BackupFile?
 
@@ -32,6 +33,7 @@ struct SettingsView: View {
                 Group {
                     summarySection
                     planSection
+                    appearanceSection
                     privacySection
                     backupSection
                     aboutSection
@@ -43,7 +45,7 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
@@ -175,6 +177,22 @@ struct SettingsView: View {
         guard let target else { return nil }
         let edited = Nutrient.allCases.filter { target.ranges[$0].isManuallyModified }.count
         return edited == 0 ? "Calculated for you" : "\(edited) edited by you"
+    }
+
+    // MARK: Appearance
+
+    private var appearanceSection: some View {
+        Section {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppAppearance.allCases) { Text($0.displayName).tag($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Light uses a warm paper palette, soft charcoal text and no pure "
+                 + "white or black, which is easier on the eyes.")
+        }
     }
 
     // MARK: Photos and privacy

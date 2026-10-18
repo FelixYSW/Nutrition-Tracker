@@ -43,6 +43,8 @@ enum AppTheme {
     /// Cards sit one step lighter (light) or lighter-grey (dark) than the page.
     static var cardBackground: Color { .adaptive(light: 0xFAF9F6, dark: 0x252421) }
     static var subtleFill: Color { .adaptive(light: 0xE6E3DC, dark: 0x33312D) }
+    /// Hairline round cards, so they separate from the page without a shadow.
+    static var cardBorder: Color { .adaptive(light: 0xECE9E2, dark: 0x33312D) }
 
     /// Tinted card used for the hero summaries.
     static var skyCard: Color { .adaptive(light: 0xEAE7E0, dark: 0x2B2A27) }
@@ -158,8 +160,15 @@ extension AppTheme {
     /// set separately or they stay pure black / pure white.
     static func applyNavigationBarTextColour() {
         let ink = UIColor.adaptive(light: inkLight, dark: inkDark)
-        UINavigationBar.appearance().titleTextAttributes = [.foregroundColor: ink]
-        UINavigationBar.appearance().largeTitleTextAttributes = [.foregroundColor: ink]
+        func rounded(_ size: CGFloat, _ weight: UIFont.Weight) -> UIFont {
+            let base = UIFont.systemFont(ofSize: size, weight: weight)
+            guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+            return UIFont(descriptor: descriptor, size: size)
+        }
+        UINavigationBar.appearance().titleTextAttributes = [
+            .foregroundColor: ink, .font: rounded(17, .bold)]
+        UINavigationBar.appearance().largeTitleTextAttributes = [
+            .foregroundColor: ink, .font: rounded(32, .heavy)]
     }
 }
 #endif
@@ -173,6 +182,8 @@ private struct AppCard: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(AppTheme.cardBackground, in: RoundedRectangle(
                 cornerRadius: AppTheme.cornerRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous)
+                .stroke(AppTheme.cardBorder, lineWidth: 1))
     }
 }
 
@@ -380,5 +391,31 @@ struct AppLogoMark: View {
         .padding(size * 0.041)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Appearance
+
+/// Light or dark, or follow the system. Light is the default: the warm paper
+/// palette, with no pure white or pure black anywhere.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case light, dark, system
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .light: "Light"
+        case .dark: "Dark"
+        case .system: "System"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .light: .light
+        case .dark: .dark
+        case .system: nil
+        }
     }
 }

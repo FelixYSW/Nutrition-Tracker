@@ -53,7 +53,7 @@ struct CalendarView: View {
             }
             .appPageSurface()
             .navigationTitle("Calendar")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .sheet(item: $editingDraft) { draft in
                 EditEntrySheet(draft: draft)
             }

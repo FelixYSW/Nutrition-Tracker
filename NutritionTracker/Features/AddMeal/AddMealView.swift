@@ -86,7 +86,7 @@ struct AddMealView: View {
             .appPageSurface()
             .navigationTitle("Add Meal")
             .keyboardDismissControls()
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .safeAreaInset(edge: .bottom) { saveBar }
             .alert("Could not save",
                    isPresented: Binding(get: { saveError != nil },

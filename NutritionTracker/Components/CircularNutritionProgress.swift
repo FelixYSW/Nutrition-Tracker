@@ -215,7 +215,7 @@ struct CalorieHeroCard: View {
             .frame(width: 112, height: 112)
             .accessibilityHidden(true)
         }
-        .appSkyCard()
+        .appCard()
         .accessibilityElement(children: .combine)
     }
 
