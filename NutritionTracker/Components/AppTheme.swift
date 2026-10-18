@@ -238,6 +238,10 @@ private struct AppPageContent: ViewModifier {
             .padding(.horizontal, AppTheme.cardPadding + 4)
             .padding(.vertical, AppTheme.pageSpacing)
             .frame(maxWidth: .infinity, alignment: .leading)
+            // Exactly as wide as the page's scroll view. Without this, one
+            // child wider than the screen made the whole page wider, and the
+            // vertical scroll view then let it be dragged sideways.
+            .containerRelativeFrame(.horizontal, alignment: .leading)
     }
 }
 
@@ -249,6 +253,13 @@ extension View {
     /// Full-bleed page background that extends under the safe areas.
     func appPageSurface() -> some View {
         self.background(AppTheme.background.ignoresSafeArea())
+            .verticalScrollingOnly()
+    }
+
+    /// Pages scroll up and down only: no sideways rubber-banding unless the
+    /// content genuinely is wider than the screen.
+    func verticalScrollingOnly() -> some View {
+        scrollBounceBehavior(.basedOnSize, axes: .horizontal)
     }
 
     /// Frosted glass for floating controls. Uses the system Liquid Glass on
@@ -452,5 +463,17 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         case .dark: .dark
         case .system: nil
         }
+    }
+
+    /// Like `colorScheme`, but "System" becomes the phone's actual setting
+    /// instead of nil. For sheets: going back to nil while a sheet is open
+    /// leaves it stuck in the previous scheme until it is reopened.
+    var resolvedColorScheme: ColorScheme {
+        if let colorScheme { return colorScheme }
+        #if canImport(UIKit)
+        return UIScreen.main.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+        #else
+        return .light
+        #endif
     }
 }
