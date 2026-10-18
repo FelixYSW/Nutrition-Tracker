@@ -76,6 +76,9 @@ struct OnboardingView: View {
         switch step {
         case .welcome:
             VStack(alignment: .leading, spacing: 14) {
+                AppLogoMark(size: 112)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                 Text("Track what you eat, in ranges.")
                     .font(.title2.bold())
                 Text("A few questions let the app work out a sensible daily "
