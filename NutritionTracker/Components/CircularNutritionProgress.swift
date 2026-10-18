@@ -167,6 +167,17 @@ struct CalorieHeroCard: View {
 
     var body: some View {
         HStack(spacing: 18) {
+            ZStack {
+                RangeRing(progress: progress,
+                          bandStart: range.bandFractions().start,
+                          tint: tint,
+                          bandTint: AppTheme.within,
+                          lineWidth: 13,
+                          trackColor: AppTheme.subtleFill)
+                ringCentre
+            }
+            .frame(width: 112, height: 112)
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Label {
                     Text("Calories so far")
@@ -190,12 +201,17 @@ struct CalorieHeroCard: View {
                 }
 
                 if range.max > 0 {
-                    Text("Range \(AppFormatters.range(range)).")
+                    Text("of \(AppFormatters.range(range)) kcal")
                         .font(.footnote)
+                        .foregroundStyle(AppTheme.skyCardText)
                     Text(rangeCaption(nutrient: .calories, consumed: consumed, range: range))
-                        .font(.footnote.weight(.medium))
+                        .font(.footnote.weight(.bold))
                         .foregroundStyle(captionColor(for: range.state(consumed: consumed),
-                                                      normal: AppTheme.skyCardText))
+                                                      normal: AppTheme.ink))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(AppTheme.subtleFill, in: Capsule())
+                        .padding(.top, 2)
                 } else {
                     Text("No targets yet. Set them in Settings.")
                         .font(.footnote)
@@ -203,17 +219,6 @@ struct CalorieHeroCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            ZStack {
-                RangeRing(progress: progress,
-                          bandStart: range.bandFractions().start,
-                          tint: tint,
-                          bandTint: AppTheme.within,
-                          lineWidth: 13,
-                          trackColor: AppTheme.heroTrack)
-                ringCentre
-            }
-            .frame(width: 112, height: 112)
-            .accessibilityHidden(true)
         }
         .appCard()
         .accessibilityElement(children: .combine)

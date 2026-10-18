@@ -113,10 +113,9 @@ struct SettingsView: View {
                 if profile != nil { isShowingProfileEditor = true }
             } label: {
                 HStack(spacing: 14) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.system(size: 44))
-                        .foregroundStyle(AppTheme.skyCardText)
-                        .accessibilityHidden(true)
+                    AppLogoMark(size: 52)
+                        .background(AppTheme.skyCard, in: RoundedRectangle(
+                            cornerRadius: 14, style: .continuous))
                     VStack(alignment: .leading, spacing: 3) {
                         if let profile {
                             Text(profile.goal.displayName)
@@ -379,6 +378,10 @@ struct SettingsRow: View {
                     }
                 } icon: {
                     Image(systemName: systemImage)
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 32, height: 32)
+                        .background(AppTheme.skyCard, in: RoundedRectangle(
+                            cornerRadius: 9, style: .continuous))
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")
