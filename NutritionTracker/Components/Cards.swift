@@ -272,10 +272,11 @@ struct FoodEntryCard: View {
             Button {
                 withAnimation(.snappy) { isExpanded.toggle() }
             } label: {
+                // Chevrons sit before their text, everywhere in the app.
                 HStack(spacing: 6) {
-                    Text(detailsLabel)
                     DisclosureChevron(isExpanded: isExpanded)
                         .font(.caption.weight(.bold))
+                    Text(detailsLabel)
                 }
                 .font(.subheadline.weight(.semibold))
                 .frame(minHeight: AppTheme.minimumTapTarget)
@@ -336,88 +337,6 @@ extension FoodEntryCard {
     fileprivate var detailsLabel: String {
         if isExpanded { return entry.isComposite ? "Hide ingredients" : "Hide nutrition" }
         return entry.isComposite ? "\(entry.ingredients.count) ingredients" : "Nutrition"
-    }
-}
-
-/// One ingredient inside a composite food: name, amount and calories on two
-/// short lines. Its label values are tucked away until the row is opened, so a
-/// five-ingredient dish stays readable.
-struct IngredientRow: View {
-    @Binding var draft: IngredientDraft
-    @Binding var isExpanded: Bool
-    var onDelete: () -> Void
-
-    @State private var showRemovePrompt = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                TextField("Ingredient", text: $draft.name)
-                    .textInputAutocapitalization(.words)
-                    .font(.subheadline.weight(.semibold))
-                    // On the tinted ingredient row, a card-coloured box stands out.
-                    .inputBox(fill: AppTheme.cardBackground)
-
-                if draft.isLowConfidence {
-                    ConfidenceBadge(confidence: draft.confidence)
-                }
-
-                // Red so it reads as tappable; the food's total line already
-                // carries the calories, so the row doesn't repeat them.
-                Button("Remove", role: .destructive, action: onDelete)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AppTheme.destructiveText)
-                    .buttonStyle(.plain)
-                    .fixedSize()
-                    .accessibilityLabel("Remove \(draft.name.isEmpty ? "ingredient" : draft.name)")
-            }
-
-            HStack(spacing: 8) {
-                QuantityStepper(quantity: $draft.quantity, unit: draft.unit) {
-                    showRemovePrompt = true
-                }
-                UnitPicker(unit: $draft.unit)
-
-                Spacer(minLength: 0)
-
-                Button {
-                    withAnimation(.snappy) { isExpanded.toggle() }
-                } label: {
-                    DisclosureChevron(isExpanded: isExpanded)
-                        .frame(width: AppTheme.minimumTapTarget,
-                               height: AppTheme.minimumTapTarget)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel(isExpanded ? "Hide nutrition" : "Edit nutrition")
-            }
-
-            if isExpanded {
-                NutritionEditor(nutrition: $draft.nutritionPerServing,
-                                servingSize: $draft.servingSize,
-                                unit: draft.unit)
-
-                if draft.provenance != .manual {
-                    Text("Values from \(draft.provenance.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(12)
-        .background(AppTheme.subtleFill.opacity(0.55),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .alert("Remove \(draft.name.isEmpty ? "this ingredient" : draft.name)?",
-               isPresented: $showRemovePrompt) {
-            Button("Remove", role: .destructive, action: onDelete)
-            Button("Keep", role: .cancel) {
-                // Restore to one step so no zero-quantity row is left behind.
-                draft.quantity = draft.unit.step
-            }
-        } message: {
-            Text("The amount reached zero.")
-        }
     }
 }
 

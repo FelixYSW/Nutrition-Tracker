@@ -155,13 +155,14 @@ struct UnitPicker: View {
                 ForEach(ServingUnit.allCases) { Text($0.displayName).tag($0) }
             }
         } label: {
+            // Chevron before the text, like every chevron in the app.
             HStack(spacing: 3) {
-                Text(unit.shortLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
+                Text(unit.shortLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
             }
             .padding(.horizontal, 10)
             .frame(minWidth: 52, minHeight: 36)
