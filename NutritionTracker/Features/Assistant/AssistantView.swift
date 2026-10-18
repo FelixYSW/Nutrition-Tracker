@@ -260,11 +260,12 @@ struct AssistantView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
+                    .padding(.vertical, 11)
+                    .padding(.horizontal, 14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(AppTheme.subtleFill,
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .stroke(AppTheme.stillToGo, lineWidth: 1))
+                    .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -294,11 +295,13 @@ struct AssistantView: View {
                 }
                 if !text.isEmpty {
                     Text(text)
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(AppTheme.accentFill, in: RoundedRectangle(
-                            cornerRadius: 20, style: .continuous))
+                        .font(.body)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(AppTheme.accentFill, in: UnevenRoundedRectangle(
+                            topLeadingRadius: 22, bottomLeadingRadius: 22,
+                            bottomTrailingRadius: 6, topTrailingRadius: 22,
+                            style: .continuous))
                         .foregroundStyle(AppTheme.onAccent)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -308,12 +311,19 @@ struct AssistantView: View {
 
         case .assistant(let text):
             MarkdownText(viewModel.displayedText(text, for: message.id))
-                .font(.subheadline)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
+                .font(.body)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(AppTheme.cardBackground, in: RoundedRectangle(
-                    cornerRadius: 16, style: .continuous))
+                .background(AppTheme.cardBackground, in: UnevenRoundedRectangle(
+                    topLeadingRadius: 22, bottomLeadingRadius: 6,
+                    bottomTrailingRadius: 22, topTrailingRadius: 22,
+                    style: .continuous))
+                .overlay(UnevenRoundedRectangle(
+                    topLeadingRadius: 22, bottomLeadingRadius: 6,
+                    bottomTrailingRadius: 22, topTrailingRadius: 22,
+                    style: .continuous)
+                    .stroke(AppTheme.cardBorder, lineWidth: 1))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
 

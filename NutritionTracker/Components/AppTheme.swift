@@ -256,7 +256,7 @@ struct PrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(.body, design: .rounded).weight(.bold))
             .foregroundStyle(isEnabled ? AppTheme.onAccent : Color.secondary)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity, minHeight: 56)
             .padding(.horizontal, 20)
             // Solid in both states. Fading the fill to show "disabled" made
             // the content behind the button show through it.

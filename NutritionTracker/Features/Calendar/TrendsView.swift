@@ -196,9 +196,11 @@ struct TrendsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                summaryRow(state: .within, count: tally.within, unit: unit)
-                summaryRow(state: .under, count: tally.under, unit: unit)
-                summaryRow(state: .over, count: tally.over, unit: unit)
+                HStack(spacing: 10) {
+                    summaryTile(state: .within, count: tally.within, unit: unit)
+                    summaryTile(state: .over, count: tally.over, unit: unit)
+                    summaryTile(state: .under, count: tally.under, unit: unit)
+                }
 
                 if tally.noData > 0 {
                     Text("\(tally.noData) \(unit)\(tally.noData == 1 ? "" : "s") with "
@@ -209,6 +211,36 @@ struct TrendsView: View {
             }
         }
         .appCard()
+    }
+
+    /// A big count with what it counts underneath: "7 days in range".
+    private func summaryTile(state: RangeState, count: Int, unit: String) -> some View {
+        let tint = AppTheme.summaryColor(for: state)
+        return VStack(spacing: 2) {
+            Text("\(count)")
+                .font(.system(.title, design: .rounded).weight(.heavy))
+                .monospacedDigit()
+                .foregroundStyle(state == .under ? AppTheme.ink : tint)
+            Text("\(unit)\(count == 1 ? "" : "s") \(tileLabel(for: state))")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(tint.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func tileLabel(for state: RangeState) -> String {
+        switch state {
+        case .under: "under"
+        case .within: "in range"
+        case .over: "over"
+        }
     }
 
     private func summaryRow(state: RangeState, count: Int, unit: String) -> some View {

@@ -75,6 +75,86 @@ struct OnboardingView: View {
     private var stepContent: some View {
         switch step {
         case .welcome:
+            // Centred on the page, not in a card, like a launch screen.
+            VStack(spacing: 20) {
+                AppLogoMark(size: 168)
+                    .padding(.top, 24)
+                Text("Track what you eat, in ranges.")
+                    .font(.system(.title, design: .rounded).weight(.heavy))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("A few questions let the app work out a sensible daily "
+                     + "calorie and macro range for you. Everything stays on "
+                     + "this iPhone.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Label("These are estimates to aim at, not medical advice.",
+                      systemImage: "info.circle")
+                    .font(.footnote)
+                    .foregroundStyle(AppTheme.skyCardText)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppTheme.skyCard, in: RoundedRectangle(
+                        cornerRadius: 16, style: .continuous))
+            }
+            .frame(maxWidth: .infinity)
+
+        case .basics: "About you"
+            case .body: "Body"
+            case .goal: "Your goal"
+            case .activity: "Activity"
+            case .training: "Training"
+            case .review: "Your daily ranges"
+            }
+        }
+
+        /// Progress excludes the welcome screen, which asks for nothing.
+        var progressIndex: Int { max(0, rawValue - 1) }
+        static var progressTotal: Int { Step.allCases.count - 1 }
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                if step != .welcome {
+                    HStack(spacing: 5) {
+                        ForEach(0..<Step.progressTotal, id: \.self) { index in
+                            Capsule()
+                                .fill(index <= step.progressIndex
+                                      ? AppTheme.accentFill : AppTheme.subtleFill)
+                                .frame(height: 6)
+                        }
+                    }
+                    .padding(.horizontal, AppTheme.cardPadding + 4)
+                    .padding(.top, 8)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Step \(step.progressIndex + 1) of \(Step.progressTotal)")
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                        stepContent
+                    }
+                    .appPageContent()
+                }
+
+                footer
+            }
+            .appPageSurface()
+            .navigationTitle(step.title)
+            .navigationBarTitleDisplayMode(.large)
+        }
+    }
+
+    // MARK: Steps
+
+    @ViewBuilder
+    private var stepContent: some View {
+        switch step {
+        case .welcome:
             VStack(alignment: .leading, spacing: 14) {
                 AppLogoMark(size: 112)
                     .frame(maxWidth: .infinity)
@@ -276,7 +356,7 @@ struct OnboardingView: View {
                         .buttonStyle(.appSecondary)
                 }
 
-                Button(step == .review ? "Save and start" : "Continue") {
+                Button(primaryTitle) {
                     advance()
                 }
                 .buttonStyle(.appPrimary)
@@ -286,6 +366,15 @@ struct OnboardingView: View {
         .padding(.horizontal, AppTheme.cardPadding + 4)
         .padding(.vertical, 12)
         .background(AppTheme.background)
+    }
+
+    private var primaryTitle: String {
+        switch step {
+        case .welcome: "Get started"
+        case .training: "See my ranges"
+        case .review: "Save and start"
+        default: "Next"
+        }
     }
 
     private var validationMessage: String? {
