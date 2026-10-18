@@ -29,6 +29,9 @@ struct RootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.background.ignoresSafeArea())
         .tint(AppTheme.accent)
+        // Every scroll view in the app, sheets included, scrolls vertically
+        // only (the suggestion chips still scroll sideways: they are wider).
+        .verticalScrollingOnly()
         .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
         // Soft ink instead of pure black/white for all text that doesn't set
         // its own colour. `.secondary` and `.tertiary` derive from this.

@@ -46,6 +46,10 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(AppTheme.background.ignoresSafeArea())
+            // A sheet is its own presentation and doesn't pick up a change
+            // made at the root while it's open, so Settings - where the
+            // picker lives - applies the choice to itself as well.
+            .preferredColorScheme(AppAppearance(rawValue: appearance)?.resolvedColorScheme)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {

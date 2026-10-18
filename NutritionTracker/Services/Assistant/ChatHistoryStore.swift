@@ -10,16 +10,52 @@ struct SavedConversation: Codable, Identifiable, Equatable {
     var messages: [AssistantChatMessage]
     var turns: [AssistantTurn]
 
-    /// Last thing the assistant said, for the history list.
-    var preview: String? {
+    /// The latest message - the user's or the assistant's - as one plain line
+    /// for the history list: markdown marks removed, whitespace collapsed.
+    /// Nil only for a chat with no messages yet.
+    var latestMessage: String? {
         for message in messages.reversed() {
             switch message.kind {
-            case .assistant(let text): return text
-            case .proposalResolved(let summary, _): return summary
-            default: continue
+            case .user(let text, let images):
+                let line = Self.plainLine(text)
+                if !line.isEmpty { return line }
+                if !images.isEmpty { return images.count == 1 ? "Photo" : "\(images.count) photos" }
+            case .assistant(let text):
+                let line = Self.plainLine(text)
+                if !line.isEmpty { return line }
+            default:
+                continue
             }
         }
         return nil
+    }
+
+    /// Messages actually exchanged: the user's and the assistant's replies,
+    /// not cards, tool activity or errors.
+    var messageCount: Int {
+        messages.filter { message in
+            switch message.kind {
+            case .user, .assistant: true
+            default: false
+            }
+        }.count
+    }
+
+    /// Markdown to a single readable line: no `**`, `#`, backticks or list
+    /// bullets, and newlines folded into spaces.
+    static func plainLine(_ text: String) -> String {
+        let lines = text.split(whereSeparator: \.isNewline).map { line -> String in
+            var line = line.trimmingCharacters(in: .whitespaces)
+            for prefix in ["- ", "* ", "\u{2022} "] where line.hasPrefix(prefix) {
+                line.removeFirst(prefix.count)
+            }
+            while line.hasPrefix("#") { line.removeFirst() }
+            return line.trimmingCharacters(in: .whitespaces)
+        }
+        return lines.filter { !$0.isEmpty }.joined(separator: " ")
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
     }
 
     /// The first thing the user asked, trimmed to a short title.

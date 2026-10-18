@@ -22,11 +22,14 @@ struct NutritionSummaryView: View {
         // One row when it fits - all the macros side by side - and a grid
         // that reflows at large Dynamic Type sizes, rather than clipping.
         ViewThatFits(in: .horizontal) {
+            // Every tile as tall as the tallest, so they line up as one row.
             HStack(alignment: .top, spacing: 8) {
                 ForEach(items) { nutrient in
                     cell(for: nutrient)
+                        .frame(maxHeight: .infinity)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 12)],
                       alignment: .leading, spacing: 12) {
                 ForEach(items) { nutrient in
@@ -40,9 +43,13 @@ struct NutritionSummaryView: View {
     private func cell(for nutrient: Nutrient) -> some View {
         let tint = AppTheme.color(for: nutrient)
         return VStack(spacing: 3) {
+            // A fixed slot: the symbols differ in height (the flame and fork
+            // are taller than the drop), which put each number at a
+            // different height.
             Image(systemName: nutrient.symbolName)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(tint)
+                .frame(height: 18)
                 .accessibilityHidden(true)
             Text("\(AppFormatters.amount(nutrition[nutrient]))\(nutrient == .calories ? "" : "g")")
                 .font(.system(.subheadline, design: .rounded).weight(.heavy))
@@ -55,7 +62,7 @@ struct NutritionSummaryView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.vertical, 9)
         .padding(.horizontal, 2)
         .background(tint.opacity(0.12),
@@ -64,86 +71,61 @@ struct NutritionSummaryView: View {
     }
 }
 
-/// What was eaten against each target range, one row per nutrient: the
-/// amount, the min-max band, and whether it's below, within or over.
-///
-/// For a finished day (or a period's average), falling short of a minimum
-/// is shown as a miss - the minimum is a real target, not optional. While
-/// the day is still going it reads as "to go".
-struct NutritionRangeSummaryView: View {
-    let nutrition: Nutrition
-    let ranges: NutritionTargetRanges?
-    var isComplete: Bool = true
-
-    var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
-            ForEach(Nutrient.allCases) { nutrient in
-                row(for: nutrient)
-            }
-        }
-    }
-
-    private func row(for nutrient: Nutrient) -> some View {
-        let unit = nutrient == .calories ? "kcal" : "g"
-        let value = nutrition[nutrient]
-        let range = ranges?[nutrient]
-        return GridRow(alignment: .firstTextBaseline) {
-            Text(nutrient.displayName)
-                .font(.subheadline)
-            Text("\(AppFormatters.amount(value)) \(unit)")
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-                .gridColumnAlignment(.trailing)
-            Text(range.map { $0.max > 0 ? "of \(AppFormatters.range($0))" : "" } ?? "")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(range.map { status(value: value, range: $0, unit: unit) } ?? "")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(range.map { statusColor(value: value, range: $0) } ?? .secondary)
-                .gridColumnAlignment(.trailing)
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func status(value: Double, range: NutrientRange, unit: String) -> String {
-        guard range.max > 0 else { return "" }
-        switch range.state(consumed: value) {
-        case .under:
-            let gap = AppFormatters.amount(range.min.rounded() - value.rounded())
-            return isComplete ? "\(gap) \(unit) short" : "\(gap) \(unit) to go"
-        case .within: return "In range"
-        case .over: return "\(AppFormatters.amount(value.rounded() - range.max.rounded())) \(unit) over"
-        }
-    }
-
-    private func statusColor(value: Double, range: NutrientRange) -> Color {
-        switch range.state(consumed: value) {
-        case .under: .secondary
-        case .within: AppTheme.within
-        case .over: AppTheme.over
-        }
-    }
-}
-
-/// The selected day on the Calendar: the date, calories against the range with
-/// the flame from the app icon, and one tinted tile per macro.
+/// The Calendar's summary card: calories against the range with the flame
+/// from the app icon, and one tinted tile per macro. Shows a single day, or
+/// a week's or month's daily average in exactly the same layout.
 struct DaySummaryCard: View {
-    let date: Date
+    /// Small line above the title: the weekday, or "Daily average".
+    let overline: String
+    /// The date, or the period ("6 Oct – 12 Oct", "October 2026").
+    let title: String
+    /// Capsule on the right: "Today", "This week", or none.
+    let badge: String?
     let nutrition: Nutrition
     let ranges: NutritionTargetRanges?
+    /// Extra line under the tiles, e.g. "5 of 7 days logged".
+    var footnote: String?
 
     private let macros: [Nutrient] = [.protein, .carbs, .fat, .fibre]
+
+    /// One day's totals.
+    init(date: Date, nutrition: Nutrition, ranges: NutritionTargetRanges?) {
+        self.overline = AppFormatters.weekdayName.string(from: date)
+        self.title = AppFormatters.dayAndMonth.string(from: date)
+        self.badge = LocalDay.isToday(date) ? "Today" : nil
+        self.nutrition = nutrition
+        self.ranges = ranges
+        self.footnote = nil
+    }
+
+    /// Any other figures, such as a week's daily average.
+    init(overline: String, title: String, badge: String?, nutrition: Nutrition,
+         ranges: NutritionTargetRanges?, footnote: String? = nil) {
+        self.overline = overline
+        self.title = title
+        self.badge = badge
+        self.nutrition = nutrition
+        self.ranges = ranges
+        self.footnote = footnote
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             calories
-            HStack(spacing: 8) {
+            // Equal-height tiles, so the four line up as one row.
+            HStack(alignment: .top, spacing: 8) {
                 ForEach(macros) { nutrient in
                     tile(for: nutrient)
+                        .frame(maxHeight: .infinity)
                 }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            if let footnote {
+                Text(footnote)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .appCard()
@@ -152,15 +134,17 @@ struct DaySummaryCard: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(AppFormatters.weekdayName.string(from: date))
+                Text(overline)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(AppFormatters.dayAndMonth.string(from: date))
+                Text(title)
                     .font(.system(.title3, design: .rounded).weight(.heavy))
+                    .minimumScaleFactor(0.8)
+                    .lineLimit(1)
             }
             Spacer()
-            if LocalDay.isToday(date) {
-                Text("Today")
+            if let badge {
+                Text(badge)
                     .font(.caption.weight(.heavy))
                     .foregroundStyle(AppTheme.onAccent)
                     .padding(.horizontal, 12)
@@ -211,6 +195,7 @@ struct DaySummaryCard: View {
             Image(systemName: nutrient.symbolName)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(tint)
+                .frame(height: 20)   // the same slot for every symbol
                 .accessibilityHidden(true)
             Text("\(AppFormatters.amount(nutrition[nutrient])) g")
                 .font(.system(.subheadline, design: .rounded).weight(.heavy))
@@ -219,6 +204,8 @@ struct DaySummaryCard: View {
                 .lineLimit(1)
             Text(nutrient.displayName)
                 .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             if let range = ranges?[nutrient], range.max > 0 {
                 Text(AppFormatters.range(range))
                     .font(.caption2)
@@ -227,7 +214,7 @@ struct DaySummaryCard: View {
                     .lineLimit(1)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.vertical, 10)
         .background(tint.opacity(0.12),
                     in: RoundedRectangle(cornerRadius: 16, style: .continuous))

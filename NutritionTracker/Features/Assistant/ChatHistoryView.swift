@@ -32,8 +32,8 @@ struct ChatHistoryView: View {
                                 row(for: conversation)
                             }
                             .buttonStyle(.plain)
-                            // The open chat is highlighted - a tinted row
-                            // with an accent bar - instead of a small label.
+                            // The open chat is highlighted with a tinted
+                            // row instead of a small label.
                             .listRowBackground(rowBackground(isOpen: conversation.id == currentID))
                             .swipeActions {
                                 if conversation.id != currentID {
@@ -101,22 +101,22 @@ struct ChatHistoryView: View {
     }
 
     private func row(for conversation: SavedConversation) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(conversation.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Spacer(minLength: 8)
+        // The latest message is the title; under it, how many messages the
+        // chat has and when the last one was sent.
+        VStack(alignment: .leading, spacing: 4) {
+            Text(conversation.latestMessage ?? conversation.title)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 6) {
+                Text(Self.messageCountLabel(conversation.messageCount))
+                Text("\u{00B7}")
                 Text(Self.lastMessageLabel(conversation.updatedAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            if let preview = conversation.preview {
-                Text(preview)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
@@ -128,15 +128,19 @@ struct ChatHistoryView: View {
     @ViewBuilder
     private func rowBackground(isOpen: Bool) -> some View {
         if isOpen {
-            ZStack(alignment: .leading) {
+            // Just a tint over the card colour, no side bar.
+            ZStack {
                 AppTheme.cardBackground
                 AppTheme.accent.opacity(0.12)
-                AppTheme.accent
-                    .frame(width: 4)
             }
         } else {
             AppTheme.cardBackground
         }
+    }
+
+    /// "1 message", "12 messages".
+    static func messageCountLabel(_ count: Int) -> String {
+        "\(count) message\(count == 1 ? "" : "s")"
     }
 
     /// When the chat's last message was sent: "Today, 3:42 PM",

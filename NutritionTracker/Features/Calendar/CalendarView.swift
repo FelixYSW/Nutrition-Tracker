@@ -114,22 +114,15 @@ struct CalendarView: View {
         let days = byDay.keys.sorted(by: >)
 
         return VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-            VStack(alignment: .leading, spacing: 12) {
-                AppSectionHeading(title: period.title, trailing: period.containsToday ? "Now" : nil)
-                if summary.daysLogged > 0 {
-                    Text("Daily average")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    NutritionRangeSummaryView(nutrition: summary.dailyAverage,
-                                              ranges: targets.first?.ranges,
-                                              isComplete: !period.containsToday)
-                }
-                Text(summary.description)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .appSkyCard()
+            // The same card as a single day, filled with the daily average
+            // over the days logged.
+            DaySummaryCard(overline: "Daily average",
+                           title: period.title,
+                           badge: period.containsToday
+                               ? (period.scale == .monthly ? "This month" : "This week") : nil,
+                           nutrition: summary.dailyAverage,
+                           ranges: targets.first?.ranges,
+                           footnote: summary.description)
 
             AppSectionHeading(title: "Food log",
                               trailing: periodEntries.isEmpty ? nil

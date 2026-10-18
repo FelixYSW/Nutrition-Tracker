@@ -154,6 +154,31 @@ final class ChatHistoryStoreTests: XCTestCase {
         ]), "2 photos")
         XCTAssertEqual(SavedConversation.title(for: []), "New chat")
     }
+
+    /// The history list shows the latest message, from either side, as one
+    /// plain line, and counts only real messages.
+    @MainActor   // ChatHistoryView, being a View, is main-actor isolated.
+    func testLatestMessageAndCount() {
+        let chat = SavedConversation(
+            id: UUID(), title: "Lunch", createdAt: .now, updatedAt: .now,
+            messages: [
+                AssistantChatMessage(kind: .user(text: "Log my lunch", images: [])),
+                AssistantChatMessage(kind: .toolActivity("Looking up food")),
+                AssistantChatMessage(kind: .assistant("**Done.**\n- Nasi lemak, 644 kcal")),
+                AssistantChatMessage(kind: .error("Network"))
+            ],
+            turns: [])
+        XCTAssertEqual(chat.latestMessage, "Done. Nasi lemak, 644 kcal")
+        XCTAssertEqual(chat.messageCount, 2)
+        XCTAssertEqual(ChatHistoryView.messageCountLabel(1), "1 message")
+        XCTAssertEqual(ChatHistoryView.messageCountLabel(2), "2 messages")
+
+        let photoOnly = SavedConversation(
+            id: UUID(), title: "Photo", createdAt: .now, updatedAt: .now,
+            messages: [AssistantChatMessage(kind: .user(text: "", images: [Data([1])]))],
+            turns: [])
+        XCTAssertEqual(photoOnly.latestMessage, "Photo")
+    }
 }
 
 @MainActor
