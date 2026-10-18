@@ -102,7 +102,7 @@ struct AddMealView: View {
                 .appPageContent()
             }
             .appPageSurface()
-            .navigationTitle("Add Meal")
+            .navigationTitle("Add meal")
             .keyboardDismissControls()
             .navigationBarTitleDisplayMode(.large)
             .safeAreaInset(edge: .bottom) { saveBar }

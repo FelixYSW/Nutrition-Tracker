@@ -102,77 +102,6 @@ struct OnboardingView: View {
             }
             .frame(maxWidth: .infinity)
 
-        case .basics: "About you"
-            case .body: "Body"
-            case .goal: "Your goal"
-            case .activity: "Activity"
-            case .training: "Training"
-            case .review: "Your daily ranges"
-            }
-        }
-
-        /// Progress excludes the welcome screen, which asks for nothing.
-        var progressIndex: Int { max(0, rawValue - 1) }
-        static var progressTotal: Int { Step.allCases.count - 1 }
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if step != .welcome {
-                    HStack(spacing: 5) {
-                        ForEach(0..<Step.progressTotal, id: \.self) { index in
-                            Capsule()
-                                .fill(index <= step.progressIndex
-                                      ? AppTheme.accentFill : AppTheme.subtleFill)
-                                .frame(height: 6)
-                        }
-                    }
-                    .padding(.horizontal, AppTheme.cardPadding + 4)
-                    .padding(.top, 8)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Step \(step.progressIndex + 1) of \(Step.progressTotal)")
-                }
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-                        stepContent
-                    }
-                    .appPageContent()
-                }
-
-                footer
-            }
-            .appPageSurface()
-            .navigationTitle(step.title)
-            .navigationBarTitleDisplayMode(.large)
-        }
-    }
-
-    // MARK: Steps
-
-    @ViewBuilder
-    private var stepContent: some View {
-        switch step {
-        case .welcome:
-            VStack(alignment: .leading, spacing: 14) {
-                AppLogoMark(size: 112)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                Text("Track what you eat, in ranges.")
-                    .font(.title2.bold())
-                Text("A few questions let the app work out a sensible daily "
-                     + "calorie and macro range for you. Everything stays on "
-                     + "this iPhone.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("These are estimates to aim at, not medical advice.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .appCard()
-
         case .basics:
             VStack(alignment: .leading, spacing: 16) {
                 DatePicker("Date of birth",
@@ -199,47 +128,52 @@ struct OnboardingView: View {
             .appCard()
 
         case .body:
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Metric units").font(.caption).foregroundStyle(.secondary)
+            // One card per measurement, as in the mockup; each optional value
+            // opens inside the card of the switch that turns it on.
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Metric units").font(.footnote).foregroundStyle(.secondary)
 
                 SliderEntryRow(title: "Height", value: $input.heightCm,
                                range: 120...220, step: 1, unitLabel: "cm")
+                    .appCard()
                 SliderEntryRow(title: "Current weight", value: $input.weightKg,
                                range: 30...200, step: 0.5, unitLabel: "kg",
                                fractionDigits: 1)
+                    .appCard()
 
-                Divider()
-
-                Toggle("I have a target weight", isOn: $input.hasTargetWeight)
-                    .tint(AppTheme.nativeSwitch)
-                    .onChange(of: input.hasTargetWeight) { _, isOn in
-                        if isOn, input.targetWeightKg <= 0 {
-                            input.targetWeightKg = input.weightKg
+                VStack(alignment: .leading, spacing: 16) {
+                    Toggle("I have a target weight", isOn: $input.hasTargetWeight)
+                        .tint(AppTheme.nativeSwitch)
+                        .onChange(of: input.hasTargetWeight) { _, isOn in
+                            if isOn, input.targetWeightKg <= 0 {
+                                input.targetWeightKg = input.weightKg
+                            }
                         }
+                    if input.hasTargetWeight {
+                        SliderEntryRow(title: "Target weight", value: $input.targetWeightKg,
+                                       range: 30...200, step: 0.5, unitLabel: "kg",
+                                       fractionDigits: 1)
                     }
-                if input.hasTargetWeight {
-                    SliderEntryRow(title: "Target weight", value: $input.targetWeightKg,
-                                   range: 30...200, step: 0.5, unitLabel: "kg",
-                                   fractionDigits: 1)
                 }
+                .appCard()
 
-                Divider()
-
-                Toggle("I know my body-fat percentage", isOn: $input.hasBodyFat)
-                    .tint(AppTheme.nativeSwitch)
-                    .onChange(of: input.hasBodyFat) { _, isOn in
-                        if isOn, input.bodyFatPercent <= 0 { input.bodyFatPercent = 20 }
+                VStack(alignment: .leading, spacing: 16) {
+                    Toggle("I know my body-fat percentage", isOn: $input.hasBodyFat)
+                        .tint(AppTheme.nativeSwitch)
+                        .onChange(of: input.hasBodyFat) { _, isOn in
+                            if isOn, input.bodyFatPercent <= 0 { input.bodyFatPercent = 20 }
+                        }
+                    if input.hasBodyFat {
+                        SliderEntryRow(title: "Body fat", value: $input.bodyFatPercent,
+                                       range: 3...60, step: 0.5, unitLabel: "%",
+                                       fractionDigits: 1)
+                        Text("Stored for context. It does not change the calculation.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
-                if input.hasBodyFat {
-                    SliderEntryRow(title: "Body fat", value: $input.bodyFatPercent,
-                                   range: 3...60, step: 0.5, unitLabel: "%",
-                                   fractionDigits: 1)
-                    Text("Stored for context. It does not change the calculation.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+                .appCard()
             }
-            .appCard()
 
         case .goal:
             VStack(spacing: 10) {
@@ -289,24 +223,23 @@ struct OnboardingView: View {
 
     private var reviewStep: some View {
         VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Targets are ranges, not single numbers.")
-                    .font(.subheadline.weight(.semibold))
-                Text("The formulas behind these figures carry a real margin of "
-                     + "error, so aiming at a band is more honest than a single "
-                     + "number. Edit any bound you disagree with.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .appCard()
+            Text("Targets are ranges, not single numbers. Tap a row to adjust "
+                 + "either end.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            ForEach(Nutrient.allCases) { nutrient in
-                RangeEditorRow(nutrient: nutrient,
-                               range: Binding(
-                                get: { editableRanges[nutrient] },
-                                set: { editableRanges[nutrient] = $0 }))
+            VStack(spacing: 12) {
+                ForEach(Nutrient.allCases) { nutrient in
+                    RangeEditorRow(nutrient: nutrient,
+                                   range: Binding(
+                                    get: { editableRanges[nutrient] },
+                                    set: { editableRanges[nutrient] = $0 }))
+                }
             }
+
+            EstimateDisclaimer(text: "These formulas carry a real margin of error. "
+                               + "Treat the figures as a guide, not a prescription.")
 
             if let breakdown {
                 VStack(alignment: .leading, spacing: 6) {
@@ -562,34 +495,60 @@ struct RangeEditorRow: View {
 
     private var sliderStep: Double { nutrient == .calories ? 50 : 1 }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Circle()
-                    .fill(AppTheme.color(for: nutrient))
-                    .frame(width: 10, height: 10)
-                    .accessibilityHidden(true)
-                Text(nutrient.displayName)
-                    .font(.subheadline.weight(.semibold))
-                Spacer(minLength: 4)
-                if range.isManuallyModified {
-                    Text("Edited")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+    /// Closed, a row is the nutrient, its range and a band bar; tapping it
+    /// opens the two sliders.
+    @State private var isExpanded = false
 
-            SliderEntryRow(title: "Minimum", value: $minValue,
-                           range: 0...max(sliderBound, minValue),
-                           step: sliderStep, unitLabel: nutrient.unitLabel)
-            SliderEntryRow(title: "Maximum", value: $maxValue,
-                           range: 0...max(sliderBound, maxValue),
-                           step: sliderStep, unitLabel: nutrient.unitLabel)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.snappy) { isExpanded.toggle() }
+            } label: {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Circle()
+                            .fill(AppTheme.color(for: nutrient))
+                            .frame(width: 10, height: 10)
+                            .accessibilityHidden(true)
+                        Text(nutrient.displayName)
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                        if range.isManuallyModified {
+                            Text("Edited")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 4)
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(AppFormatters.range(range))
+                                .font(.system(.title3, design: .rounded).weight(.heavy))
+                                .monospacedDigit()
+                                .minimumScaleFactor(0.7)
+                                .lineLimit(1)
+                            Text(nutrient.unitLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    bandBar
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(isExpanded ? "Hides the sliders" : "Shows sliders for each end")
+
+            if isExpanded {
+                SliderEntryRow(title: "Minimum", value: $minValue,
+                               range: 0...max(sliderBound, minValue),
+                               step: sliderStep, unitLabel: nutrient.unitLabel)
+                SliderEntryRow(title: "Maximum", value: $maxValue,
+                               range: 0...max(sliderBound, maxValue),
+                               step: sliderStep, unitLabel: nutrient.unitLabel)
+            }
 
             if minValue > maxValue, maxValue > 0 {
                 Text("Minimum is above maximum; they will be swapped.")
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(AppTheme.stateTextColor(for: .over))
             }
         }
         .appCard()
@@ -605,5 +564,25 @@ struct RangeEditorRow: View {
             guard newValue != range.max else { return }
             range = range.withManualMax(newValue)
         }
+    }
+
+    /// The band drawn on a track that runs a little past the maximum, so the
+    /// gap between minimum and maximum reads at a glance.
+    private var bandBar: some View {
+        let scale = max(range.max * 1.15, 1)
+        let start = min(max(range.min / scale, 0), 1)
+        let end = min(max(range.max / scale, start), 1)
+        return GeometryReader { geometry in
+            let width = geometry.size.width
+            ZStack(alignment: .leading) {
+                Capsule().fill(AppTheme.subtleFill)
+                Capsule()
+                    .fill(AppTheme.color(for: nutrient))
+                    .frame(width: max(8, width * (end - start)))
+                    .offset(x: width * start)
+            }
+        }
+        .frame(height: 10)
+        .accessibilityHidden(true)
     }
 }

@@ -180,38 +180,37 @@ struct CalorieHeroCard: View {
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Label {
-                    Text("Calories so far")
+                    Text("Calories")
+                        .textCase(.uppercase)
+                        .tracking(0.6)
                 } icon: {
                     Image(systemName: "flame.fill")
                         .foregroundStyle(AppTheme.flame)
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.skyCardText)
+                .font(.system(.subheadline, design: .rounded).weight(.heavy))
+                .foregroundStyle(AppTheme.textColor(for: .calories))
 
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(AppFormatters.amount(consumed))
-                        .font(.system(size: 44, weight: .heavy, design: .rounded))
-                        .monospacedDigit()
-                        .minimumScaleFactor(0.6)
-                        .lineLimit(1)
-                        .contentTransition(.numericText())
-                    Text("kcal")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppTheme.skyCardText)
-                }
+                Text(AppFormatters.amount(consumed))
+                    .font(.system(size: 44, weight: .heavy, design: .rounded))
+                    .monospacedDigit()
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
 
                 if range.max > 0 {
+                    let state = range.state(consumed: consumed)
                     Text("of \(AppFormatters.range(range)) kcal")
-                        .font(.footnote)
+                        .font(.subheadline)
                         .foregroundStyle(AppTheme.skyCardText)
+                    // Status pill tinted by state: neutral while under, green
+                    // in range, orange over.
                     Text(rangeCaption(nutrient: .calories, consumed: consumed, range: range))
-                        .font(.footnote.weight(.bold))
-                        .foregroundStyle(captionColor(for: range.state(consumed: consumed),
-                                                      normal: AppTheme.ink))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(AppTheme.subtleFill, in: Capsule())
-                        .padding(.top, 2)
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(AppTheme.stateTextColor(for: state))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(AppTheme.stateFill(for: state), in: Capsule())
+                        .padding(.top, 4)
                 } else {
                     Text("No targets yet. Set them in Settings.")
                         .font(.footnote)
@@ -224,9 +223,8 @@ struct CalorieHeroCard: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// The same read-out in every state - how far towards the minimum, where
-    /// the day counts as on track. Whether that's under, in range or over is
-    /// said by the caption beside the ring, not by the ring itself.
+    /// The same in every state. Whether that's under, in range or over is
+    /// said by the pill beside the ring, not by the ring itself.
     @ViewBuilder
     private var ringCentre: some View {
         if range.max <= 0 {
@@ -234,21 +232,10 @@ struct CalorieHeroCard: View {
                 .font(.system(.title3, design: .rounded).weight(.heavy))
                 .foregroundStyle(.secondary)
         } else {
-            VStack(spacing: 2) {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 26))
-                    .foregroundStyle(AppTheme.flame)
-                Text("\(Int((consumed / max(range.min, 1) * 100).rounded()))%")
-                    .font(.system(.footnote, design: .rounded).weight(.heavy))
-                    .monospacedDigit()
-                    .minimumScaleFactor(0.6)
-                    .lineLimit(1)
-                    .contentTransition(.numericText())
-                Text("of min")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppTheme.skyCardText)
-            }
-            .frame(width: 76)
+            // Just the flame, like the app icon; the numbers sit beside it.
+            Image(systemName: "flame.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(AppTheme.flame)
         }
     }
 }

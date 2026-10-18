@@ -359,7 +359,7 @@ struct AssistantView: View {
         case .error(let message):
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(AppTheme.over)
                     .accessibilityHidden(true)
                 Text(message)
                     .font(.footnote)
@@ -367,7 +367,7 @@ struct AssistantView: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(0.12),
+            .background(AppTheme.over.opacity(0.12),
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
@@ -585,24 +585,32 @@ struct AssistantConfirmationCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 6) {
-                Image(systemName: write.isDestructive ? "trash.circle.fill" : "plus.circle.fill")
-                    .foregroundStyle(write.isDestructive ? .red : AppTheme.accent)
+            HStack(spacing: 8) {
+                Image(systemName: write.isDestructive ? "trash" : "plus.circle")
+                    .foregroundStyle(write.isDestructive ? AppTheme.destructiveText : .secondary)
                     .accessibilityHidden(true)
                 Text(write.confirmationTitle)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
 
             detail
 
             if isActive {
-                HStack(spacing: 10) {
+                VStack(spacing: 4) {
                     Button(write.confirmButtonTitle, action: onConfirm)
-                        .buttonStyle(.borderedProminent)
-                        .tint(write.isDestructive ? .red : AppTheme.accent)
-                    Button("Cancel", action: onDecline)
-                        .buttonStyle(.bordered)
+                        .buttonStyle(PrimaryButtonStyle(
+                            fill: write.isDestructive ? AppTheme.destructiveText : AppTheme.accentFill))
+                    Button(action: onDecline) {
+                        Text("Cancel")
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: AppTheme.minimumTapTarget)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
+                .padding(.top, 4)
             } else if isReplaced {
                 Label("Replaced by the updated card below", systemImage: "arrow.down")
                     .font(.caption)
@@ -646,13 +654,26 @@ struct AssistantConfirmationCard: View {
     }
 
     private func draftSummary(_ draft: FoodEntryDraft) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(draft.name).font(.subheadline.weight(.medium))
+        VStack(alignment: .leading, spacing: 8) {
+            // Name and amount on the left, calories on the right.
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(draft.name)
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("\(AppFormatters.quantity(draft.quantity, unit: draft.unit)) \(draft.unit.shortLabel)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 4)
-                Text("\(AppFormatters.quantity(draft.quantity, unit: draft.unit)) \(draft.unit.shortLabel)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(AppFormatters.amount(draft.total.calories))
+                        .font(.system(.title3, design: .rounded).weight(.heavy))
+                        .monospacedDigit()
+                    Text("kcal")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
             // Logged for another time, e.g. a shake "before midnight" after
             // midnight: shown so a wrong day is caught before saving.
@@ -662,7 +683,8 @@ struct AssistantConfirmationCard: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.accent)
             }
-            NutritionSummaryView(nutrition: draft.total)
+            // Calories are in the row above; the tiles add the macros.
+            NutritionSummaryView(nutrition: draft.total, showsCalories: false)
             if !draft.ingredients.isEmpty {
                 // The breakdown the total is built from, so a wrong amount is
                 // easy to spot before saving.
@@ -677,13 +699,14 @@ struct AssistantConfirmationCard: View {
                             Text("\(AppFormatters.amount(item.total.calories)) kcal")
                                 .gridColumnAlignment(.trailing)
                             Group {
+                                // Small tinted pills, as in the mockup.
                                 if item.provenance.isEstimate {
-                                    Text("est.")
-                                        .foregroundStyle(.orange)
+                                    sourcePill("est.", tint: AppTheme.color(for: .carbs),
+                                               text: AppTheme.textColor(for: .carbs))
                                         .accessibilityLabel("estimate")
                                 } else if item.provenance.isDeclared {
-                                    Text("label")
-                                        .foregroundStyle(AppTheme.within)
+                                    sourcePill("label", tint: AppTheme.within,
+                                               text: AppTheme.stateTextColor(for: .within))
                                         .accessibilityLabel(item.provenance.displayName)
                                 } else {
                                     Text("")
@@ -703,6 +726,15 @@ struct AssistantConfirmationCard: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func sourcePill(_ title: String, tint: Color, text: Color) -> some View {
+        Text(title)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(text)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.18), in: Capsule())
     }
 }
 
@@ -784,7 +816,7 @@ struct PhotoViewer: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
+            Color(hex: 0x141311).ignoresSafeArea()   // near-black, never pure #000
 
             TabView(selection: $selection) {
                 ForEach(images.indices, id: \.self) { index in
@@ -800,7 +832,7 @@ struct PhotoViewer: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color(hex: 0xF6F4EF))
                     .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
             }

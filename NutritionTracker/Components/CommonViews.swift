@@ -52,7 +52,7 @@ struct ErrorStateView: View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 30, weight: .light))
-                .foregroundStyle(.orange)
+                .foregroundStyle(AppTheme.over)
                 .accessibilityHidden(true)
             Text(title)
                 .font(.headline)
@@ -255,13 +255,13 @@ struct SliderEntryRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
-            HStack {
+        VStack(spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.system(.body, design: .rounded).weight(.semibold))
                 Spacer(minLength: 8)
                 Text(valueText)
-                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .font(.system(.title3, design: .rounded).weight(.heavy))
                     .foregroundStyle(AppTheme.accent)
                     .monospacedDigit()
             }

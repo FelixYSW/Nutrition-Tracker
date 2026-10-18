@@ -197,7 +197,8 @@ struct DaySummaryCard: View {
                     }
                 }
                 if let range, range.max > 0 {
-                    RangeBar(consumed: nutrition.calories, range: range, nutrient: .calories)
+                    RangeBar(consumed: nutrition.calories, range: range, nutrient: .calories,
+                             fill: AppTheme.accentFill, band: AppTheme.within)
                 }
             }
         }
@@ -284,12 +285,14 @@ struct FoodEntryCard: View {
             Button {
                 withAnimation(.snappy) { isExpanded.toggle() }
             } label: {
-                HStack(spacing: 4) {
-                    DisclosureChevron(isExpanded: isExpanded)
-                        .font(.caption2)
+                HStack(spacing: 6) {
                     Text(detailsLabel)
+                    DisclosureChevron(isExpanded: isExpanded)
+                        .font(.caption.weight(.bold))
                 }
-                .font(.footnote.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: AppTheme.minimumTapTarget)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
@@ -376,7 +379,7 @@ struct IngredientRow: View {
                 // carries the calories, so the row doesn't repeat them.
                 Button("Remove", role: .destructive, action: onDelete)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(AppTheme.destructiveText)
                     .buttonStyle(.plain)
                     .fixedSize()
                     .accessibilityLabel("Remove \(draft.name.isEmpty ? "ingredient" : draft.name)")
@@ -452,9 +455,9 @@ struct ConfidenceBadge: View {
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(isLow ? Color.orange.opacity(0.18) : Color.green.opacity(0.16),
+            .background(isLow ? AppTheme.over.opacity(0.16) : AppTheme.within.opacity(0.16),
                         in: Capsule())
-            .foregroundStyle(isLow ? Color.orange : Color.green)
+            .foregroundStyle(AppTheme.stateTextColor(for: isLow ? .over : .within))
             .accessibilityLabel(isLow ? "Low confidence, \(percent) percent"
                                       : "Confidence \(percent) percent")
         }

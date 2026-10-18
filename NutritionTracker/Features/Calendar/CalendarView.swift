@@ -456,9 +456,9 @@ struct CalendarMonthGrid: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            legendItem("In range", AppTheme.within.opacity(0.45))
+            legendItem("In range", AppTheme.within)
             legendItem("Under", AppTheme.stillToGo)
-            legendItem("Over max", AppTheme.over.opacity(0.45))
+            legendItem("Over", AppTheme.over)
         }
         .font(.caption2.weight(.semibold))
         .foregroundStyle(.secondary)
