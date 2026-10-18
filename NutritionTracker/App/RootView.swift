@@ -36,11 +36,29 @@ struct RootView: View {
         // Soft ink instead of pure black/white for all text that doesn't set
         // its own colour. `.secondary` and `.tertiary` derive from this.
         .foregroundStyle(AppTheme.ink)
-        .onAppear { _ = context.loadAppSettings() }
+        .onAppear {
+            _ = context.loadAppSettings()
+            refreshTargetsIfFormulaChanged()
+        }
         #if canImport(UIKit)
         // Tap anywhere outside a text field to close the keyboard.
         .background(TapToDismissKeyboard().allowsHitTesting(false))
         #endif
+    }
+
+    /// Bumped whenever the target maths changes, so existing users get the
+    /// new ranges once, on their next launch. Values edited by hand are kept.
+    /// 2: calorie floor on the range minimum, ranges kept on the goal's side
+    ///    of maintenance, protein from goal weight at a BMI of 30+.
+    static let targetFormulaVersion = 2
+    @AppStorage("targetFormulaVersion") private var appliedFormulaVersion = 1
+
+    private func refreshTargetsIfFormulaChanged() {
+        guard appliedFormulaVersion < Self.targetFormulaVersion else { return }
+        if let profile = profiles.first, !targets.isEmpty {
+            TargetUpdater.update(for: profile, in: context)
+        }
+        appliedFormulaVersion = Self.targetFormulaVersion
     }
 }
 

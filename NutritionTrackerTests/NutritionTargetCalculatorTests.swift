@@ -58,10 +58,11 @@ final class NutritionTargetCalculatorTests: XCTestCase {
 
     func testFatRespectsPerKgFloor() {
         // Low calorie subject so the energy share falls below the per-kg floor.
+        // BMI just under 30, so the floor uses body weight.
         let breakdown = NutritionTargetCalculator.calculate(
-            weightKg: 120, heightCm: 150, age: 70, sex: .female,
+            weightKg: 85, heightCm: 170, age: 70, sex: .female,
             goal: .loseWeight, activity: .sedentary)
-        let floor = 120 * NutritionConstants.fatMinimumGramsPerKg
+        let floor = 85 * NutritionConstants.fatMinimumGramsPerKg
         XCTAssertGreaterThanOrEqual(breakdown.ranges.fat.max, floor.rounded())
         XCTAssertEqual(breakdown.ranges.fat.midpoint, floor.rounded(), accuracy: 1)
     }
@@ -96,6 +97,64 @@ final class NutritionTargetCalculatorTests: XCTestCase {
             weightKg: 40, heightCm: 145, age: 80, sex: .female,
             goal: .loseWeight, activity: .sedentary)
         XCTAssertEqual(breakdown.caloriePointEstimate, NutritionConstants.minimumCalorieFloor)
+        // The floor holds for the whole range, not just its centre.
+        XCTAssertGreaterThanOrEqual(breakdown.ranges.calories.min,
+                                    NutritionConstants.minimumCalorieFloor)
+    }
+
+    func testMenHaveAHigherCalorieFloor() {
+        let breakdown = NutritionTargetCalculator.calculate(
+            weightKg: 50, heightCm: 155, age: 60, sex: .male,
+            goal: .loseWeight, activity: .sedentary)
+        XCTAssertGreaterThanOrEqual(breakdown.ranges.calories.min,
+                                    NutritionConstants.minimumCalorieFloorMale)
+        XCTAssertLessThanOrEqual(breakdown.ranges.calories.min, breakdown.ranges.calories.max)
+    }
+
+    /// Every day in a weight-loss range is a deficit, and every day in the
+    /// muscle-gain range a surplus.
+    func testRangesStayOnTheGoalsSideOfMaintenance() {
+        for activity in ActivityLevel.allCases {
+            for goal in [FitnessGoal.loseWeight, .recomposition] {
+                let breakdown = referenceBreakdown(goal: goal, activity: activity)
+                XCTAssertLessThan(breakdown.ranges.calories.max, breakdown.tdee,
+                                  "\(goal)/\(activity)")
+            }
+            let build = referenceBreakdown(goal: .buildMuscle, activity: activity)
+            XCTAssertGreaterThan(build.ranges.calories.min, build.tdee, "\(activity)")
+        }
+    }
+
+    /// 22-year-old woman, 163 cm, 100 kg (BMI ~37.6), aiming for 60 kg:
+    /// protein comes from the goal weight, and carbs keep a real minimum.
+    func testHighBMIUsesGoalWeightForProtein() {
+        let breakdown = NutritionTargetCalculator.calculate(
+            weightKg: 100, heightCm: 163, age: 22, sex: .female,
+            goal: .loseWeight, activity: .sedentary, targetWeightKg: 60)
+        XCTAssertEqual(breakdown.proteinWeightKg, 60)
+        XCTAssertEqual(breakdown.ranges.protein.min, 108)
+        XCTAssertEqual(breakdown.ranges.protein.max, 144)
+        XCTAssertGreaterThan(breakdown.ranges.carbs.min, 50,
+                             "used to be 0 g with protein from total weight")
+    }
+
+    func testHighBMIWithoutGoalUsesBMI25Weight() {
+        let breakdown = NutritionTargetCalculator.calculate(
+            weightKg: 100, heightCm: 163, age: 22, sex: .female,
+            goal: .loseWeight, activity: .sedentary)
+        XCTAssertEqual(breakdown.proteinWeightKg, 25 * 1.63 * 1.63, accuracy: 0.01)
+    }
+
+    func testProteinReferenceWeightRules() {
+        // Below BMI 30: body weight, whatever the goal.
+        XCTAssertEqual(NutritionTargetCalculator.proteinReferenceWeight(
+            weightKg: 80, heightCm: 180, targetWeightKg: 70), 80)
+        // A goal above current weight is ignored.
+        XCTAssertEqual(NutritionTargetCalculator.proteinReferenceWeight(
+            weightKg: 100, heightCm: 163, targetWeightKg: 110), 25 * 1.63 * 1.63, accuracy: 0.01)
+        // A very low goal is lifted to the BMI 18.5 weight.
+        XCTAssertEqual(NutritionTargetCalculator.proteinReferenceWeight(
+            weightKg: 100, heightCm: 163, targetWeightKg: 40), 18.5 * 1.63 * 1.63, accuracy: 0.01)
     }
 
     /// Strength/cardio counts are profile context only; the activity multiplier

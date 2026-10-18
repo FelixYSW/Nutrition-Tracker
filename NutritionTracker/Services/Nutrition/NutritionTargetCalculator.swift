@@ -25,8 +25,31 @@ enum NutritionConstants {
     static let buildMuscleMultiplier: Double = 1.10     // ~10% surplus
 
     /// Hard floor so an aggressive deficit on a small frame cannot produce an
-    /// unreasonably low calorie target.
+    /// unreasonably low calorie target. Applies to the whole range - its
+    /// minimum too, not just the centre - and is higher for men, following
+    /// the common "no lower than ~1,200 (women) / ~1,500 (men) kcal without
+    /// supervision" guidance.
     static let minimumCalorieFloor: Double = 1200
+    static let minimumCalorieFloorMale: Double = 1500
+
+    /// Weight-loss ranges stay below maintenance, and the muscle-gain range
+    /// above it, so every day "in range" moves towards the goal. Without
+    /// this the +/-7.5% band put the top of recomposition at ~99% of
+    /// maintenance and the bottom of muscle gain at ~102%.
+    static let deficitCeilingFraction: Double = 0.97
+    static let surplusFloorFraction: Double = 1.03
+
+    // MARK: Weight used for protein and the fat floor
+    //
+    // Per-kg guidance assumes a typical body composition. At a BMI of 30 or
+    // more, total weight overstates lean mass, and 1.8-2.4 g/kg of it gave
+    // e.g. 180-240 g of protein at 100 kg - more than needed, and enough to
+    // squeeze carbs to zero. Such users get per-kg targets from their goal
+    // weight instead (or, without one, the weight at BMI 25 for their height),
+    // never below the weight at BMI 18.5.
+    static let highBMIThreshold: Double = 30
+    static let referenceBMI: Double = 25
+    static let lowestReferenceBMI: Double = 18.5
 
     // MARK: Band widths (v2)
     //
@@ -92,7 +115,52 @@ enum NutritionTargetCalculator {
         var goalMultiplier: Double
         /// Calorie point estimate before the band is applied.
         var caloriePointEstimate: Double
+        /// Weight the per-kg protein and fat figures use: the body weight,
+        /// or for a BMI of 30+ the goal (or reference) weight.
+        var proteinWeightKg: Double
         var ranges: NutritionTargetRanges
+    }
+
+    // MARK: Safeguards
+
+    static func calorieFloor(for sex: BiologicalSex) -> Double {
+        sex == .male ? NutritionConstants.minimumCalorieFloorMale
+                     : NutritionConstants.minimumCalorieFloor
+    }
+
+    /// The weight per-kg protein and fat targets are based on. Body weight
+    /// below a BMI of 30; above it, the goal weight if one lower than now is
+    /// set, otherwise the weight at BMI 25 - never below the BMI 18.5 weight.
+    static func proteinReferenceWeight(weightKg: Double, heightCm: Double,
+                                       targetWeightKg: Double?) -> Double {
+        let heightM = heightCm / 100
+        guard heightM > 0, weightKg > 0 else { return weightKg }
+        let bmi = weightKg / (heightM * heightM)
+        guard bmi >= NutritionConstants.highBMIThreshold else { return weightKg }
+        let fallback = NutritionConstants.referenceBMI * heightM * heightM
+        let goal = targetWeightKg.flatMap { $0 > 0 && $0 < weightKg ? $0 : nil } ?? fallback
+        let lowest = NutritionConstants.lowestReferenceBMI * heightM * heightM
+        return min(weightKg, max(goal, lowest))
+    }
+
+    /// Keeps the calorie range on the right side of maintenance for the goal,
+    /// then applies the floor, which wins over everything else.
+    static func adjustedCalorieRange(_ range: NutrientRange, goal: FitnessGoal,
+                                     tdee: Double, sex: BiologicalSex) -> NutrientRange {
+        var low = range.min
+        var high = range.max
+        switch goal {
+        case .loseWeight, .recomposition:
+            high = min(high, (tdee * NutritionConstants.deficitCeilingFraction).rounded())
+        case .buildMuscle:
+            low = max(low, (tdee * NutritionConstants.surplusFloorFraction).rounded())
+        case .maintain:
+            break
+        }
+        let floor = calorieFloor(for: sex)
+        low = max(low, floor)
+        high = max(high, low)
+        return NutrientRange(min: low, max: high)
     }
 
     // MARK: BMR / TDEE
@@ -142,7 +210,8 @@ enum NutritionTargetCalculator {
                   age: profile.age(on: now, calendar: calendar),
                   sex: profile.sex,
                   goal: profile.goal,
-                  activity: profile.activity)
+                  activity: profile.activity,
+                  targetWeightKg: profile.targetWeightKg)
     }
 
     static func calculate(weightKg: Double,
@@ -150,28 +219,35 @@ enum NutritionTargetCalculator {
                           age: Int,
                           sex: BiologicalSex,
                           goal: FitnessGoal,
-                          activity: ActivityLevel) -> Breakdown {
+                          activity: ActivityLevel,
+                          targetWeightKg: Double? = nil) -> Breakdown {
 
         let safeWeight = max(1, weightKg)
         let bmr = basalMetabolicRate(weightKg: safeWeight, heightCm: max(1, heightCm),
                                      age: max(1, age), sex: sex)
         let tdee = totalDailyEnergyExpenditure(bmr: bmr, activity: activity)
         let multiplier = goalMultiplier(for: goal)
-        let caloriePoint = max(NutritionConstants.minimumCalorieFloor,
-                               (tdee * multiplier).rounded())
+        let caloriePoint = max(calorieFloor(for: sex), (tdee * multiplier).rounded())
 
-        // --- Calories: band around the point estimate.
-        let calorieRange = NutrientRange.band(around: caloriePoint,
-                                              fraction: NutritionConstants.calorieBandFraction)
+        // --- Calories: band around the point estimate, kept on the goal's
+        //     side of maintenance and never below the floor.
+        let calorieRange = adjustedCalorieRange(
+            NutrientRange.band(around: caloriePoint,
+                               fraction: NutritionConstants.calorieBandFraction),
+            goal: goal, tdee: tdee, sex: sex)
 
         // --- Protein: the guideline is already a range, so use it directly
-        //     instead of collapsing to a midpoint.
+        //     instead of collapsing to a midpoint. Per kg of the reference
+        //     weight, which differs from body weight only at a BMI of 30+.
+        let proteinWeight = proteinReferenceWeight(weightKg: safeWeight,
+                                                   heightCm: max(1, heightCm),
+                                                   targetWeightKg: targetWeightKg)
         let proteinPerKg = proteinGramsPerKg(for: goal)
-        let proteinRange = NutrientRange(min: (safeWeight * proteinPerKg.min).rounded(),
-                                         max: (safeWeight * proteinPerKg.max).rounded())
+        let proteinRange = NutrientRange(min: (proteinWeight * proteinPerKg.min).rounded(),
+                                         max: (proteinWeight * proteinPerKg.max).rounded())
 
         // --- Fat: the larger of a per-kg floor and a share of energy, banded.
-        let fatFromWeight = safeWeight * NutritionConstants.fatMinimumGramsPerKg
+        let fatFromWeight = proteinWeight * NutritionConstants.fatMinimumGramsPerKg
         let fatFromEnergy = caloriePoint * NutritionConstants.fatEnergyFraction
             / NutritionConstants.caloriesPerGramFat
         let fatPoint = max(fatFromWeight, fatFromEnergy).rounded()
@@ -208,6 +284,7 @@ enum NutritionTargetCalculator {
                          tdee: tdee,
                          goalMultiplier: multiplier,
                          caloriePointEstimate: caloriePoint,
+                         proteinWeightKg: proteinWeight,
                          ranges: ranges)
     }
 

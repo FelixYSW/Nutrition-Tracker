@@ -253,6 +253,15 @@ struct OnboardingView: View {
                               "\u{00D7}\(String(format: "%.2f", breakdown.goalMultiplier))")
                     detailRow("Calorie midpoint",
                               "\(AppFormatters.amount(breakdown.caloriePointEstimate)) kcal")
+                    if abs(breakdown.proteinWeightKg - input.weightKg) >= 0.5 {
+                        detailRow("Protein and fat based on",
+                                  "\(AppFormatters.amount(breakdown.proteinWeightKg)) kg")
+                        Text("At a BMI of 30 or more, per-kg targets use your goal "
+                             + "weight rather than your current weight.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .appCard()
             }
@@ -414,7 +423,8 @@ struct OnboardingInput {
                                                    age: max(1, years),
                                                    sex: sex,
                                                    goal: goal,
-                                                   activity: activity)
+                                                   activity: activity,
+                                                   targetWeightKg: hasTargetWeight ? targetWeightKg : nil)
     }
 
     func makeProfile() -> UserProfile {

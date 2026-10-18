@@ -465,6 +465,17 @@ struct ProfileEditorView: View {
                         SliderEntryRow(title: "Weight", value: $profile.weightKg,
                                        range: 30...200, step: 0.5, unitLabel: "kg",
                                        fractionDigits: 1)
+                        Toggle("I have a target weight", isOn: Binding(
+                            get: { profile.targetWeightKg != nil },
+                            set: { profile.targetWeightKg = $0 ? profile.weightKg : nil }))
+                            .tint(AppTheme.nativeSwitch)
+                        if profile.targetWeightKg != nil {
+                            SliderEntryRow(title: "Target weight", value: Binding(
+                                get: { profile.targetWeightKg ?? profile.weightKg },
+                                set: { profile.targetWeightKg = $0 }),
+                                           range: 30...200, step: 0.5, unitLabel: "kg",
+                                           fractionDigits: 1)
+                        }
                         Picker("Sex", selection: Binding(
                             get: { profile.sex }, set: { profile.sex = $0 })) {
                             ForEach(BiologicalSex.allCases) { Text($0.displayName).tag($0) }
@@ -521,6 +532,8 @@ struct TargetInputs: Equatable {
     let weightKg: Double
     let goal: FitnessGoal
     let activity: ActivityLevel
+    /// Sets protein and the fat floor at a BMI of 30 or more.
+    let targetWeightKg: Double?
 
     init(_ profile: UserProfile) {
         dateOfBirth = profile.dateOfBirth
@@ -529,6 +542,7 @@ struct TargetInputs: Equatable {
         weightKg = profile.weightKg
         goal = profile.goal
         activity = profile.activity
+        targetWeightKg = profile.targetWeightKg
     }
 }
 
