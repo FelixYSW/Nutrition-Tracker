@@ -110,10 +110,117 @@ struct NutritionRangeSummaryView: View {
 
     private func statusColor(value: Double, range: NutrientRange) -> Color {
         switch range.state(consumed: value) {
-        case .under: isComplete ? AppTheme.belowMinimum : .secondary
+        case .under: .secondary
         case .within: AppTheme.within
         case .over: AppTheme.over
         }
+    }
+}
+
+/// The selected day on the Calendar: the date, calories against the range with
+/// the flame from the app icon, and one tinted tile per macro.
+struct DaySummaryCard: View {
+    let date: Date
+    let nutrition: Nutrition
+    let ranges: NutritionTargetRanges?
+
+    private let macros: [Nutrient] = [.protein, .carbs, .fat, .fibre]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            calories
+            HStack(spacing: 8) {
+                ForEach(macros) { nutrient in
+                    tile(for: nutrient)
+                }
+            }
+        }
+        .appCard()
+    }
+
+    private var header: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(AppFormatters.weekdayName.string(from: date))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(AppFormatters.dayAndMonth.string(from: date))
+                    .font(.system(.title3, design: .rounded).weight(.heavy))
+            }
+            Spacer()
+            if LocalDay.isToday(date) {
+                Text("Today")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(AppTheme.onAccent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(AppTheme.accentFill, in: Capsule())
+            }
+        }
+    }
+
+    private var calories: some View {
+        let range = ranges?[.calories]
+        return HStack(spacing: 12) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 22))
+                .foregroundStyle(AppTheme.flame)
+                .frame(width: 48, height: 48)
+                .background(AppTheme.flame.opacity(0.14), in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(AppFormatters.amount(nutrition.calories))
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+                    Text("kcal")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 4)
+                    if let range, range.max > 0 {
+                        Text("range \(AppFormatters.range(range))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let range, range.max > 0 {
+                    RangeBar(consumed: nutrition.calories, range: range, nutrient: .calories)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func tile(for nutrient: Nutrient) -> some View {
+        let tint = AppTheme.color(for: nutrient)
+        return VStack(spacing: 3) {
+            Image(systemName: nutrient.symbolName)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+                .accessibilityHidden(true)
+            Text("\(AppFormatters.amount(nutrition[nutrient])) g")
+                .font(.system(.subheadline, design: .rounded).weight(.heavy))
+                .monospacedDigit()
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+            Text(nutrient.displayName)
+                .font(.caption2.weight(.semibold))
+            if let range = ranges?[nutrient], range.max > 0 {
+                Text(AppFormatters.range(range))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .minimumScaleFactor(0.8)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(tint.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityElement(children: .combine)
     }
 }
 

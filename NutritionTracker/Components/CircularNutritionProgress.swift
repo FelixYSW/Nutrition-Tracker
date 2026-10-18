@@ -121,18 +121,19 @@ struct CompactMacroRing: View {
                           lineWidth: 7)
                     .frame(width: 66, height: 66)
 
-                Text(AppFormatters.amount(consumed))
-                    .font(.system(.subheadline, design: .rounded).weight(.heavy))
-                    .monospacedDigit()
-                    .minimumScaleFactor(0.6)
-                    .lineLimit(1)
-                    .foregroundStyle(AppTheme.ink)
-                    .contentTransition(.numericText())
-                    .frame(width: 42)
+                Image(systemName: nutrient.symbolName)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(AppTheme.color(for: nutrient))
             }
 
             Text(nutrient.displayName)
                 .font(.footnote.weight(.bold))
+            Text("\(AppFormatters.amount(consumed)) \(nutrient.unitLabel)")
+                .font(.system(.subheadline, design: .rounded).weight(.heavy))
+                .monospacedDigit()
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+                .contentTransition(.numericText())
             VStack(spacing: 1) {
                 Text("\(AppFormatters.range(range)) \(nutrient.unitLabel)")
                 Text(rangeCaption(nutrient: nutrient, consumed: consumed, range: range))
@@ -161,14 +162,20 @@ struct CalorieHeroCard: View {
     let range: NutrientRange
 
     private var progress: Double { range.progress(consumed: consumed) }
-    private var tint: Color { AppTheme.color(for: .calories) }
+    /// The ring is ink, like the app icon; the flame inside carries the colour.
+    private var tint: Color { AppTheme.accentFill }
 
     var body: some View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Calories so far")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.skyCardText)
+                Label {
+                    Text("Calories so far")
+                } icon: {
+                    Image(systemName: "flame.fill")
+                        .foregroundStyle(AppTheme.flame)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.skyCardText)
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(AppFormatters.amount(consumed))
@@ -200,7 +207,7 @@ struct CalorieHeroCard: View {
                 RangeRing(progress: progress,
                           bandStart: range.bandFractions().start,
                           tint: tint,
-                          bandTint: AppTheme.color(for: .calories),
+                          bandTint: AppTheme.within,
                           lineWidth: 13,
                           trackColor: AppTheme.heroTrack)
                 ringCentre
@@ -222,9 +229,12 @@ struct CalorieHeroCard: View {
                 .font(.system(.title3, design: .rounded).weight(.heavy))
                 .foregroundStyle(.secondary)
         } else {
-            VStack(spacing: 0) {
+            VStack(spacing: 2) {
+                Image(systemName: "flame.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(AppTheme.flame)
                 Text("\(Int((consumed / max(range.min, 1) * 100).rounded()))%")
-                    .font(.system(.title3, design: .rounded).weight(.heavy))
+                    .font(.system(.footnote, design: .rounded).weight(.heavy))
                     .monospacedDigit()
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
