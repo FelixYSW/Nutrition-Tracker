@@ -36,13 +36,17 @@ enum AppTheme {
     /// explicit tint is needed because the app-wide accent tint would
     /// otherwise recolour them.
     static var nativeSwitch: Color { Color(.systemGreen) }
-    static var nativeSlider: Color { Color(.systemBlue) }
+    /// Exception: the slider fill is the ink, as in the mockups. It is still
+    /// the native Slider, only tinted.
+    static var nativeSlider: Color { accentFill }
 
     /// Page background: warm paper / soft charcoal.
     static var background: Color { .adaptive(light: 0xF3F1EC, dark: 0x1B1A18) }
     /// Cards sit one step lighter (light) or lighter-grey (dark) than the page.
     static var cardBackground: Color { .adaptive(light: 0xFAF9F6, dark: 0x252421) }
     static var subtleFill: Color { .adaptive(light: 0xE6E3DC, dark: 0x33312D) }
+    /// Hairline round cards, so they separate from the page without a shadow.
+    static var cardBorder: Color { .adaptive(light: 0xECE9E2, dark: 0x33312D) }
 
     /// Tinted card used for the hero summaries.
     static var skyCard: Color { .adaptive(light: 0xEAE7E0, dark: 0x2B2A27) }
@@ -61,6 +65,10 @@ enum AppTheme {
     /// The flame orange from the app icon. Used for calories wherever they are
     /// shown, so the number and the icon read as one thing.
     static let flame = Color(hex: 0xDB5A1F)
+
+    /// Text for destructive actions ("Delete all data"): a warm brick red
+    /// that keeps 4.5:1 contrast, instead of the system's bright red.
+    static var destructiveText: Color { .adaptive(light: 0xA8351C, dark: 0xF08A70) }
 
     /// Per-nutrient ring colours. Distinct in hue *and* order so they remain
     /// distinguishable for the common forms of colour vision deficiency; the
@@ -88,10 +96,37 @@ enum AppTheme {
         }
     }
 
-    /// Amber for a finished day or period that fell short of a minimum. The
-    /// minimum is a real target - eating too little is as off track as too
-    /// much - so it gets its own warning colour, distinct from "over" orange.
-    static var belowMinimum: Color { .adaptive(light: 0xB8901C, dark: 0xD9B44A) }
+    /// Darker (light mode) or lighter (dark mode) shade of a nutrient colour
+    /// for text, such as tile labels. The ring colours themselves fall below
+    /// 4.5:1 contrast as small text on the paper and their own tints.
+    static func textColor(for nutrient: Nutrient) -> Color {
+        switch nutrient {
+        case .calories: .adaptive(light: 0xB0441A, dark: 0xF2956A)
+        case .protein: .adaptive(light: 0x0B6B6D, dark: 0x5CC8CA)
+        case .carbs: .adaptive(light: 0x855F06, dark: 0xE2B850)
+        case .fat: .adaptive(light: 0x6A40C0, dark: 0xB9A0F2)
+        case .fibre: .adaptive(light: 0xA81E50, dark: 0xF07FA6)
+        }
+    }
+
+    /// Readable text for a state on its tinted pill: ink while under (which
+    /// is neutral), a deep green in range, a deep orange over.
+    static func stateTextColor(for state: RangeState) -> Color {
+        switch state {
+        case .under: ink
+        case .within: .adaptive(light: 0x2E6A44, dark: 0x9FD4B0)
+        case .over: .adaptive(light: 0xA4501B, dark: 0xF0A468)
+        }
+    }
+
+    /// Background for a status pill.
+    static func stateFill(for state: RangeState) -> Color {
+        switch state {
+        case .under: subtleFill
+        case .within: within.opacity(0.16)
+        case .over: over.opacity(0.16)
+        }
+    }
 
     /// Neutral grey for "under" while the day is still going.
     static var stillToGo: Color { .adaptive(light: 0xC2BEB6, dark: 0x58554F) }
@@ -158,8 +193,15 @@ extension AppTheme {
     /// set separately or they stay pure black / pure white.
     static func applyNavigationBarTextColour() {
         let ink = UIColor.adaptive(light: inkLight, dark: inkDark)
-        UINavigationBar.appearance().titleTextAttributes = [.foregroundColor: ink]
-        UINavigationBar.appearance().largeTitleTextAttributes = [.foregroundColor: ink]
+        func rounded(_ size: CGFloat, _ weight: UIFont.Weight) -> UIFont {
+            let base = UIFont.systemFont(ofSize: size, weight: weight)
+            guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+            return UIFont(descriptor: descriptor, size: size)
+        }
+        UINavigationBar.appearance().titleTextAttributes = [
+            .foregroundColor: ink, .font: rounded(17, .bold)]
+        UINavigationBar.appearance().largeTitleTextAttributes = [
+            .foregroundColor: ink, .font: rounded(32, .heavy)]
     }
 }
 #endif
@@ -173,6 +215,8 @@ private struct AppCard: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(AppTheme.cardBackground, in: RoundedRectangle(
                 cornerRadius: AppTheme.cornerRadius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous)
+                .stroke(AppTheme.cardBorder, lineWidth: 1))
     }
 }
 
@@ -230,8 +274,8 @@ extension View {
     fileprivate func appMaterial<S: Shape>(in shape: S) -> some View {
         self
             .background(.ultraThinMaterial, in: shape)
-            .overlay(shape.stroke(Color.white.opacity(0.45), lineWidth: 0.75))
-            .shadow(color: Color.black.opacity(0.10), radius: 14, y: 6)
+            .overlay(shape.stroke(Color(hex: 0xF6F4EF).opacity(0.45), lineWidth: 0.75))
+            .shadow(color: Color(hex: 0x2A2926).opacity(0.12), radius: 14, y: 6)
     }
 }
 
@@ -239,17 +283,19 @@ extension View {
 
 /// Filled sky-blue capsule with dark text.
 struct PrimaryButtonStyle: ButtonStyle {
+    /// Fill colour: the ink by default; a destructive confirmation passes red.
+    var fill: Color = AppTheme.accentFill
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(.body, design: .rounded).weight(.bold))
+            .font(.system(.body, design: .rounded).weight(.heavy))
             .foregroundStyle(isEnabled ? AppTheme.onAccent : Color.secondary)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity, minHeight: 56)
             .padding(.horizontal, 20)
             // Solid in both states. Fading the fill to show "disabled" made
             // the content behind the button show through it.
-            .background(isEnabled ? AppTheme.accentFill : AppTheme.subtleFill, in: Capsule())
+            .background(isEnabled ? fill : AppTheme.subtleFill, in: Capsule())
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.snappy(duration: 0.15), value: configuration.isPressed)
             .contentShape(Capsule())
@@ -380,5 +426,31 @@ struct AppLogoMark: View {
         .padding(size * 0.041)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Appearance
+
+/// Light or dark, or follow the system. Light is the default: the warm paper
+/// palette, with no pure white or pure black anywhere.
+enum AppAppearance: String, CaseIterable, Identifiable {
+    case light, dark, system
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .light: "Light"
+        case .dark: "Dark"
+        case .system: "System"
+        }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .light: .light
+        case .dark: .dark
+        case .system: nil
+        }
     }
 }

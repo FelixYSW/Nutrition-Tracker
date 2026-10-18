@@ -36,20 +36,30 @@ struct NutritionSummaryView: View {
         }
     }
 
+    /// A tinted tile per nutrient: its symbol, the amount and its name.
     private func cell(for nutrient: Nutrient) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(nutrient.displayName.uppercased())
+        let tint = AppTheme.color(for: nutrient)
+        return VStack(spacing: 3) {
+            Image(systemName: nutrient.symbolName)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .accessibilityHidden(true)
+            Text("\(AppFormatters.amount(nutrition[nutrient]))\(nutrient == .calories ? "" : "g")")
+                .font(.system(.subheadline, design: .rounded).weight(.heavy))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(nutrient == .calories ? "kcal" : nutrient.displayName)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .fixedSize()
-            Text("\(AppFormatters.amount(nutrition[nutrient]))\(nutrient == .calories ? "" : "g")")
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .monospacedDigit()
-                .lineLimit(1)
-                .fixedSize()
+                .minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 9)
+        .padding(.horizontal, 2)
+        .background(tint.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
@@ -187,7 +197,8 @@ struct DaySummaryCard: View {
                     }
                 }
                 if let range, range.max > 0 {
-                    RangeBar(consumed: nutrition.calories, range: range, nutrient: .calories)
+                    RangeBar(consumed: nutrition.calories, range: range, nutrient: .calories,
+                             fill: AppTheme.accentFill, band: AppTheme.within)
                 }
             }
         }
@@ -235,75 +246,87 @@ struct FoodEntryCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 Image(systemName: entry.source.symbolName)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(AppTheme.accent)
-                    .frame(width: 44, height: 44)
-                    .background(AppTheme.accentFill.opacity(0.2),
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(AppTheme.ink)
+                    .frame(width: 40, height: 40)
+                    .background(AppTheme.skyCard,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(entry.name)
-                        .font(.headline)
+                        .font(.system(.body, design: .rounded).weight(.bold))
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
                         Text(AppFormatters.time.string(from: entry.consumedAt))
                         Text("\u{00B7}")
                         Text("\(AppFormatters.quantity(entry.quantity, unit: entry.unit)) \(entry.unit.shortLabel)")
                     }
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 8)
 
-                Text("\(AppFormatters.amount(entry.total.calories)) kcal")
-                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                    .monospacedDigit()
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(AppFormatters.amount(entry.total.calories))
+                        .font(.system(.body, design: .rounded).weight(.heavy))
+                        .monospacedDigit()
+                    Text("kcal")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            // Calories are in the header; the row has every macro plus fibre.
-            NutritionSummaryView(nutrition: entry.total, showsFibre: true, showsCalories: false)
-
-            if entry.isComposite {
-                Button {
-                    withAnimation(.snappy) { isExpanded.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        DisclosureChevron(isExpanded: isExpanded)
-                            .font(.caption2)
-                        Text(isExpanded ? "Hide ingredients"
-                                        : "\(entry.ingredients.count) ingredients")
-                    }
-                    .font(.footnote.weight(.medium))
+            // Collapsed, a card is just name, time and calories. Opening it
+            // shows the macros and, for a composite food, its ingredients.
+            Button {
+                withAnimation(.snappy) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(detailsLabel)
+                    DisclosureChevron(isExpanded: isExpanded)
+                        .font(.caption.weight(.bold))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(AppTheme.accent)
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: AppTheme.minimumTapTarget)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
 
-                if isExpanded {
+            if isExpanded {
+                NutritionSummaryView(nutrition: entry.total, showsFibre: true, showsCalories: false)
+
+                if entry.isComposite {
                     // A grid, so every portion and every kcal figure lines up
                     // in its own right-aligned column whatever the name length.
-                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                         ForEach(entry.orderedIngredients) { ingredient in
                             GridRow(alignment: .firstTextBaseline) {
                                 Text(ingredient.name)
-                                    .font(.footnote)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(AppTheme.ink)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Text("\(AppFormatters.quantity(ingredient.quantity, unit: ingredient.unit))\(ingredient.unit.shortLabel)")
+                                    .foregroundStyle(.secondary)
                                     .gridColumnAlignment(.trailing)
                                 Text("\(AppFormatters.amount(ingredient.total.calories)) kcal")
+                                    .fontWeight(.semibold)
                                     .gridColumnAlignment(.trailing)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.footnote)
                             .monospacedDigit()
                             .accessibilityElement(children: .combine)
                         }
                     }
-                    .padding(.leading, 4)
+                    .padding(.top, 10)
+                    .overlay(alignment: .top) {
+                        Rectangle().fill(AppTheme.cardBorder).frame(height: 1)
+                    }
                 }
             }
         }
@@ -319,6 +342,13 @@ struct FoodEntryCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(entry.name), \(AppFormatters.amount(entry.total.calories)) calories")
+    }
+}
+
+extension FoodEntryCard {
+    fileprivate var detailsLabel: String {
+        if isExpanded { return entry.isComposite ? "Hide ingredients" : "Hide nutrition" }
+        return entry.isComposite ? "\(entry.ingredients.count) ingredients" : "Nutrition"
     }
 }
 
@@ -349,7 +379,7 @@ struct IngredientRow: View {
                 // carries the calories, so the row doesn't repeat them.
                 Button("Remove", role: .destructive, action: onDelete)
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(AppTheme.destructiveText)
                     .buttonStyle(.plain)
                     .fixedSize()
                     .accessibilityLabel("Remove \(draft.name.isEmpty ? "ingredient" : draft.name)")
@@ -425,9 +455,9 @@ struct ConfidenceBadge: View {
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(isLow ? Color.orange.opacity(0.18) : Color.green.opacity(0.16),
+            .background(isLow ? AppTheme.over.opacity(0.16) : AppTheme.within.opacity(0.16),
                         in: Capsule())
-            .foregroundStyle(isLow ? Color.orange : Color.green)
+            .foregroundStyle(AppTheme.stateTextColor(for: isLow ? .over : .within))
             .accessibilityLabel(isLow ? "Low confidence, \(percent) percent"
                                       : "Confidence \(percent) percent")
         }

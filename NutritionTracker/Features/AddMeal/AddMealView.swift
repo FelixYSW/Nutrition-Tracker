@@ -59,34 +59,52 @@ struct AddMealView: View {
                         addCard()
                     } label: {
                         Label("Add another food", systemImage: "plus")
-                            .frame(maxWidth: .infinity)
+                            .font(.system(.subheadline, design: .rounded).weight(.bold))
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                            .overlay(Capsule().strokeBorder(
+                                AppTheme.stillToGo,
+                                style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
+                            .contentShape(Capsule())
                     }
-                    .buttonStyle(.appSecondary)
+                    .buttonStyle(.plain)
 
-                    VStack(spacing: 14) {
-                        DatePicker("Eaten at", selection: mealTime,
-                                   in: ...Date.now.addingTimeInterval(60 * 60),
-                                   displayedComponents: [.date, .hourAndMinute])
-                            .font(.subheadline)
+                    DatePicker("Eaten at", selection: mealTime,
+                               in: ...Date.now.addingTimeInterval(60 * 60),
+                               displayedComponents: [.date, .hourAndMinute])
+                        .font(.subheadline.weight(.semibold))
+                        .appCard()
 
-                        // A single food's card already shows its total.
-                        if drafts.count > 1 {
-                            Divider()
-                            VStack(alignment: .leading, spacing: 10) {
-                                AppSectionHeading(title: "Meal total",
-                                                  trailing: "\(drafts.count) foods")
-                                NutritionSummaryView(nutrition: combinedTotal)
+                    // The whole meal's calories, always; the macro tiles join
+                    // them once there is more than one food to add up.
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Meal total")
+                                .font(.subheadline.weight(.heavy))
+                            if drafts.count > 1 {
+                                Text("\(drafts.count) foods")
+                                    .font(.caption)
+                                    .foregroundStyle(AppTheme.skyCardText)
                             }
+                            Spacer()
+                            Text(AppFormatters.amount(combinedTotal.calories))
+                                .font(.system(.title3, design: .rounded).weight(.heavy))
+                                .monospacedDigit()
+                            Text("kcal")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(AppTheme.skyCardText)
+                        }
+                        if drafts.count > 1 {
+                            NutritionSummaryView(nutrition: combinedTotal)
                         }
                     }
-                    .appCard()
+                    .appSkyCard()
                 }
                 .appPageContent()
             }
             .appPageSurface()
-            .navigationTitle("Add Meal")
+            .navigationTitle("Add meal")
             .keyboardDismissControls()
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .safeAreaInset(edge: .bottom) { saveBar }
             .alert("Could not save",
                    isPresented: Binding(get: { saveError != nil },
@@ -135,11 +153,11 @@ struct AddMealView: View {
             .buttonStyle(.appPrimary)
             .disabled(!canSave)
 
-            if !canSave {
-                Text("Give every food a name and some nutrition to save.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text(canSave
+                 ? "Nutrition and portions are estimates. Review before saving."
+                 : "Give every food a name and some nutrition to save.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(.horizontal, AppTheme.cardPadding + 4)
         .padding(.top, 12)
@@ -254,6 +272,7 @@ struct FoodDraftCard: View {
 
     @State private var showRemovePrompt = false
     @State private var expandedIngredient: UUID?
+    @State private var isEditingValues = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -261,17 +280,26 @@ struct FoodDraftCard: View {
             amountRow
             NutritionSummaryView(nutrition: draft.total)
 
-            Divider()
-
             // A composite food's nutrition comes from its ingredients, so it
             // has no label values of its own to edit.
             if draft.isComposite {
                 ingredientsSection
             } else {
-                NutritionEditor(nutrition: $draft.nutritionPerServing,
-                                servingSize: $draft.servingSize,
-                                unit: draft.unit,
-                                showsExtendedFields: true)
+                // Tucked behind a native disclosure once the food has values,
+                // open while it is still empty so there is somewhere to type.
+                DisclosureGroup(isExpanded: Binding(
+                    get: { isEditingValues || draft.nutritionPerServing == .zero },
+                    set: { isEditingValues = $0 })) {
+                    NutritionEditor(nutrition: $draft.nutritionPerServing,
+                                    servingSize: $draft.servingSize,
+                                    unit: draft.unit,
+                                    showsExtendedFields: true)
+                        .padding(.top, 8)
+                } label: {
+                    Text("Label values")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .tint(AppTheme.accent)
             }
 
             if showsTimePicker {

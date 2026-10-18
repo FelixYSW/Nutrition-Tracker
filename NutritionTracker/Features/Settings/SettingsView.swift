@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var exportURL: URL?
     @State private var importSummary: String?
     @State private var alertMessage: String?
+    @AppStorage("appearance") private var appearance = AppAppearance.light.rawValue
     @State private var isConfirmingDeleteAll = false
     @State private var isConfirmingImport: BackupFile?
 
@@ -29,21 +30,24 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // Tinted, like the mockup's plan card.
+                summarySection
                 Group {
-                    summarySection
                     planSection
+                    appearanceSection
                     privacySection
                     backupSection
                     aboutSection
-                    deleteSection
                 }
                 // Soft card rows instead of the system's pure white.
                 .listRowBackground(AppTheme.cardBackground)
+                // Clear row: the button draws its own outlined capsule.
+                deleteSection
             }
             .scrollContentBackground(.hidden)
             .background(AppTheme.background.ignoresSafeArea())
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
@@ -111,10 +115,9 @@ struct SettingsView: View {
                 if profile != nil { isShowingProfileEditor = true }
             } label: {
                 HStack(spacing: 14) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.system(size: 44))
-                        .foregroundStyle(AppTheme.skyCardText)
-                        .accessibilityHidden(true)
+                    AppLogoMark(size: 52)
+                        .background(AppTheme.skyCard, in: RoundedRectangle(
+                            cornerRadius: 14, style: .continuous))
                     VStack(alignment: .leading, spacing: 3) {
                         if let profile {
                             Text(profile.goal.displayName)
@@ -145,6 +148,7 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Edit profile")
+            .listRowBackground(AppTheme.skyCard)
         }
     }
 
@@ -152,7 +156,7 @@ struct SettingsView: View {
 
     private var planSection: some View {
         Section {
-            SettingsRow(title: "Profile", systemImage: "figure.walk",
+            SettingsRow(title: "Profile", systemImage: "person",
                         detail: profile.map { "Goal, body and activity \u{00B7} \($0.age()) yrs" }) {
                 isShowingProfileEditor = true
             }
@@ -177,6 +181,22 @@ struct SettingsView: View {
         return edited == 0 ? "Calculated for you" : "\(edited) edited by you"
     }
 
+    // MARK: Appearance
+
+    private var appearanceSection: some View {
+        Section {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppAppearance.allCases) { Text($0.displayName).tag($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Light uses a warm paper palette, soft charcoal text and no pure "
+                 + "white or black, which is easier on the eyes.")
+        }
+    }
+
     // MARK: Photos and privacy
 
     private var privacySection: some View {
@@ -188,14 +208,14 @@ struct SettingsView: View {
                     if !newValue { ImageStore.deleteAll() }
                     save()
                 })) {
-                Label("Keep analysed photos", systemImage: "photo")
+                SettingsLabel("Keep analysed photos", systemImage: "photo")
             }
             .tint(AppTheme.nativeSwitch)
 
             Toggle(isOn: Binding(
                 get: { settings.storeCorrectionsForTraining },
                 set: { settings.storeCorrectionsForTraining = $0; save() })) {
-                Label("Save my corrections", systemImage: "checkmark.bubble")
+                SettingsLabel("Save my corrections", systemImage: "checkmark")
             }
             .tint(AppTheme.nativeSwitch)
         } header: {
@@ -212,10 +232,10 @@ struct SettingsView: View {
     private var backupSection: some View {
         Section {
             Button { exportBackup() } label: {
-                Label("Export backup", systemImage: "square.and.arrow.up")
+                SettingsLabel("Export backup", systemImage: "square.and.arrow.up")
             }
             Button { isShowingImporter = true } label: {
-                Label("Import backup", systemImage: "square.and.arrow.down")
+                SettingsLabel("Import backup", systemImage: "square.and.arrow.down")
             }
         } header: {
             Text("Backup")
@@ -232,12 +252,12 @@ struct SettingsView: View {
             NavigationLink {
                 AttributionView()
             } label: {
-                Label("Data sources and licences", systemImage: "books.vertical")
+                SettingsLabel("Data sources and licences", systemImage: "books.vertical")
             }
             LabeledContent {
                 Text(Self.versionString).monospacedDigit()
             } label: {
-                Label("Version", systemImage: "info.circle")
+                SettingsLabel("Version", systemImage: "info.circle")
             }
         } header: {
             Text("About")
@@ -252,12 +272,20 @@ struct SettingsView: View {
     /// On its own at the bottom, away from everyday options.
     private var deleteSection: some View {
         Section {
+            // An outlined capsule on the page rather than a list row.
             Button(role: .destructive) {
                 isConfirmingDeleteAll = true
             } label: {
                 Text("Delete all data")
-                    .frame(maxWidth: .infinity)
+                    .font(.system(.body, design: .rounded).weight(.bold))
+                    .foregroundStyle(AppTheme.destructiveText)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .overlay(Capsule().stroke(AppTheme.destructiveText.opacity(0.3), lineWidth: 1))
+                    .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
         }
     }
 
@@ -339,6 +367,40 @@ struct SettingsView: View {
 
 /// A tappable Settings row: icon, title, optional one-line subtitle, chevron.
 /// Opens its editor as a sheet, so it is a button styled like a navigation row.
+/// The 32 pt tinted tile every Settings row's symbol sits in.
+struct SettingsIconTile: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(AppTheme.ink)
+            .frame(width: 32, height: 32)
+            .background(AppTheme.skyCard, in: RoundedRectangle(
+                cornerRadius: 9, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
+/// A Settings row title with its icon tile, for toggles and plain buttons.
+struct SettingsLabel: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            SettingsIconTile(systemImage: systemImage)
+        }
+    }
+}
+
 struct SettingsRow: View {
     let title: String
     let systemImage: String
@@ -360,7 +422,7 @@ struct SettingsRow: View {
                         }
                     }
                 } icon: {
-                    Image(systemName: systemImage)
+                    SettingsIconTile(systemImage: systemImage)
                 }
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.right")

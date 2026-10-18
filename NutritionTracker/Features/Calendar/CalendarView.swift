@@ -53,7 +53,7 @@ struct CalendarView: View {
             }
             .appPageSurface()
             .navigationTitle("Calendar")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.large)
             .sheet(item: $editingDraft) { draft in
                 EditEntrySheet(draft: draft)
             }
@@ -456,9 +456,9 @@ struct CalendarMonthGrid: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            legendItem("In range", AppTheme.within.opacity(0.45))
+            legendItem("In range", AppTheme.within)
             legendItem("Under", AppTheme.stillToGo)
-            legendItem("Over max", AppTheme.over.opacity(0.45))
+            legendItem("Over", AppTheme.over)
         }
         .font(.caption2.weight(.semibold))
         .foregroundStyle(.secondary)

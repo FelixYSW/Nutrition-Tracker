@@ -79,11 +79,13 @@ struct DashboardView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Text(AppFormatters.dayAndMonth.string(from: today))
-                    .font(.system(.title, design: .rounded).weight(.heavy))
+                    .font(.system(.largeTitle, design: .rounded).weight(.heavy))
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
                     .contentTransition(.numericText())
             }
             Spacer()
-            GlassIconButton(systemImage: "person.crop.circle",
+            GlassIconButton(systemImage: "person",
                             label: "Settings") {
                 isShowingSettings = true
             }
@@ -106,6 +108,8 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
         .background(AppTheme.cardBackground, in: RoundedRectangle(
             cornerRadius: AppTheme.cornerRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: AppTheme.cornerRadius, style: .continuous)
+            .stroke(AppTheme.cardBorder, lineWidth: 1))
     }
 
     private var entriesSection: some View {
@@ -146,6 +150,10 @@ struct RangeBar: View {
     let consumed: Double
     let range: NutrientRange
     let nutrient: Nutrient
+    /// Fill and in-range band colours. Default to the nutrient's own; the
+    /// calorie bars use an ink fill on a green band, like the calorie ring.
+    var fill: Color?
+    var band: Color?
 
     var body: some View {
         let state = range.state(consumed: consumed)
@@ -159,12 +167,12 @@ struct RangeBar: View {
 
                 // Shaded in-range zone.
                 Capsule()
-                    .fill(AppTheme.color(for: nutrient).opacity(0.22))
+                    .fill((band ?? AppTheme.color(for: nutrient)).opacity(band == nil ? 0.22 : 0.35))
                     .frame(width: max(0, width * (1 - fractions.start)))
                     .offset(x: width * fractions.start)
 
                 Capsule()
-                    .fill(AppTheme.color(for: state, nutrient: nutrient))
+                    .fill(fill ?? AppTheme.color(for: state, nutrient: nutrient))
                     .frame(width: max(2, width * min(1, range.progress(consumed: consumed))))
             }
         }

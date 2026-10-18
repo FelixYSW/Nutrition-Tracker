@@ -62,22 +62,17 @@ struct TrendsView: View {
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(scale.plotsDailyAverage
-                         ? "Daily average per \(scale == .weekly ? "week" : "month")"
-                         : "Per day")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if range.max > 0 {
-                        Label("Target band", systemImage: "rectangle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(AppTheme.color(for: nutrient).opacity(0.5))
-                    }
-                }
-                Spacer()
+                Text(chartCaption)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
                 // The nutrient lives with the chart it changes.
                 Picker("Nutrient", selection: $nutrient) {
-                    ForEach(Nutrient.allCases) { Text($0.displayName).tag($0) }
+                    ForEach(Nutrient.allCases) { nutrient in
+                        Label(nutrient.displayName, systemImage: nutrient.symbolName)
+                            .tag(nutrient)
+                    }
                 }
                 .pickerStyle(.menu)
                 .tint(AppTheme.accent)
@@ -94,15 +89,8 @@ struct TrendsView: View {
                         xEnd: .value("End", last),
                         yStart: .value("Minimum", range.min),
                         yEnd: .value("Maximum", range.max))
-                        .foregroundStyle(AppTheme.color(for: nutrient).opacity(0.14))
-
-                    RuleMark(y: .value("Minimum", range.min))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .foregroundStyle(AppTheme.color(for: nutrient).opacity(0.5))
-
-                    RuleMark(y: .value("Maximum", range.max))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .foregroundStyle(AppTheme.color(for: nutrient).opacity(0.5))
+                        // Green, like the in-range bars it holds.
+                        .foregroundStyle(AppTheme.within.opacity(0.2))
                 }
 
                 ForEach(buckets) { bucket in
@@ -112,15 +100,13 @@ struct TrendsView: View {
                             x: .value(scale.displayName, bucket.interval.start,
                                       unit: scale.calendarComponent),
                             y: .value(nutrient.displayName, value))
-                            // Short of the minimum is amber once the period is
-                            // over; the current day or week is still grey.
+                            // Green in range, orange over, neutral grey under.
                             .foregroundStyle(
-                                AppTheme.summaryColor(for: range.state(consumed: value),
-                                                      isComplete: !bucket.interval.contains(.now)))
+                                AppTheme.summaryColor(for: range.state(consumed: value)))
                             // A sparse bucket is drawn hollow-ish so an average
                             // over two logged days is not read as a full week.
                             .opacity(bucket.isSparse ? 0.45 : 1)
-                            .cornerRadius(3)
+                            .cornerRadius(6)
                     }
                 }
             }
@@ -153,6 +139,10 @@ struct TrendsView: View {
             }
             .accessibilityLabel("\(nutrient.displayName) \(scale.displayName) trend")
 
+            if range.max > 0 {
+                legend
+            }
+
             if buckets.contains(where: \.isSparse) {
                 Text("Faded bars cover periods where fewer than half the days "
                      + "were logged, so the average is only partial.")
@@ -162,6 +152,46 @@ struct TrendsView: View {
             }
         }
         .appCard()
+    }
+
+    /// "Per day · last 14 days", "Daily average per week · last 8 weeks".
+    private var chartCaption: String {
+        let count = scale.bucketCount
+        switch scale {
+        case .daily: return "Per day \u{00B7} last \(count) days"
+        case .weekly: return "Daily average per week \u{00B7} last \(count) weeks"
+        case .monthly: return "Daily average per month \u{00B7} last \(count) months"
+        }
+    }
+
+    /// What the band and each bar colour mean. Wraps at large text sizes.
+    private var legend: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) { legendItems }
+            VStack(alignment: .leading, spacing: 6) { legendItems }
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var legendItems: some View {
+        HStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 2).fill(AppTheme.within.opacity(0.35))
+                .frame(width: 14, height: 10)
+            Text("Target band")
+        }
+        legendDot("In range", AppTheme.within)
+        legendDot("Under", AppTheme.stillToGo)
+        legendDot("Over", AppTheme.over)
+    }
+
+    private func legendDot(_ title: String, _ color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 10, height: 10)
+            Text(title)
+        }
     }
 
     /// The bar a tap belongs to: the one whose period contains it, else the
@@ -187,7 +217,9 @@ struct TrendsView: View {
                                           range: range, scale: scale)
         let unit = scale == .daily ? "day" : (scale == .weekly ? "week" : "month")
 
-        return VStack(alignment: .leading, spacing: 10) {
+        // The heading sits on the page and each count is its own card, as in
+        // the mockup.
+        return VStack(alignment: .leading, spacing: 12) {
             AppSectionHeading(title: "Summary")
 
             if range.max <= 0 {
@@ -195,10 +227,13 @@ struct TrendsView: View {
                      + "these compare.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .appCard()
             } else {
-                summaryRow(state: .within, count: tally.within, unit: unit)
-                summaryRow(state: .under, count: tally.under, unit: unit)
-                summaryRow(state: .over, count: tally.over, unit: unit)
+                HStack(spacing: 10) {
+                    summaryTile(state: .within, count: tally.within, unit: unit)
+                    summaryTile(state: .over, count: tally.over, unit: unit)
+                    summaryTile(state: .under, count: tally.under, unit: unit)
+                }
 
                 if tally.noData > 0 {
                     Text("\(tally.noData) \(unit)\(tally.noData == 1 ? "" : "s") with "
@@ -208,30 +243,38 @@ struct TrendsView: View {
                 }
             }
         }
-        .appCard()
     }
 
-    private func summaryRow(state: RangeState, count: Int, unit: String) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(AppTheme.summaryColor(for: state))
-                .frame(width: 8, height: 8)
-                .accessibilityHidden(true)
-            Text(label(for: state))
-                .font(.footnote)
-            Spacer(minLength: 4)
-            Text("\(count) \(unit)\(count == 1 ? "" : "s")")
-                .font(.footnote.weight(.medium))
+    /// A big count with what it counts underneath: "7 days in range". The
+    /// number takes the state's colour (a deep shade, for contrast).
+    private func summaryTile(state: RangeState, count: Int, unit: String) -> some View {
+        VStack(spacing: 2) {
+            Text("\(count)")
+                .font(.system(.title, design: .rounded).weight(.heavy))
                 .monospacedDigit()
+                .foregroundStyle(AppTheme.stateTextColor(for: state))
+            Text("\(unit)\(count == 1 ? "" : "s") \(tileLabel(for: state))")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .padding(.horizontal, 6)
+        .background(AppTheme.cardBackground,
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+            .stroke(AppTheme.cardBorder, lineWidth: 1))
         .accessibilityElement(children: .combine)
     }
 
-    private func label(for state: RangeState) -> String {
+    private func tileLabel(for state: RangeState) -> String {
         switch state {
-        case .under: "Below the minimum"
-        case .within: "In range"
-        case .over: "Above the maximum"
+        case .under: "under"
+        case .within: "in range"
+        case .over: "over"
         }
     }
 }
