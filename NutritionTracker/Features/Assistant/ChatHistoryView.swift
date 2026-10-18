@@ -22,7 +22,9 @@ struct ChatHistoryView: View {
                                    systemImage: "clock.arrow.circlepath")
                 } else {
                     List {
-                        ForEach(conversations) { conversation in
+                        ForEach(groups, id: \.title) { group in
+                        Section(group.title) {
+                        ForEach(group.items) { conversation in
                             Button {
                                 onOpen(conversation)
                                 dismiss()
@@ -40,6 +42,8 @@ struct ChatHistoryView: View {
                                     }
                                 }
                             }
+                        }
+                        }
                         }
                     }
                     .scrollContentBackground(.hidden)
@@ -73,6 +77,27 @@ struct ChatHistoryView: View {
             }
         }
         .onAppear { conversations = store.all() }
+    }
+
+    /// Newest first, under Today, Yesterday, This week and Earlier headings.
+    private var groups: [(title: String, items: [SavedConversation])] {
+        let calendar = Calendar.autoupdatingCurrent
+        let weekAgo = calendar.date(byAdding: .day, value: -7, to: .now) ?? .distantPast
+        func title(for date: Date) -> String {
+            if calendar.isDateInToday(date) { return "Today" }
+            if calendar.isDateInYesterday(date) { return "Yesterday" }
+            return date >= weekAgo ? "This week" : "Earlier"
+        }
+        var result: [(title: String, items: [SavedConversation])] = []
+        for conversation in conversations {
+            let name = title(for: conversation.updatedAt)
+            if let index = result.firstIndex(where: { $0.title == name }) {
+                result[index].items.append(conversation)
+            } else {
+                result.append((title: name, items: [conversation]))
+            }
+        }
+        return result
     }
 
     private func row(for conversation: SavedConversation) -> some View {

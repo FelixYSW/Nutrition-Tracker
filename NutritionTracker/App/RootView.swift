@@ -5,6 +5,8 @@ struct RootView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppRouter.self) private var router
 
+    @AppStorage("appearance") private var appearance = AppAppearance.light.rawValue
+
     @Query private var profiles: [UserProfile]
     @Query private var targets: [NutritionTarget]
 
@@ -27,6 +29,7 @@ struct RootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppTheme.background.ignoresSafeArea())
         .tint(AppTheme.accent)
+        .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
         // Soft ink instead of pure black/white for all text that doesn't set
         // its own colour. `.secondary` and `.tertiary` derive from this.
         .foregroundStyle(AppTheme.ink)
