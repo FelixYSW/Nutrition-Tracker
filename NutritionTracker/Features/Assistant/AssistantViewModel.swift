@@ -145,7 +145,7 @@ final class AssistantViewModel {
     @MainActor
     static func make(context: ModelContext) -> AssistantViewModel {
         let service: AssistantServing = BundledAPIKey.hasAssistantKey
-            ? OpenAICompatibleAssistantService()
+            ? OpenAIAssistantService()
             : UnconfiguredAssistantService()
 
         // Photos go straight to the assistant's model: the app no longer runs

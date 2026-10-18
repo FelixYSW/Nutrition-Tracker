@@ -137,32 +137,34 @@ final class AssistantArgumentParsingTests: XCTestCase {
     }
 }
 
-// MARK: - Provider response decoding
+// MARK: - Provider response decoding (OpenAI Responses API)
 
 final class AssistantResponseDecodingTests: XCTestCase {
 
     private func decode(_ json: String) throws -> AssistantResponse {
-        try OpenAICompatibleAssistantService.decode(data: Data(json.utf8))
+        try OpenAIAssistantService.decode(data: Data(json.utf8))
     }
 
     func testDecodesTextAndToolCall() throws {
         let response = try decode("""
-        {"choices": [{"message": {"role": "assistant", "content": "I can log that.",
-          "tool_calls": [{"id": "call_1", "type": "function", "function": {
-            "name": "addFoodEntry",
-            "arguments": "{\\"name\\": \\"Nasi Lemak\\", \\"calories\\": 650, \\"quantity\\": 1}"}}]}}]}
+        {"output": [
+          {"type": "reasoning", "id": "rs_1", "summary": []},
+          {"type": "message", "role": "assistant", "content": [
+            {"type": "output_text", "text": "I can log that.", "annotations": []}]},
+          {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "addFoodEntry",
+           "arguments": "{\\"name\\": \\"Nasi Lemak\\", \\"calories\\": 650, \\"quantity\\": 1}"}]}
         """)
         XCTAssertEqual(response.text, "I can log that.")
         XCTAssertEqual(response.toolCalls.count, 1)
-        XCTAssertEqual(response.toolCalls[0].id, "call_1")
+        XCTAssertEqual(response.toolCalls[0].id, "call_1", "the call_id, not the item id")
         XCTAssertEqual(response.toolCalls[0].tool, .addFoodEntry)
         XCTAssertEqual(response.toolCalls[0].arguments["calories"], .number(650))
     }
 
     func testArgumentsAsObjectAreAccepted() throws {
         let response = try decode("""
-        {"choices": [{"message": {"tool_calls": [{"id": "c", "function": {
-          "name": "getTrends", "arguments": {"timeframe": "weekly"}}}]}}]}
+        {"output": [{"type": "function_call", "call_id": "c", "name": "getTrends",
+          "arguments": {"timeframe": "weekly"}}]}
         """)
         XCTAssertEqual(response.toolCalls.first?.arguments["timeframe"], .string("weekly"))
         XCTAssertNil(response.text)
@@ -170,18 +172,16 @@ final class AssistantResponseDecodingTests: XCTestCase {
 
     func testHallucinatedToolNameIsDropped() throws {
         let response = try decode("""
-        {"choices": [{"message": {"tool_calls": [{"id": "t", "function": {
-          "name": "orderPizza", "arguments": "{}"}}]}}]}
+        {"output": [
+          {"type": "message", "content": [{"type": "output_text", "text": "Hmm."}]},
+          {"type": "function_call", "call_id": "t", "name": "orderPizza", "arguments": "{}"}]}
         """)
         XCTAssertTrue(response.toolCalls.isEmpty)
     }
 
-    /// Some compatible APIs omit tool call ids; one is generated so the result
-    /// can still be paired with its call.
-    func testMissingToolCallIdIsGenerated() throws {
+    func testMissingCallIdIsGenerated() throws {
         let response = try decode("""
-        {"choices": [{"message": {"tool_calls": [{"function": {
-          "name": "queryEntries", "arguments": "{}"}}]}}]}
+        {"output": [{"type": "function_call", "name": "queryEntries", "arguments": "{}"}]}
         """)
         XCTAssertEqual(response.toolCalls.count, 1)
         XCTAssertFalse(response.toolCalls[0].id.isEmpty)
@@ -189,192 +189,135 @@ final class AssistantResponseDecodingTests: XCTestCase {
 
     func testMalformedArgumentsBecomeEmpty() throws {
         let response = try decode("""
-        {"choices": [{"message": {"tool_calls": [{"id": "c", "function": {
-          "name": "queryEntries", "arguments": "{not json"}}]}}]}
+        {"output": [{"type": "function_call", "call_id": "c", "name": "queryEntries",
+          "arguments": "{not json"}]}
         """)
         XCTAssertEqual(response.toolCalls.first?.arguments, [:])
     }
 
-    func testMalformedEnvelopeThrows() {
+    func testMalformedOrEmptyReplyThrows() {
         XCTAssertThrowsError(try decode("{\"nope\": 1}")) {
             guard case .malformedResponse = $0 as? AssistantServiceError else {
                 return XCTFail("expected malformedResponse")
             }
         }
-        XCTAssertThrowsError(try decode("{\"choices\": []}"))
+        // Only reasoning, no message or call: nothing to show.
+        XCTAssertThrowsError(try decode(#"{"output": [{"type": "reasoning"}]}"#))
     }
 }
 
-/// When Google retires a model name, the service picks a current one from the
-/// provider's model list instead of failing with HTTP 404.
-final class AssistantModelDiscoveryTests: XCTestCase {
+final class AssistantProviderStatusTests: XCTestCase {
 
-    /// Flash-Lite first, for its much higher free daily limit on the shared key.
-    func testPrefersNewestStableFlashLite() {
-        let picked = OpenAICompatibleAssistantService.pickModel(from: [
-            "models/gemini-3.8-flash",
-            "models/gemini-3.0-flash-lite",
-            "models/gemini-3.5-flash-lite",
-            "models/gemini-3.9-flash-lite-preview",
-            "models/gemini-3.0-pro",
-            "models/text-embedding-004"
-        ], excluding: "gemini-2.5-flash-lite")
-        XCTAssertEqual(picked, "gemini-3.5-flash-lite")
-    }
-
-    func testFallsBackToNewestStableFlashWithoutLite() {
-        let picked = OpenAICompatibleAssistantService.pickModel(from: [
-            "models/gemini-2.5-flash",
-            "models/gemini-3.0-flash",
-            "models/gemini-3.1-flash-preview",
-            "models/gemini-3.0-pro"
-        ], excluding: "x")
-        XCTAssertEqual(picked, "gemini-3.0-flash")
-    }
-
-    func testDefaultIsFlashLite() {
-        XCTAssertTrue(OpenAICompatibleAssistantService.defaultModel.contains("flash-lite"))
-    }
-
-    func testNeverReturnsTheModelThatJustFailed() {
-        let picked = OpenAICompatibleAssistantService.pickModel(
-            from: ["gemini-2.5-flash", "gemini-2.5-pro"], excluding: "gemini-2.5-flash")
-        XCTAssertEqual(picked, "gemini-2.5-pro")
-    }
-
-    func testSkipsSpecialisedModels() {
-        let picked = OpenAICompatibleAssistantService.pickModel(from: [
-            "gemini-3.0-flash-image", "gemini-3.0-flash-tts", "gemini-embedding-001",
-            "gemini-3.0-flash-live", "gemini-2.0-flash"
-        ], excluding: "x")
-        XCTAssertEqual(picked, "gemini-2.0-flash")
-    }
-
-    func testNoSuitableModelReturnsNil() {
-        XCTAssertNil(OpenAICompatibleAssistantService.pickModel(
-            from: ["text-embedding-004", "imagen-4"], excluding: "x"))
+    func testDefaultsAreGPT6LunaAtLowEffort() {
+        XCTAssertEqual(OpenAIAssistantService.defaultModel, "gpt-6-luna")
+        XCTAssertEqual(OpenAIAssistantService.reasoningEffort, "low")
+        XCTAssertEqual(OpenAIAssistantService.defaultBaseURL, "https://api.openai.com/v1")
     }
 
     func testStatusMapping() {
-        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 404, model: "m")) {
+        XCTAssertThrowsError(try OpenAIAssistantService.check(status: 404, model: "m")) {
             XCTAssertEqual($0 as? AssistantServiceError, .modelUnavailable(model: "m"))
         }
-        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 429, model: "m")) {
+        XCTAssertThrowsError(try OpenAIAssistantService.check(status: 429, model: "m")) {
             XCTAssertEqual($0 as? AssistantServiceError, .rateLimited)
         }
-        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 503, model: "m")) {
+        XCTAssertThrowsError(try OpenAIAssistantService.check(status: 503, model: "m")) {
             XCTAssertEqual($0 as? AssistantServiceError, .providerBusy(status: 503))
         }
-        XCTAssertNoThrow(try OpenAICompatibleAssistantService.check(status: 200, model: "m"))
+        XCTAssertNoThrow(try OpenAIAssistantService.check(status: 200, model: "m"))
     }
 
     /// Overloaded-server responses are retried; client errors are not.
     func testOnlyServerOverloadIsRetried() {
         for status in [500, 502, 503, 504] {
-            XCTAssertTrue(OpenAICompatibleAssistantService.isTransient(status), "\(status)")
+            XCTAssertTrue(OpenAIAssistantService.isTransient(status), "\(status)")
         }
         for status in [200, 400, 401, 404, 429] {
-            XCTAssertFalse(OpenAICompatibleAssistantService.isTransient(status), "\(status)")
+            XCTAssertFalse(OpenAIAssistantService.isTransient(status), "\(status)")
         }
-    }
-}
-
-/// Gemini attaches a thought signature to each tool call and rejects the
-/// follow-up request (HTTP 400) unless it is sent back unchanged.
-final class AssistantThoughtSignatureTests: XCTestCase {
-
-    func testSignatureIsKeptWhenDecoding() throws {
-        let response = try OpenAICompatibleAssistantService.decode(data: Data("""
-        {"choices": [{"message": {"tool_calls": [{"id": "c1", "type": "function",
-          "function": {"name": "addFoodEntry", "arguments": "{\\"name\\": \\"Teh Tarik\\"}"},
-          "extra_content": {"google": {"thought_signature": "SIG123"}}}]}}]}
-        """.utf8))
-        XCTAssertEqual(response.toolCalls.first?.extra,
-                       .object(["google": .object(["thought_signature": .string("SIG123")])]))
-    }
-
-    func testSignatureIsSentBackWithTheToolCall() throws {
-        let extra: JSONValue = .object(["google": .object(["thought_signature": .string("SIG123")])])
-        let turn = AssistantTurn(role: .assistant, blocks: [
-            .toolUse(id: "c1", name: "addFoodEntry", input: [:], extra: extra)
-        ])
-        let message = try XCTUnwrap(OpenAICompatibleAssistantService.encode(turn: turn).first)
-        let call = try XCTUnwrap((message["tool_calls"] as? [[String: Any]])?.first)
-        let google = (call["extra_content"] as? [String: Any])?["google"] as? [String: Any]
-        XCTAssertEqual(google?["thought_signature"] as? String, "SIG123")
-    }
-
-    func testNoSignatureMeansNoExtraField() throws {
-        let turn = AssistantTurn(role: .assistant, blocks: [
-            .toolUse(id: "c1", name: "getTrends", input: [:])
-        ])
-        let message = try XCTUnwrap(OpenAICompatibleAssistantService.encode(turn: turn).first)
-        let call = try XCTUnwrap((message["tool_calls"] as? [[String: Any]])?.first)
-        XCTAssertNil(call["extra_content"])
     }
 
     func testProviderErrorMessageIsExtractedAndShort() {
-        let body = Data(#"[{"error": {"code": 400, "message": "Function call is missing a thought_signature.\nMore detail here."}}]"#.utf8)
-        XCTAssertEqual(OpenAICompatibleAssistantService.providerErrorMessage(from: body),
-                       "Function call is missing a thought_signature.")
-        XCTAssertNil(OpenAICompatibleAssistantService.providerErrorMessage(from: Data("oops".utf8)))
-        XCTAssertThrowsError(try OpenAICompatibleAssistantService.check(status: 400, model: "m", body: body)) {
+        let body = Data(#"{"error": {"type": "invalid_request_error", "message": "Incorrect API key provided.\nMore detail here."}}"#.utf8)
+        XCTAssertEqual(OpenAIAssistantService.providerErrorMessage(from: body),
+                       "Incorrect API key provided.")
+        XCTAssertNil(OpenAIAssistantService.providerErrorMessage(from: Data("oops".utf8)))
+        XCTAssertThrowsError(try OpenAIAssistantService.check(status: 401, model: "m", body: body)) {
             XCTAssertEqual($0 as? AssistantServiceError,
-                           .requestFailed(detail: "HTTP 400 - Function call is missing a thought_signature."))
+                           .requestFailed(detail: "HTTP 401 - Incorrect API key provided."))
         }
     }
 }
 
 final class AssistantRequestEncodingTests: XCTestCase {
 
-    func testToolResultsBecomeSeparateToolMessages() {
+    func testToolResultsBecomeFunctionCallOutputs() {
         let turn = AssistantTurn(role: .user, blocks: [
             .toolResult(id: "a", content: "{\"x\":1}", isError: false),
             .toolResult(id: "b", content: "{\"y\":2}", isError: false)
         ])
-        let messages = OpenAICompatibleAssistantService.encode(turn: turn)
-        XCTAssertEqual(messages.count, 2)
-        XCTAssertEqual(messages[0]["role"] as? String, "tool")
-        XCTAssertEqual(messages[0]["tool_call_id"] as? String, "a")
-        XCTAssertEqual(messages[1]["tool_call_id"] as? String, "b")
+        let items = OpenAIAssistantService.encode(turn: turn)
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0]["type"] as? String, "function_call_output")
+        XCTAssertEqual(items[0]["call_id"] as? String, "a")
+        XCTAssertEqual(items[0]["output"] as? String, "{\"x\":1}")
+        XCTAssertEqual(items[1]["call_id"] as? String, "b")
     }
 
-    func testAssistantToolCallsCarryJSONStringArguments() throws {
+    /// Text first, then each call as its own item with JSON-string arguments
+    /// and no item id (an id would require the matching reasoning item).
+    func testAssistantToolCallsBecomeFunctionCallItems() throws {
         let turn = AssistantTurn(role: .assistant, blocks: [
             .text("Logging it."),
             .toolUse(id: "c1", name: "addFoodEntry", input: ["name": .string("Teh Tarik")])
         ])
-        let messages = OpenAICompatibleAssistantService.encode(turn: turn)
-        XCTAssertEqual(messages.count, 1)
-        XCTAssertEqual(messages[0]["content"] as? String, "Logging it.")
-        let calls = try XCTUnwrap(messages[0]["tool_calls"] as? [[String: Any]])
-        let function = try XCTUnwrap(calls.first?["function"] as? [String: Any])
-        let arguments = try XCTUnwrap(function["arguments"] as? String)
+        let items = OpenAIAssistantService.encode(turn: turn)
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0]["role"] as? String, "assistant")
+        XCTAssertEqual(items[0]["content"] as? String, "Logging it.")
+        XCTAssertEqual(items[1]["type"] as? String, "function_call")
+        XCTAssertEqual(items[1]["call_id"] as? String, "c1")
+        XCTAssertNil(items[1]["id"])
+        let arguments = try XCTUnwrap(items[1]["arguments"] as? String)
         XCTAssertTrue(arguments.contains("Teh Tarik"))
     }
 
-    func testMenuPhotoBecomesImagePart() throws {
+    func testPhotoBecomesInputImage() throws {
         let turn = AssistantTurn(role: .user, blocks: [.image(Data([1, 2, 3])), .text("What fits?")])
-        let messages = OpenAICompatibleAssistantService.encode(turn: turn)
-        let parts = try XCTUnwrap(messages.first?["content"] as? [[String: Any]])
-        XCTAssertEqual(parts.first?["type"] as? String, "image_url")
-        let url = (parts.first?["image_url"] as? [String: Any])?["url"] as? String
-        XCTAssertTrue(url?.hasPrefix("data:image/jpeg;base64,") == true)
+        let items = OpenAIAssistantService.encode(turn: turn)
+        let parts = try XCTUnwrap(items.first?["content"] as? [[String: Any]])
+        XCTAssertEqual(parts.first?["type"] as? String, "input_image")
+        XCTAssertTrue((parts.first?["image_url"] as? String)?
+            .hasPrefix("data:image/jpeg;base64,") == true)
+        XCTAssertEqual(parts.last?["type"] as? String, "input_text")
         XCTAssertEqual(parts.last?["text"] as? String, "What fits?")
     }
 
-    func testBodyHasSystemContextAndFunctionTools() throws {
-        let body = OpenAICompatibleAssistantService.makeBody(
+    func testBodyHasInstructionsToolsLowEffortAndNoStorage() throws {
+        let body = OpenAIAssistantService.makeBody(
             model: "test-model", turns: [.user("hi")], contextJSON: "{\"k\":1}",
             tools: AssistantTool.allCases)
         XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
         XCTAssertEqual(body["model"] as? String, "test-model")
-        let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
-        XCTAssertEqual(messages.first?["role"] as? String, "system")
-        XCTAssertTrue((messages.first?["content"] as? String)?.contains("{\"k\":1}") == true)
+        XCTAssertTrue((body["instructions"] as? String)?.contains("{\"k\":1}") == true)
+        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "low")
+        XCTAssertEqual(body["store"] as? Bool, false)
+        let input = try XCTUnwrap(body["input"] as? [[String: Any]])
+        XCTAssertEqual(input.first?["role"] as? String, "user")
         let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
         XCTAssertEqual(tools.count, AssistantTool.allCases.count)
         XCTAssertEqual(tools.first?["type"] as? String, "function")
+        XCTAssertNotNil(tools.first?["name"], "Responses tools are flat, not nested")
+        XCTAssertEqual(tools.first?["strict"] as? Bool, false)
+    }
+
+    func testSearchBodyUsesTheWebSearchTool() throws {
+        let body = OpenAIAssistantService.makeSearchBody(model: "m", question: "Food near KLCC")
+        XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
+        XCTAssertEqual(body["input"] as? String, "Food near KLCC")
+        let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.first?["type"] as? String, "web_search")
+        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "low")
     }
 }
 
@@ -1290,31 +1233,29 @@ final class AssistantViewModelTests: XCTestCase {
 
 final class AssistantWebSearchTests: XCTestCase {
 
+    /// The answer is the message text; sources are its url_citation
+    /// annotations, de-duplicated, with the link standing in for a missing title.
     func testSearchResponseGivesTextAndUniqueSources() throws {
         let json = """
-        {"candidates":[{"content":{"parts":[{"text":"Stall A: chicken rice RM12. "},{"text":"Stall B: soup RM10."}]},
-          "groundingMetadata":{"groundingChunks":[
-            {"web":{"uri":"https://a.example","title":"A"}},
-            {"web":{"uri":"https://a.example","title":"A again"}},
-            {"web":{"uri":"https://b.example"}}]}}]}
+        {"output":[
+          {"type":"web_search_call","id":"ws_1","status":"completed",
+           "action":{"type":"search","query":"chicken rice near KLCC"}},
+          {"type":"message","role":"assistant","content":[
+            {"type":"output_text","text":"Stall A: chicken rice RM12. Stall B: soup RM10.",
+             "annotations":[
+               {"type":"url_citation","start_index":0,"end_index":5,"url":"https://a.example","title":"A"},
+               {"type":"url_citation","start_index":6,"end_index":9,"url":"https://a.example","title":"A again"},
+               {"type":"url_citation","start_index":10,"end_index":12,"url":"https://b.example","title":""}]}]}]}
         """
-        let result = try OpenAICompatibleAssistantService.decodeSearch(data: Data(json.utf8))
+        let result = try OpenAIAssistantService.decodeSearch(data: Data(json.utf8))
         XCTAssertEqual(result.summary, "Stall A: chicken rice RM12. Stall B: soup RM10.")
         XCTAssertEqual(result.sources.map(\.url), ["https://a.example", "https://b.example"])
         XCTAssertEqual(result.sources.last?.title, "https://b.example", "falls back to the link")
     }
 
     func testEmptySearchResponseThrows() {
-        XCTAssertThrowsError(try OpenAICompatibleAssistantService.decodeSearch(
-            data: Data(#"{"candidates":[{"content":{"parts":[]}}]}"#.utf8)))
-    }
-
-    func testSearchUsesGeminisOwnAPI() {
-        let gemini = OpenAICompatibleAssistantService(
-            baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/", pinnedModel: nil)
-        XCTAssertEqual(gemini.nativeGeminiRoot, "https://generativelanguage.googleapis.com/v1beta")
-        let other = OpenAICompatibleAssistantService(baseURL: "https://api.deepseek.com", pinnedModel: nil)
-        XCTAssertNil(other.nativeGeminiRoot, "no search on other providers")
+        XCTAssertThrowsError(try OpenAIAssistantService.decodeSearch(
+            data: Data(#"{"output":[{"type":"web_search_call","status":"completed"}]}"#.utf8)))
     }
 
     @MainActor

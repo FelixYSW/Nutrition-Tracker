@@ -17,7 +17,7 @@ enum BundledAPIKey {
     /// Required. Without it the assistant is unavailable.
     static var assistant: String? { value(for: "AssistantAPIKey") }
 
-    /// Optional overrides; the service falls back to Gemini defaults.
+    /// Optional overrides; the service falls back to OpenAI and GPT-6 Luna.
     static var assistantModel: String? { value(for: "AssistantModel") }
     static var assistantBaseURL: String? { value(for: "AssistantBaseURL") }
 

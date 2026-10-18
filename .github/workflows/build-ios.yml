@@ -51,10 +51,10 @@ jobs:
 
       - name: Write assistant configuration
         # The assistant uses one built-in key (users can't configure it):
-        #   ASSISTANT_API_KEY  secret, required for the assistant (e.g. a Gemini key)
-        #   ASSISTANT_MODEL    variable, optional; app default is a Gemini model
-        #   ASSISTANT_BASE_URL variable, optional; app default is Gemini's
-        #                      OpenAI-compatible endpoint
+        #   ASSISTANT_API_KEY  secret, required for the assistant (an OpenAI key)
+        #   ASSISTANT_MODEL    variable, optional; app default is gpt-6-luna
+        #   ASSISTANT_BASE_URL variable, optional; app default is OpenAI's API
+        #                      (https://api.openai.com/v1, Responses API)
         # They go into a temporary xcconfig outside the repo rather than onto the
         # xcodebuild command line, which xcodebuild would echo into the log.
         # Without the key the app still builds; the assistant says "not available".
@@ -156,6 +156,9 @@ jobs:
           name: TestResults
           path: TestResults.xcresult
           if-no-files-found: ignore
+          # Deleted 10 minutes after the run by the expire-downloads job; one
+          # day is only the fallback if that job gets cancelled.
+          retention-days: 1
 
       - name: Build Release for device (unsigned)
         run: |
@@ -213,4 +216,34 @@ jobs:
           name: NutritionTracker-unsigned-ipa
           path: NutritionTracker-unsigned.ipa
           if-no-files-found: error
-          retention-days: 30
+          # The IPA contains the assistant key, and on a public repo any
+          # signed-in GitHub user can download artifacts. The expire-downloads
+          # job deletes it 10 minutes after the build; one day (GitHub's
+          # minimum) is only the fallback if that job gets cancelled.
+          retention-days: 1
+
+  expire-downloads:
+    name: Delete downloads after 10 minutes
+    needs: build
+    # Also after a failed build: test results may still have been uploaded.
+    if: always()
+    # Linux: free on public repos, and waiting here costs no macOS minutes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write
+    steps:
+      - name: Wait 10 minutes for the IPA to be downloaded
+        run: sleep 600
+
+      - name: Delete this run's artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api --jq ".artifacts[].id" \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
+          for id in $ids; do
+            gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
+            echo "Deleted artifact $id"
+          done
+          [ -n "$ids" ] || echo "No artifacts to delete."

@@ -11,7 +11,7 @@ A native iPhone app for tracking calories and macros. It sets daily targets as r
 - [Build and run](#build-and-run)
 - [On-device models](#on-device-models)
 - [Nutrition data](#nutrition-data)
-- [AI assistant (Google Gemini)](#ai-assistant-google-gemini)
+- [AI assistant (OpenAI GPT-6 Luna)](#ai-assistant-openai-gpt-6-luna)
 - [CI: unsigned IPA from GitHub Actions](#ci-unsigned-ipa-from-github-actions)
 - [Installing with Sideloadly (and the 7-day limit)](#installing-with-sideloadly-and-the-7-day-limit)
 - [Backup and your data](#backup-and-your-data)
@@ -159,31 +159,38 @@ python ml/scripts/compile_reference.py
 
 > **Current state:** the 14 MyFCD rows are **blank placeholders** waiting for real values. The 19 generic rows are typical reference figures entered by hand; spot-check them. Until MyFCD is filled in, Malaysian dishes rely on manual entry or Model B.
 
-## AI assistant (Google Gemini)
+## AI assistant (OpenAI GPT-6 Luna)
 
-The assistant has **no user settings**. It uses one API key built into the app at build time, and talks to Google Gemini through Gemini's OpenAI-compatible endpoint.
+The assistant has **no user settings**. It uses one API key built into the app at build time, and talks to OpenAI's **Responses API** with **GPT-6 Luna at low reasoning effort**. Web searches (food nearby, a brand's nutrition, real products) use OpenAI's built-in web search tool with the same key.
+
+The Responses API is used rather than Chat Completions because GPT-6 Luna only allows function calling in Chat Completions with reasoning turned off, and the assistant needs both. Requests are sent with `store: false`, so OpenAI doesn't keep them as stored responses.
 
 ### Turn it on
 
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey), sign in, and choose **Create API key**. Make a new key just for this app.
-2. On GitHub, open the repo, then **Settings → Secrets and variables → Actions → Secrets → New repository secret**:
+1. Create an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). Make a new key just for this app.
+2. **Set a monthly budget limit** on the OpenAI account (Settings → Limits), for example $10. See the risks below.
+3. On GitHub, open the repo, then **Settings → Secrets and variables → Actions → Secrets** and set:
    - **Name:** `ASSISTANT_API_KEY`
-   - **Secret:** paste the key
-3. Push a commit, or start the workflow from the Actions tab. The **"Check assistant key is in the app"** step should say *"Assistant key is built into the app."*
-4. Sideload the new IPA. The ✨ icon on the Dashboard opens the assistant.
+   - **Secret:** paste the key (replace the old value if there is one)
+4. Push a commit, or start the workflow from the Actions tab. The **"Check assistant key is in the app"** step should say *"Assistant key is built into the app."*
+5. Sideload the new IPA.
 
 Without the secret, the app still builds, and the assistant says it isn't available.
 
-### Optional: change model or provider (no code changes)
+### Optional: change model or endpoint (no code changes)
 
-Add these under **Settings → Secrets and variables → Actions → Variables**. They're variables, not secrets.
+Add these under **Settings → Secrets and variables → Actions → Variables**. They're variables, not secrets. Leave them unset to use the defaults.
 
-| Variable | Default | Example |
-|---|---|---|
-| `ASSISTANT_MODEL` | `gemini-3.5-flash-lite` | a newer Gemini model name from AI Studio |
-| `ASSISTANT_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | any OpenAI-compatible API, e.g. `https://api.deepseek.com` |
+| Variable | Default |
+|---|---|
+| `ASSISTANT_MODEL` | `gpt-6-luna` |
+| `ASSISTANT_BASE_URL` | `https://api.openai.com/v1` |
 
-The app uses **Gemini 3.5 Flash-Lite** by default, chosen for its much higher free daily limit (every install shares one key). Google retires model names over time; if the model returns HTTP 404, the app looks up the current list of models, switches to the newest stable Flash-Lite, and remembers it on that phone. If you set `ASSISTANT_MODEL`, that model is always used and never auto-switched.
+The endpoint must speak OpenAI's Responses API, and the model must support function tools and the `web_search` tool.
+
+### Cost
+
+GPT-6 Luna costs $0.10 per million input tokens ($0.01 cached) and $0.50 per million output tokens, with reasoning tokens billed as output. Each web search is also billed as a tool call. Long chats and chats with photos cost the most, because the whole conversation is sent with every message. Typical personal use is a few dollars a month; the usage page on the OpenAI dashboard shows the real figure.
 
 ### How it gets into the app
 
@@ -191,9 +198,9 @@ The app uses **Gemini 3.5 Flash-Lite** by default, chosen for its much higher fr
 
 ### Risks to be aware of
 
-- **The key isn't secret once it's in the app.** Anyone with the IPA can read it by unzipping the file. On a public repo, **any signed-in GitHub user can download Actions artifacts**. A free-tier Gemini key limits the damage: someone who takes it hits rate limits, not a bill. **Don't turn on billing for this key.**
-- **On the free tier, Google may use what you send to improve its products.** That includes your profile basics, today's targets and food log, and a 14-day trend summary. A short note in the assistant sheet says this. The assistant never sends photos (apart from a menu photo you attach yourself), your date of birth, your body-fat percentage or your target weight.
-- **Free tiers are rate-limited.** When the limit is hit, the assistant says the provider is rate limiting and to try again shortly.
+- **The key isn't secret once it's in the app.** Anyone with the IPA can read it by unzipping the file. On a public repo, **any signed-in GitHub user can download Actions artifacts**. This is a paid key, so someone who takes it could run up charges: **set a budget limit**, keep the repo private if you can, and revoke the key if it leaks.
+- **What is sent to OpenAI:** your profile basics, today's targets and food log, a 14-day trend summary, the chat, and any photo you attach. Never your date of birth, body-fat percentage or target weight.
+- **Rate limits:** when OpenAI rate-limits the key, the assistant says so and asks you to try again shortly.
 
 The only real fix for the key exposure is a small proxy server that holds the key, so the app never contains it.
 

@@ -253,9 +253,8 @@ struct AssistantToolCall: Identifiable, Equatable, Sendable {
     let tool: AssistantTool
     /// Raw decoded arguments.
     let arguments: [String: JSONValue]
-    /// Opaque provider data attached to the call (Gemini sends a thought
-    /// signature in `extra_content`). Echoed back verbatim on the next request;
-    /// Gemini rejects the follow-up with HTTP 400 if it is missing.
+    /// Opaque provider data attached to the call. Not used by the OpenAI
+    /// client; kept for chats saved by earlier versions.
     var extra: JSONValue? = nil
 }
 
