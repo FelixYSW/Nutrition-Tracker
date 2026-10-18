@@ -53,41 +53,35 @@ struct TrendsView: View {
     }
 
     private var controls: some View {
-        VStack(spacing: 12) {
-            Picker("Scale", selection: $scale) {
-                ForEach(TrendScale.allCases) { Text($0.displayName).tag($0) }
-            }
-            .pickerStyle(.segmented)
+        Picker("Scale", selection: $scale) {
+            ForEach(TrendScale.allCases) { Text($0.displayName).tag($0) }
+        }
+        .pickerStyle(.segmented)
+    }
 
-            HStack {
-                Text("Nutrient")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+    private var chartCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(scale.plotsDailyAverage
+                         ? "Daily average per \(scale == .weekly ? "week" : "month")"
+                         : "Per day")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if range.max > 0 {
+                        Label("Target band", systemImage: "rectangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(AppTheme.color(for: nutrient).opacity(0.5))
+                    }
+                }
                 Spacer()
+                // The nutrient lives with the chart it changes.
                 Picker("Nutrient", selection: $nutrient) {
                     ForEach(Nutrient.allCases) { Text($0.displayName).tag($0) }
                 }
                 .pickerStyle(.menu)
                 .tint(AppTheme.accent)
                 .accessibilityLabel("Nutrient")
-            }
-        }
-    }
-
-    private var chartCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(scale.plotsDailyAverage
-                     ? "Daily average per \(scale == .weekly ? "week" : "month")"
-                     : "Per day")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if range.max > 0 {
-                    Label("Target band", systemImage: "rectangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(AppTheme.color(for: nutrient).opacity(0.5))
-                }
             }
 
             Chart {

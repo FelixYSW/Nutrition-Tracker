@@ -58,12 +58,16 @@ enum AppTheme {
     /// not an error.
     static var over: Color { Color(hex: 0xD9742A) }
 
+    /// The flame orange from the app icon. Used for calories wherever they are
+    /// shown, so the number and the icon read as one thing.
+    static let flame = Color(hex: 0xDB5A1F)
+
     /// Per-nutrient ring colours. Distinct in hue *and* order so they remain
     /// distinguishable for the common forms of colour vision deficiency; the
     /// rings are also always labelled, never colour-only.
     static func color(for nutrient: Nutrient) -> Color {
         switch nutrient {
-        case .calories: Color(hex: 0xF0783A)
+        case .calories: flame
         case .protein: Color(hex: 0x0F8B8D)
         case .carbs: Color(hex: 0xC28A0A)
         case .fat: Color(hex: 0x7A4FD0)
@@ -93,11 +97,12 @@ enum AppTheme {
     static var stillToGo: Color { .adaptive(light: 0xC2BEB6, dark: 0x58554F) }
 
     /// Colour for a bar or dot that summarises a day, week or month against its
-    /// band. Under the minimum is amber once the period is over, and a
-    /// neutral grey while it's still in progress (today, this week).
+    /// band. Under the minimum is a neutral grey.
     static func summaryColor(for state: RangeState, isComplete: Bool = true) -> Color {
         switch state {
-        case .under: isComplete ? belowMinimum : stillToGo
+        // Under is neutral grey whether or not the period is over; only
+        // "within" and "over" get a colour of their own.
+        case .under: stillToGo
         case .within: within
         case .over: over
         }
@@ -329,5 +334,51 @@ struct EstimateDisclaimer: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Nutrient symbols
+
+extension Nutrient {
+    /// SF Symbol used wherever a nutrient needs an icon (rings, summary
+    /// tiles). System symbols, so they follow Dynamic Type and the user's
+    /// weight settings.
+    var symbolName: String {
+        switch self {
+        case .calories: "flame.fill"
+        case .protein: "dumbbell.fill"
+        case .carbs: "fork.knife"
+        case .fat: "drop.fill"
+        case .fibre: "leaf.fill"
+        }
+    }
+}
+
+// MARK: - Logo
+
+/// The app icon's mark: a partly filled progress ring around a flame.
+/// Drawn with system shapes and the flame SF Symbol, so it scales cleanly and
+/// follows light and dark mode.
+struct AppLogoMark: View {
+    var size: CGFloat = 120
+    /// How far round the ring is filled. The icon leaves it open.
+    var progress: Double = 0.72
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(AppTheme.ink.opacity(0.1), lineWidth: size * 0.082)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(AppTheme.ink,
+                        style: StrokeStyle(lineWidth: size * 0.082, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Image(systemName: "flame.fill")
+                .font(.system(size: size * 0.34))
+                .foregroundStyle(AppTheme.flame)
+        }
+        .padding(size * 0.041)
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }

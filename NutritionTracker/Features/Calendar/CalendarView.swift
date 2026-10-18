@@ -173,15 +173,9 @@ struct CalendarView: View {
 
     private var dayContent: some View {
         VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-            VStack(alignment: .leading, spacing: 12) {
-                AppSectionHeading(
-                    title: AppFormatters.dayAndMonth.string(from: selectedDate),
-                    trailing: LocalDay.isToday(selectedDate) ? "Today" : nil)
-                NutritionRangeSummaryView(nutrition: LocalDay.total(entries),
-                                          ranges: targets.first?.ranges,
-                                          isComplete: LocalDay.start(of: selectedDate) < LocalDay.start(of: .now))
-            }
-            .appSkyCard()
+            DaySummaryCard(date: selectedDate,
+                           nutrition: LocalDay.total(entries),
+                           ranges: targets.first?.ranges)
 
             AppSectionHeading(title: "Food log",
                               trailing: entries.isEmpty ? nil
@@ -411,8 +405,8 @@ struct CalendarMonthGrid: View {
 
         let fill: Color = switch state {
         case .within: AppTheme.within.opacity(0.3)
-        // A past day short of the minimum is a miss (amber); today is still going.
-        case .under: isToday ? AppTheme.subtleFill : AppTheme.belowMinimum.opacity(0.28)
+        // Under is a plain neutral circle, past or present.
+        case .under: AppTheme.subtleFill
         case .over: AppTheme.over.opacity(0.28)
         case nil: Color.clear
         }
@@ -452,7 +446,7 @@ struct CalendarMonthGrid: View {
     private var legend: some View {
         HStack(spacing: 16) {
             legendItem("In range", AppTheme.within.opacity(0.45))
-            legendItem("Below min", AppTheme.belowMinimum.opacity(0.45))
+            legendItem("Under", AppTheme.stillToGo)
             legendItem("Over max", AppTheme.over.opacity(0.45))
         }
         .font(.caption2.weight(.semibold))
