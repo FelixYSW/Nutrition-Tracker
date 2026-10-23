@@ -88,14 +88,17 @@ private func captionColor(for state: RangeState, normal: Color) -> Color {
 }
 
 /// Short plain-language status for a nutrient against its range.
-private func rangeCaption(nutrient: Nutrient, consumed: Double, range: NutrientRange) -> String {
+/// A finished day reads "… short" rather than "… to go".
+private func rangeCaption(nutrient: Nutrient, consumed: Double, range: NutrientRange,
+                          isDayOver: Bool = false) -> String {
     guard range.max > 0 else { return "No target" }
     let unit = nutrient == .calories ? " kcal" : " g"
     switch range.state(consumed: consumed) {
     // Worked out from the whole numbers on screen, like the state itself, so
     // the gap is always at least 1 and matches the figures shown.
     case .under:
-        return "\(AppFormatters.amount(range.min.rounded() - consumed.rounded()))\(unit) to go"
+        let gap = AppFormatters.amount(range.min.rounded() - consumed.rounded())
+        return isDayOver ? "\(gap)\(unit) short" : "\(gap)\(unit) to go"
     case .within:
         return "In range"
     case .over:
@@ -109,6 +112,8 @@ struct CompactMacroRing: View {
     let nutrient: Nutrient
     let consumed: Double
     let range: NutrientRange
+    /// A past day: shortfalls read "short", not "to go".
+    var isDayOver = false
 
 
     var body: some View {
@@ -136,7 +141,8 @@ struct CompactMacroRing: View {
                 .contentTransition(.numericText())
             VStack(spacing: 1) {
                 Text("\(AppFormatters.range(range)) \(nutrient.unitLabel)")
-                Text(rangeCaption(nutrient: nutrient, consumed: consumed, range: range))
+                Text(rangeCaption(nutrient: nutrient, consumed: consumed, range: range,
+                                     isDayOver: isDayOver))
                     .foregroundStyle(captionColor(for: range.state(consumed: consumed),
                                                   normal: .secondary))
             }
@@ -152,7 +158,8 @@ struct CompactMacroRing: View {
         .accessibilityValue("\(AppFormatters.amount(consumed)) \(nutrient.unitLabel) of a "
                             + "\(AppFormatters.amount(range.min)) to \(AppFormatters.amount(range.max)) "
                             + "\(nutrient.unitLabel) range. "
-                            + rangeCaption(nutrient: nutrient, consumed: consumed, range: range))
+                            + rangeCaption(nutrient: nutrient, consumed: consumed, range: range,
+                                     isDayOver: isDayOver))
     }
 }
 
@@ -160,6 +167,8 @@ struct CompactMacroRing: View {
 struct CalorieHeroCard: View {
     let consumed: Double
     let range: NutrientRange
+    /// A past day: shortfalls read "short", not "to go".
+    var isDayOver = false
 
     private var progress: Double { range.progress(consumed: consumed) }
     /// The ring is ink, like the app icon; the flame inside carries the colour.
@@ -171,7 +180,8 @@ struct CalorieHeroCard: View {
                 RangeRing(progress: progress,
                           bandStart: range.bandFractions().start,
                           tint: tint,
-                          bandTint: AppTheme.within,
+                          // Band in the arc's own colour, like the macro rings.
+                          bandTint: tint,
                           lineWidth: 13,
                           trackColor: AppTheme.subtleFill)
                 ringCentre
@@ -204,7 +214,8 @@ struct CalorieHeroCard: View {
                         .foregroundStyle(AppTheme.skyCardText)
                     // Status pill tinted by state: neutral while under, green
                     // in range, orange over.
-                    Text(rangeCaption(nutrient: .calories, consumed: consumed, range: range))
+                    Text(rangeCaption(nutrient: .calories, consumed: consumed, range: range,
+                                      isDayOver: isDayOver))
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(AppTheme.stateTextColor(for: state))
                         .padding(.horizontal, 12)

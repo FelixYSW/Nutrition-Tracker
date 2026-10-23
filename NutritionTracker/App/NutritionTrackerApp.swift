@@ -47,6 +47,28 @@ final class AppRouter {
     /// Date the Calendar tab should show. Set when the user taps a point in Trends.
     var calendarRequestedDate: Date?
 
+    // MARK: What each page is showing
+    //
+    // Kept here, above the tab views, so leaving a page and coming back -
+    // or switching between Days and Trends - shows exactly what was on screen
+    // before, for as long as the app stays open. Memory only: a fresh launch
+    // starts on today again.
+
+    /// Start of the earlier day shown on Today; nil shows today itself.
+    var todayPickedDay: Date?
+
+    var calendarSection: CalendarView.Section = .day
+    var calendarSelectedDate: Date = .now
+    /// A week or month opened from Trends; nil shows the selected day.
+    var calendarPeriod: CalendarSelection?
+    /// Days opened in a week's or month's food log (each starts collapsed).
+    var calendarOpenDays: Set<Date> = []
+    /// First day of the month the Calendar grid is paged to.
+    var calendarMonth: Date = CalendarMonthGrid.firstOfMonth(.now)
+
+    var trendsScale: TrendScale = .daily
+    var trendsNutrient: Nutrient = .calories
+
     func present(drafts: [FoodEntryDraft], notice: String? = nil) {
         pendingNotice = notice
         pendingDrafts = drafts

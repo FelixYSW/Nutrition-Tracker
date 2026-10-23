@@ -18,8 +18,18 @@ struct TrendsView: View {
     @Query private var allEntries: [FoodEntry]
     @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
 
-    @State private var scale: TrendScale = .daily
-    @State private var nutrient: Nutrient = .calories
+    @Environment(AppRouter.self) private var router
+
+    // Kept by the router, so the same scale and nutrient are still chosen
+    // after switching to Days or another tab and back.
+    private var scale: TrendScale { router.trendsScale }
+    private var nutrient: Nutrient { router.trendsNutrient }
+    private var scaleBinding: Binding<TrendScale> {
+        Binding(get: { router.trendsScale }, set: { router.trendsScale = $0 })
+    }
+    private var nutrientBinding: Binding<Nutrient> {
+        Binding(get: { router.trendsNutrient }, set: { router.trendsNutrient = $0 })
+    }
 
     /// Computed on the fly from `FoodEntry` records; nothing is persisted.
     private var buckets: [TrendBucket] {
@@ -53,7 +63,7 @@ struct TrendsView: View {
     }
 
     private var controls: some View {
-        Picker("Scale", selection: $scale) {
+        Picker("Scale", selection: scaleBinding) {
             ForEach(TrendScale.allCases) { Text($0.displayName).tag($0) }
         }
         .pickerStyle(.segmented)
@@ -68,7 +78,7 @@ struct TrendsView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 // The nutrient lives with the chart it changes.
-                Picker("Nutrient", selection: $nutrient) {
+                Picker("Nutrient", selection: nutrientBinding) {
                     ForEach(Nutrient.allCases) { nutrient in
                         Label(nutrient.displayName, systemImage: nutrient.symbolName)
                             .tag(nutrient)

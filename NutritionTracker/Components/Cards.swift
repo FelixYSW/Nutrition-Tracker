@@ -267,28 +267,29 @@ struct FoodEntryCard: View {
                 }
             }
 
-            // Collapsed, a card is just name, time and calories. Opening it
-            // shows the macros and, for a composite food, its ingredients.
-            Button {
-                withAnimation(.snappy) { isExpanded.toggle() }
-            } label: {
-                // Chevrons sit before their text, everywhere in the app.
-                HStack(spacing: 6) {
-                    DisclosureChevron(isExpanded: isExpanded)
-                        .font(.caption.weight(.bold))
-                    Text(detailsLabel)
+            // The macros always show; calories are in the header above.
+            NutritionSummaryView(nutrition: entry.total, showsFibre: true, showsCalories: false)
+
+            // Only a composite food's ingredients fold away.
+            if entry.isComposite {
+                Button {
+                    withAnimation(.snappy) { isExpanded.toggle() }
+                } label: {
+                    // Chevrons sit before their text, everywhere in the app.
+                    HStack(spacing: 6) {
+                        DisclosureChevron(isExpanded: isExpanded)
+                            .font(.caption.weight(.bold))
+                        Text(isExpanded ? "Hide ingredients"
+                                        : "\(entry.ingredients.count) ingredients")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: AppTheme.minimumTapTarget)
+                    .contentShape(Rectangle())
                 }
-                .font(.subheadline.weight(.semibold))
-                .frame(minHeight: AppTheme.minimumTapTarget)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
 
-            if isExpanded {
-                NutritionSummaryView(nutrition: entry.total, showsFibre: true, showsCalories: false)
-
-                if entry.isComposite {
+                if isExpanded {
                     // A grid, so every portion and every kcal figure lines up
                     // in its own right-aligned column whatever the name length.
                     Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
@@ -330,13 +331,6 @@ struct FoodEntryCard: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(entry.name), \(AppFormatters.amount(entry.total.calories)) calories")
-    }
-}
-
-extension FoodEntryCard {
-    fileprivate var detailsLabel: String {
-        if isExpanded { return entry.isComposite ? "Hide ingredients" : "Hide nutrition" }
-        return entry.isComposite ? "\(entry.ingredients.count) ingredients" : "Nutrition"
     }
 }
 

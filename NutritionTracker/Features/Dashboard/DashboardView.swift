@@ -1,11 +1,12 @@
 import SwiftUI
 import SwiftData
 
-/// Always shows the current local calendar day (spec sections 13, 14).
+/// One local calendar day at a time: today by default, with buttons to step
+/// back through earlier days and a button back to today (spec sections 13, 14).
 ///
-/// Totals are computed by filtering `FoodEntry.consumedAt` into today's
-/// interval. Nothing is stored per day, so at midnight the day simply changes
-/// and the totals read zero while the targets and yesterday's entries survive.
+/// Totals are computed by filtering `FoodEntry.consumedAt` into the shown
+/// day's interval. Nothing is stored per day, so at midnight the day simply
+/// changes and today's totals read zero while yesterday's entries survive.
 struct DashboardView: View {
     @Environment(\.modelContext) private var context
     @Environment(DayChangeObserver.self) private var dayObserver
@@ -19,12 +20,24 @@ struct DashboardView: View {
     @State private var editingDraft: FoodEntryDraft?
     @State private var entryPendingDeletion: FoodEntry?
 
+    /// Start of an earlier day being looked at; nil shows today. Kept by the
+    /// router, so it's still that day after visiting another tab.
+    private var pickedDay: Date? {
+        get { router.todayPickedDay }
+        nonmutating set { router.todayPickedDay = newValue }
+    }
+
     /// Re-queried whenever the day changes, because the observer's published
     /// day start is read here.
     private var today: Date { dayObserver.currentDayStart }
 
+    /// The day on screen. Never later than today, even if today moves on
+    /// while an earlier day is shown.
+    private var shownDay: Date { min(pickedDay ?? today, today) }
+    private var isShowingToday: Bool { shownDay >= today }
+
     private var entries: [FoodEntry] {
-        LocalDay.entries(allEntries, on: today)
+        LocalDay.entries(allEntries, on: shownDay)
     }
 
     private var consumed: Nutrition {
@@ -40,7 +53,9 @@ struct DashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
                     header
-                    CalorieHeroCard(consumed: consumed.calories, range: ranges.calories)
+                    dayControls
+                    CalorieHeroCard(consumed: consumed.calories, range: ranges.calories,
+                                    isDayOver: !isShowingToday)
                     ringsCard
                     entriesSection
                 }
@@ -75,10 +90,10 @@ struct DashboardView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(AppFormatters.weekdayName.string(from: today))
+                Text(dayLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(AppFormatters.dayAndMonth.string(from: today))
+                Text(AppFormatters.dayAndMonth.string(from: shownDay))
                     .font(.system(.largeTitle, design: .rounded).weight(.heavy))
                     .minimumScaleFactor(0.7)
                     .lineLimit(1)
@@ -93,6 +108,62 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// "Wednesday" today; "Yesterday · Tuesday" or "Monday" for earlier days.
+    private var dayLabel: String {
+        let weekday = AppFormatters.weekdayName.string(from: shownDay)
+        if isShowingToday { return weekday }
+        let calendar = LocalDay.calendar()
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today),
+           calendar.isDate(shownDay, inSameDayAs: yesterday) {
+            return "Yesterday \u{00B7} \(weekday)"
+        }
+        return weekday
+    }
+
+    /// Back a day, forward a day (never past today), and back to today.
+    private var dayControls: some View {
+        HStack(spacing: 10) {
+            GlassIconButton(systemImage: "chevron.left", label: "Previous day") {
+                step(by: -1)
+            }
+            GlassIconButton(systemImage: "chevron.right", label: "Next day") {
+                step(by: 1)
+            }
+            .disabled(isShowingToday)
+            .opacity(isShowingToday ? 0.35 : 1)
+
+            Spacer(minLength: 8)
+
+            if !isShowingToday {
+                Button {
+                    withAnimation(.snappy) { pickedDay = nil }
+                    Haptics.selection()
+                } label: {
+                    Label("Today", systemImage: "arrow.uturn.forward")
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .foregroundStyle(AppTheme.onAccent)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: AppTheme.minimumTapTarget)
+                        .background(AppTheme.accentFill, in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to today")
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
+    }
+
+    private func step(by days: Int) {
+        let calendar = LocalDay.calendar()
+        guard let next = calendar.date(byAdding: .day, value: days, to: shownDay) else { return }
+        let day = calendar.startOfDay(for: next)
+        // No days after today.
+        guard day <= today else { return }
+        withAnimation(.snappy) { pickedDay = day >= today ? nil : day }
+        Haptics.selection()
+    }
+
     private var ringsCard: some View {
         // Four small rings in one row: protein, carbs, fat and fibre. Calories
         // get the hero card above.
@@ -100,7 +171,8 @@ struct DashboardView: View {
             ForEach([Nutrient.protein, .carbs, .fat, .fibre]) { nutrient in
                 CompactMacroRing(nutrient: nutrient,
                                  consumed: consumed[nutrient],
-                                 range: ranges[nutrient])
+                                 range: ranges[nutrient],
+                                 isDayOver: !isShowingToday)
             }
         }
         .padding(.vertical, 16)
@@ -114,17 +186,24 @@ struct DashboardView: View {
 
     private var entriesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            AppSectionHeading(title: "Today's food",
+            AppSectionHeading(title: isShowingToday ? "Today's food" : "Food log",
                               trailing: entries.isEmpty ? nil : "\(entries.count)")
 
             if entries.isEmpty {
-                EmptyStateView(title: "Nothing logged yet",
-                               message: "Add food by hand, photograph a meal, or scan a barcode.",
-                               systemImage: "fork.knife",
-                               actionTitle: "Add food") {
-                    router.selectedTab = .addMeal
+                if isShowingToday {
+                    EmptyStateView(title: "Nothing logged yet",
+                                   message: "Add food by hand, or tell the Assistant what you ate.",
+                                   systemImage: "fork.knife",
+                                   actionTitle: "Add food") {
+                        router.selectedTab = .addMeal
+                    }
+                    .appCard()
+                } else {
+                    EmptyStateView(title: "Nothing logged",
+                                   message: "No food was recorded on this day.",
+                                   systemImage: "calendar.badge.exclamationmark")
+                        .appCard()
                 }
-                .appCard()
             } else {
                 ForEach(entries) { entry in
                     FoodEntryCard(entry: entry,

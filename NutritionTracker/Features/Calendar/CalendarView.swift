@@ -11,10 +11,34 @@ struct CalendarView: View {
     @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
 
-    @State private var selectedDate = Date.now
+    // What's on screen lives in the router, so the same day, week or month,
+    // month page and Days/Trends choice are still showing after visiting
+    // another tab.
+    private var selectedDate: Date {
+        get { router.calendarSelectedDate }
+        nonmutating set { router.calendarSelectedDate = newValue }
+    }
     /// A week or month opened from Trends; nil shows the single selected day.
-    @State private var period: CalendarSelection?
-    @State private var section: Section = .day
+    private var period: CalendarSelection? {
+        get { router.calendarPeriod }
+        nonmutating set { router.calendarPeriod = newValue }
+    }
+    private var section: Section {
+        get { router.calendarSection }
+        nonmutating set { router.calendarSection = newValue }
+    }
+    private var selectedDateBinding: Binding<Date> {
+        Binding(get: { router.calendarSelectedDate }, set: { router.calendarSelectedDate = $0 })
+    }
+    private var monthBinding: Binding<Date> {
+        Binding(get: { router.calendarMonth }, set: { router.calendarMonth = $0 })
+    }
+    private var sectionBinding: Binding<Section> {
+        Binding(get: { router.calendarSection }, set: { router.calendarSection = $0 })
+    }
+
+    /// Height of the visible page, for the minimum height of the day's content.
+    @State private var viewportHeight: CGFloat = 0
     @State private var editingDraft: FoodEntryDraft?
     @State private var entryPendingDeletion: FoodEntry?
 
@@ -37,7 +61,7 @@ struct CalendarView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-                    Picker("View", selection: $section) {
+                    Picker("View", selection: sectionBinding) {
                         ForEach(Section.allCases) { Text($0.displayName).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -50,6 +74,9 @@ struct CalendarView: View {
                     }
                 }
                 .appPageContent()
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                viewportHeight = height
             }
             .appPageSurface()
             .navigationTitle("Calendar")
@@ -82,23 +109,33 @@ struct CalendarView: View {
             period = nil
             selectedDate = selection.interval.start
         }
+        // The grid isn't on screen yet to follow the date itself.
+        router.calendarMonth = CalendarMonthGrid.firstOfMonth(selectedDate)
         withAnimation(.snappy) { section = .day }
     }
 
     private var daySection: some View {
         VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-            CalendarMonthGrid(selectedDate: $selectedDate,
+            CalendarMonthGrid(selectedDate: selectedDateBinding,
+                              month: monthBinding,
                               entries: allEntries,
                               calorieRange: targets.first?.ranges.calories ?? .zero,
                               highlightedPeriod: period?.interval,
                               onDayTapped: { withAnimation(.snappy) { period = nil } })
                 .appCard()
 
-            if let period {
-                periodContent(period)
-            } else {
-                dayContent
+            // At least a screen tall, whatever the day holds. Otherwise tapping
+            // a day with less food made the page shorter than the current
+            // scroll position, iOS pulled the page back, and the grid - with
+            // the date just tapped - jumped under the finger.
+            Group {
+                if let period {
+                    periodContent(period)
+                } else {
+                    dayContent
+                }
             }
+            .frame(minHeight: viewportHeight, alignment: .top)
         }
     }
 
@@ -134,24 +171,49 @@ struct CalendarView: View {
                                systemImage: "calendar.badge.exclamationmark")
                     .appCard()
             } else {
-                // Newest day first, each under its own heading with its total.
+                // Newest day first. Each day is a heading with its total that
+                // starts collapsed; opening it shows that day's foods.
                 ForEach(days, id: \.self) { day in
                     let dayEntries = byDay[day] ?? []
+                    let isOpen = router.calendarOpenDays.contains(day)
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(AppFormatters.dayTitle.string(from: day))
-                                .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text("\(AppFormatters.amount(LocalDay.total(dayEntries).calories)) kcal")
-                                .font(.subheadline.weight(.semibold))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
+                        Button {
+                            withAnimation(.snappy) {
+                                if isOpen {
+                                    router.calendarOpenDays.remove(day)
+                                } else {
+                                    router.calendarOpenDays.insert(day)
+                                }
+                            }
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                // Chevron before its text, like every chevron.
+                                DisclosureChevron(isExpanded: isOpen)
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.secondary)
+                                Text(AppFormatters.dayTitle.string(from: day))
+                                    .font(.subheadline.weight(.semibold))
+                                Text("\u{00B7} \(dayEntries.count) item\(dayEntries.count == 1 ? "" : "s")")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("\(AppFormatters.amount(LocalDay.total(dayEntries).calories)) kcal")
+                                    .font(.subheadline.weight(.semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(minHeight: AppTheme.minimumTapTarget)
+                            .contentShape(Rectangle())
                         }
-                        .padding(.top, 4)
-                        ForEach(dayEntries) { entry in
-                            FoodEntryCard(entry: entry,
-                                          onEdit: { editingDraft = FoodEntryDraft(entry: entry) },
-                                          onDelete: { entryPendingDeletion = entry })
+                        .buttonStyle(.plain)
+                        .accessibilityHint(isOpen ? "Hides this day's food" : "Shows this day's food")
+
+                        if isOpen {
+                            ForEach(dayEntries) { entry in
+                                FoodEntryCard(entry: entry,
+                                              onEdit: { editingDraft = FoodEntryDraft(entry: entry) },
+                                              onDelete: { entryPendingDeletion = entry })
+                            }
                         }
                     }
                 }
@@ -195,6 +257,7 @@ struct CalendarView: View {
         guard let requested = router.calendarRequestedDate else { return }
         period = nil
         selectedDate = requested
+        router.calendarMonth = CalendarMonthGrid.firstOfMonth(requested)
         section = .day
         router.calendarRequestedDate = nil
     }
@@ -297,21 +360,24 @@ struct CalendarMonthGrid: View {
     /// Called when a day is tapped, which leaves week or month mode.
     var onDayTapped: () -> Void = {}
 
-    @State private var month: Date
+    /// First day of the month on show. Owned by the caller, so the grid keeps
+    /// its page when the view is rebuilt (switching tabs or Days/Trends).
+    @Binding var month: Date
 
-    init(selectedDate: Binding<Date>, entries: [FoodEntry], calorieRange: NutrientRange,
-         highlightedPeriod: DateInterval? = nil, onDayTapped: @escaping () -> Void = {}) {
+    init(selectedDate: Binding<Date>, month: Binding<Date>, entries: [FoodEntry],
+         calorieRange: NutrientRange, highlightedPeriod: DateInterval? = nil,
+         onDayTapped: @escaping () -> Void = {}) {
         _selectedDate = selectedDate
+        _month = month
         self.entries = entries
         self.calorieRange = calorieRange
         self.highlightedPeriod = highlightedPeriod
         self.onDayTapped = onDayTapped
-        _month = State(initialValue: Self.firstOfMonth(selectedDate.wrappedValue))
     }
 
     private var calendar: Calendar { LocalDay.calendar() }
 
-    private static func firstOfMonth(_ date: Date) -> Date {
+    static func firstOfMonth(_ date: Date) -> Date {
         let calendar = LocalDay.calendar()
         return calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
     }
