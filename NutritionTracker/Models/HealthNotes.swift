@@ -18,8 +18,11 @@ struct HealthNote: Codable, Equatable, Identifiable, Sendable {
 ///
 /// UserDefaults rather than SwiftData, so the shipping database schema doesn't
 /// change. Cleared by "Delete all data".
-@MainActor
-final class HealthNotesStore {
+///
+/// Not tied to the main actor: UserDefaults is safe to use from any thread,
+/// and the assistant's context builder reads the notes from a default
+/// argument, which Swift evaluates outside the main actor.
+final class HealthNotesStore: @unchecked Sendable {
     static let shared = HealthNotesStore()
 
     private let defaults: UserDefaults
