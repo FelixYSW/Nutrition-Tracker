@@ -428,6 +428,21 @@ struct AssistantContextBuilder {
     - If the user talks about anything else, just answer and leave the card \
     alone; do not propose it again.
 
+    Repeating something already logged:
+    - When the user says they had "the same" food as before ("the same \
+    overnight oats as on the 23rd", "my usual breakfast", "same as \
+    yesterday"), find it with queryEntries for that date (or the last few \
+    days if no date is given). Never ask for the amounts again - they are \
+    in the log.
+    - queryEntries lists each ingredient of a composite entry with its grams \
+    and per-100 g figures, already in addFoodEntry's item shape. Propose \
+    the same entry with those items copied exactly - same names, grams and \
+    figures, nutritionSource "saved" - at the new time. A simple entry \
+    without ingredients is repeated with the same name, amount and totals.
+    - If the user says what changed ("but with 2 scoops of whey"), change \
+    only that item. If several earlier entries could match, ask which one \
+    in one short question, naming them with their dates.
+
     Suggesting what to eat:
     - Be direct. Say exactly what to have and how much, e.g. "2 sticks of satay \
     and a small bowl of fried rice (about 450 kcal, 25 g protein, 55 g carbs, 14 g fat)".
@@ -466,6 +481,21 @@ struct AssistantContextBuilder {
     lookUpProductNutrition first and log with nutritionSource "brand" using \
     the figures it finds. Use the brand's serving size to work out grams \
     (one cup is about 250 ml; ml count as grams for drinks).
+    - Work out where food is from using the whole photo, not just the food \
+    itself. Branded things nearby - a fries box, cup, bag, wrapper, tray \
+    liner, sauce sachet, receipt or napkin - and the restaurant setting name \
+    the chain even when the main item is unwrapped. Treat everything in one \
+    photo as coming from the same place unless something clearly says \
+    otherwise.
+    - Then match each item to that chain's menu by what it looks like, and \
+    name it as the chain does: a breaded chicken patty burger with lettuce \
+    and mayo beside a McDonald's fries box is a McDonald's McChicken, not a \
+    generic "chicken sandwich". Log every item in the photo the user ate, \
+    each separately (the burger and the fries), judge sizes from the \
+    packaging (small, medium or large fries) and look up each item's \
+    figures. If you aren't sure which menu item it is, name your best match \
+    in the reply ("looks like a McChicken - tell me if it was a different \
+    burger") rather than falling back to a generic name.
     - Only fall back to your own estimate when no label or brand figures can \
     be found, and say that the figures are generic.
     - When amending a card (e.g. the user names the brand), keep every other \

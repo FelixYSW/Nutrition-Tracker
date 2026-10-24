@@ -145,9 +145,9 @@ enum AppTheme {
 
     // MARK: Metrics
 
-    static let cornerRadius: CGFloat = 24
-    static let cardPadding: CGFloat = 16
-    static let pageSpacing: CGFloat = 18
+    static let cornerRadius: CGFloat = 22
+    static let cardPadding: CGFloat = 14
+    static let pageSpacing: CGFloat = 14
     /// Minimum tappable edge, per Apple's 44pt guidance.
     static let minimumTapTarget: CGFloat = 44
 }
@@ -189,6 +189,28 @@ extension UIColor {
 }
 
 extension AppTheme {
+    /// Tab bar colours. Only the selected tab's icon changes - to the flame
+    /// orange, under the glass pill; every label stays ink, selected or not.
+    /// Set through UIKit because SwiftUI's tint colours icon and label
+    /// together. The bar's own (glass) background is left as the system's.
+    static func applyTabBarColours() {
+        let ink = UIColor.adaptive(light: inkLight, dark: inkDark)
+        let flame = UIColor(red: 0xDB / 255, green: 0x5A / 255, blue: 0x1F / 255, alpha: 1)
+
+        let appearance = UITabBarAppearance()
+        appearance.configureWithDefaultBackground()
+        for item in [appearance.stackedLayoutAppearance,
+                     appearance.inlineLayoutAppearance,
+                     appearance.compactInlineLayoutAppearance] {
+            item.normal.iconColor = ink
+            item.normal.titleTextAttributes = [.foregroundColor: ink]
+            item.selected.iconColor = flame
+            item.selected.titleTextAttributes = [.foregroundColor: ink]
+        }
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+
     /// Navigation bar titles are drawn by UIKit, so they need the ink colour
     /// set separately or they stay pure black / pure white.
     static func applyNavigationBarTextColour() {
@@ -201,7 +223,7 @@ extension AppTheme {
         UINavigationBar.appearance().titleTextAttributes = [
             .foregroundColor: ink, .font: rounded(17, .bold)]
         UINavigationBar.appearance().largeTitleTextAttributes = [
-            .foregroundColor: ink, .font: rounded(32, .heavy)]
+            .foregroundColor: ink, .font: rounded(28, .heavy)]
     }
 }
 #endif
@@ -302,7 +324,7 @@ struct PrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(.body, design: .rounded).weight(.heavy))
             .foregroundStyle(isEnabled ? AppTheme.onAccent : Color.secondary)
-            .frame(maxWidth: .infinity, minHeight: 56)
+            .frame(maxWidth: .infinity, minHeight: 50)
             .padding(.horizontal, 20)
             // Solid in both states. Fading the fill to show "disabled" made
             // the content behind the button show through it.
@@ -356,6 +378,49 @@ struct AppSectionHeading: View {
     }
 }
 
+/// The title at the top of every tab: one style and one position on Today,
+/// Add meal, Assistant and Calendar. Drawn in the page rather than by the
+/// navigation bar, whose large-title mode left an empty bar above the title.
+struct PageHeader<Trailing: View>: View {
+    let title: String
+    /// A small line above the title, e.g. the weekday on Today.
+    var subtitle: String?
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Text(title)
+                    .font(AppTheme.pageTitleFont)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                    .contentTransition(.numericText())
+                    .accessibilityAddTraits(.isHeader)
+            }
+            Spacer(minLength: 8)
+            trailing
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension PageHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.init(title: title, subtitle: subtitle) { EmptyView() }
+    }
+}
+
+extension AppTheme {
+    /// Page titles: heavy rounded at the "title" text style (28 pt by
+    /// default), following Dynamic Type.
+    static var pageTitleFont: Font { .system(.title, design: .rounded).weight(.heavy) }
+}
+
 /// A circular, glass icon button for nav-bar-style actions on a page.
 struct GlassIconButton: View {
     let systemImage: String
@@ -365,7 +430,7 @@ struct GlassIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(AppTheme.accent)
                 .frame(width: 44, height: 44)
                 .appGlass(in: Circle(), interactive: true)

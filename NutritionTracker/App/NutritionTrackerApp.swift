@@ -11,7 +11,11 @@ struct NutritionTrackerApp: App {
     init() {
         #if canImport(UIKit)
         AppTheme.applyNavigationBarTextColour()
+        AppTheme.applyTabBarColours()
         #endif
+        // Start watching foreground/background from launch, so an assistant
+        // request cut off by switching apps is recognised and resent.
+        _ = AppActivity.shared
     }
 
     var body: some Scene {

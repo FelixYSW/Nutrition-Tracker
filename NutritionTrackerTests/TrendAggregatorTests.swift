@@ -182,3 +182,35 @@ final class CalendarPeriodHighlightTests: XCTestCase {
         XCTAssertFalse(CalendarMonthGrid.day(week.end, isIn: week), "next Monday is excluded")
     }
 }
+
+@MainActor
+final class TrendsDailyAveragesTests: XCTestCase {
+
+    /// Two logged days of 1,800 and 2,200 kcal average 2,000. An unlogged day
+    /// doesn't count, and today - still going - is left out.
+    func testAveragesLoggedFinishedDaysOnly() {
+        let calendar = TestSupport.calendar()
+        let now = TestSupport.date(2026, 10, 20, 15, calendar: calendar)
+        let entries = [
+            TestSupport.entry(at: TestSupport.date(2026, 10, 17, 13, calendar: calendar), calories: 1800),
+            TestSupport.entry(at: TestSupport.date(2026, 10, 19, 13, calendar: calendar), calories: 1200),
+            TestSupport.entry(at: TestSupport.date(2026, 10, 19, 19, calendar: calendar), calories: 1000),
+            TestSupport.entry(at: TestSupport.date(2026, 10, 20, 9, calendar: calendar), calories: 500)
+        ]
+        let result = TrendsView.dailyAverages(
+            entries: entries, from: TestSupport.date(2026, 10, 7, 0, calendar: calendar),
+            to: now, calendar: calendar)
+        XCTAssertEqual(result.daysLogged, 2)
+        XCTAssertEqual(result.average.calories, 2000, accuracy: 0.001)
+    }
+
+    func testNothingFinishedLoggedGivesZeroDays() {
+        let calendar = TestSupport.calendar()
+        let now = TestSupport.date(2026, 10, 20, 15, calendar: calendar)
+        let result = TrendsView.dailyAverages(
+            entries: [TestSupport.entry(at: TestSupport.date(2026, 10, 20, 9, calendar: calendar),
+                                        calories: 500)],
+            from: TestSupport.date(2026, 10, 7, 0, calendar: calendar), to: now, calendar: calendar)
+        XCTAssertEqual(result.daysLogged, 0)
+    }
+}

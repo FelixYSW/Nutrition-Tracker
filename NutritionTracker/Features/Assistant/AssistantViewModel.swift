@@ -292,8 +292,11 @@ final class AssistantViewModel {
                     }
                     let (question, activity) = Self.webQuestion(for: call, currentPlace: here)
                     append(.toolActivity(activity))
-                    let (content, failed) = await searchWeb(question)
+                    let (content, failed, summary) = await searchWeb(question)
+                    // Only a lookup that actually found published figures
+                    // holds the product to them; "nothing found" doesn't.
                     if call.tool == .lookUpProductNutrition, !failed,
+                       let summary, Self.foundPublishedFigures(in: summary),
                        let product = call.arguments["product"]?.stringValue {
                         lookedUpProducts.append(product)
                     }
@@ -302,10 +305,16 @@ final class AssistantViewModel {
                 }
 
                 // A product that was just looked up must be logged with its
-                // published figures, not a guess.
+                // published figures, not a guess. Enforced once per product:
+                // if the model sends an estimate again, the lookup evidently
+                // had nothing usable, and refusing again would leave the user
+                // unable to log the food at all.
                 if [.addFoodEntry, .editFoodEntry, .calculateNutrition].contains(call.tool),
                    let detail = Self.unusedBrandFigures(in: call.arguments,
                                                         lookedUp: lookedUpProducts) {
+                    let blocked = Set(Self.productsSentAsEstimates(in: call.arguments,
+                                                                   lookedUp: lookedUpProducts))
+                    lookedUpProducts.removeAll { blocked.contains($0) }
                     resultBlocks.append(.toolResult(id: call.id, content: detail, isError: true))
                     continue
                 }
@@ -438,7 +447,9 @@ final class AssistantViewModel {
                 + "give the serving size too and convert to per 100 g.",
             "Also give the usual serving or pack size (e.g. one cup, one bottle in ml).",
             "Prefer the manufacturer's website or the product's label. Name the exact product "
-                + "variant the figures are for, and say if you could not find that product."
+                + "variant the figures are for.",
+            "If no published nutrition figures exist for this product, start your answer with "
+                + "NOT FOUND and do not make up or estimate any numbers."
         ]
         if let country = country?.trimmingCharacters(in: .whitespaces), !country.isEmpty {
             lines.append("The product as sold in \(country).")
@@ -446,7 +457,8 @@ final class AssistantViewModel {
         return lines.joined(separator: "\n")
     }
 
-    private func searchWeb(_ question: String) async -> (String, Bool) {
+    /// The tool result, whether it failed, and the answer text when it didn't.
+    private func searchWeb(_ question: String) async -> (String, Bool, String?) {
         do {
             let result = try await service.searchWeb(question)
             struct Payload: Encodable {
@@ -455,10 +467,20 @@ final class AssistantViewModel {
                 let sources: [WebSearchResult.Source]
             }
             let data = try JSONEncoder().encode(Payload(summary: result.summary, sources: result.sources))
-            return (String(decoding: data, as: UTF8.self), false)
+            return (String(decoding: data, as: UTF8.self), false, result.summary)
         } catch {
-            return ("{\"status\":\"error\",\"detail\":\"\(Self.escape(error.localizedDescription))\"}", true)
+            return ("{\"status\":\"error\",\"detail\":\"\(Self.escape(error.localizedDescription))\"}",
+                    true, nil)
         }
+    }
+
+    /// Whether a nutrition lookup's answer has real published figures: it
+    /// doesn't open with NOT FOUND, and it gives at least one calorie number.
+    static func foundPublishedFigures(in summary: String) -> Bool {
+        let text = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.uppercased().hasPrefix("NOT FOUND") { return false }
+        let calorieNumber = #"\d[\d.,]*\s*(kcal|calories|cal\b)"#
+        return text.range(of: calorieNumber, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?,
@@ -646,23 +668,39 @@ final class AssistantViewModel {
     /// as an estimate, or nil when all is well.
     static func unusedBrandFigures(in arguments: [String: JSONValue],
                                    lookedUp products: [String]) -> String? {
-        guard !products.isEmpty else { return nil }
-        let items = AssistantToolExecutor.foods(in: arguments)
-            .flatMap { $0["items"]?.arrayValue ?? [] }
-            .compactMap(\.objectValue)
-        let unused = items.compactMap { item -> String? in
-            let source = item["nutritionSource"]?.stringValue?.lowercased()
-            guard source != "brand", source != "label",
-                  let name = item["name"]?.stringValue,
-                  let product = products.first(where: { matches(name, $0) }) else { return nil }
-            return "\(name) (looked up as \(product))"
-        }
+        let unused = estimatedItems(in: arguments, lookedUp: products)
+            .map { "\($0.name) (looked up as \($0.product))" }
         guard !unused.isEmpty else { return nil }
         return "{\"status\":\"error\",\"detail\":\"" + escape(
             "Nothing was logged. You looked up the published nutrition for "
                 + unused.joined(separator: ", ") + " but sent an estimate. Send it again "
-                + "with the per-100 g figures from that lookup and nutritionSource \"brand\".")
+                + "with the per-100 g figures from that lookup and nutritionSource \"brand\". "
+                + "If that lookup had no published figures for it, send it again unchanged "
+                + "as an estimate and it will be accepted.")
             + "\"}"
+    }
+
+    /// The looked-up products that the call sends as estimates.
+    static func productsSentAsEstimates(in arguments: [String: JSONValue],
+                                        lookedUp products: [String]) -> [String] {
+        estimatedItems(in: arguments, lookedUp: products).map(\.product)
+    }
+
+    /// Items that match a looked-up product but aren't from a brand or label.
+    private static func estimatedItems(in arguments: [String: JSONValue],
+                                       lookedUp products: [String])
+        -> [(name: String, product: String)] {
+        guard !products.isEmpty else { return [] }
+        let items = AssistantToolExecutor.foods(in: arguments)
+            .flatMap { $0["items"]?.arrayValue ?? [] }
+            .compactMap(\.objectValue)
+        return items.compactMap { item in
+            let source = item["nutritionSource"]?.stringValue?.lowercased()
+            guard source != "brand", source != "label", source != "saved",
+                  let name = item["name"]?.stringValue,
+                  let product = products.first(where: { matches(name, $0) }) else { return nil }
+            return (name, product)
+        }
     }
 
     /// Two product names share at least two significant words.

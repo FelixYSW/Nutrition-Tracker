@@ -57,7 +57,7 @@ struct TrendsView: View {
                     .appCard()
             } else {
                 chartCard
-                summaryCard
+                averagesCard
             }
         }
     }
@@ -222,69 +222,128 @@ struct TrendsView: View {
         }
     }
 
-    private var summaryCard: some View {
-        let tally = TrendAggregator.tally(buckets: buckets, nutrient: nutrient,
-                                          range: range, scale: scale)
-        let unit = scale == .daily ? "day" : (scale == .weekly ? "week" : "month")
+    // MARK: Daily averages
 
-        // The heading sits on the page and each count is its own card, as in
-        // the mockup.
+    /// Every nutrient's average day over the chart's period, against its
+    /// range - what the chart can't show at once. Tapping a row puts that
+    /// nutrient on the chart.
+    private var averagesCard: some View {
+        let start = buckets.first?.interval.start ?? .now
+        let result = Self.dailyAverages(entries: allEntries, from: start, to: .now)
+        let ranges = targets.first?.ranges
+
         return VStack(alignment: .leading, spacing: 12) {
-            AppSectionHeading(title: "Summary")
+            AppSectionHeading(title: "Daily averages")
 
-            if range.max <= 0 {
-                Text("Set a \(nutrient.displayName.lowercased()) target to see how "
-                     + "these compare.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .appCard()
-            } else {
-                HStack(spacing: 10) {
-                    summaryTile(state: .within, count: tally.within, unit: unit)
-                    summaryTile(state: .over, count: tally.over, unit: unit)
-                    summaryTile(state: .under, count: tally.under, unit: unit)
-                }
-
-                if tally.noData > 0 {
-                    Text("\(tally.noData) \(unit)\(tally.noData == 1 ? "" : "s") with "
-                         + "nothing logged.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Nutrient.allCases) { item in
+                    averageRow(item, value: result.average[item], range: ranges?[item])
                 }
             }
-        }
-    }
+            .appCard()
 
-    /// A big count with what it counts underneath: "7 days in range". The
-    /// number takes the state's colour (a deep shade, for contrast).
-    private func summaryTile(state: RangeState, count: Int, unit: String) -> some View {
-        VStack(spacing: 2) {
-            Text("\(count)")
-                .font(.system(.title, design: .rounded).weight(.heavy))
-                .monospacedDigit()
-                .foregroundStyle(AppTheme.stateTextColor(for: state))
-            Text("\(unit)\(count == 1 ? "" : "s") \(tileLabel(for: state))")
-                .font(.subheadline.weight(.semibold))
+            Text(averagesCaption(daysLogged: result.daysLogged))
+                .font(.footnote)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .padding(.horizontal, 6)
-        .background(AppTheme.cardBackground,
-                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .stroke(AppTheme.cardBorder, lineWidth: 1))
-        .accessibilityElement(children: .combine)
     }
 
-    private func tileLabel(for state: RangeState) -> String {
-        switch state {
-        case .under: "under"
-        case .within: "in range"
-        case .over: "over"
+    private func averagesCaption(daysLogged: Int) -> String {
+        let period: String = switch scale {
+        case .daily: "the last \(scale.bucketCount) days"
+        case .weekly: "the last \(scale.bucketCount) weeks"
+        case .monthly: "the last \(scale.bucketCount) months"
         }
+        guard daysLogged > 0 else {
+            return "No finished days logged in \(period) yet. Today isn't counted until it's over."
+        }
+        return "Average of the \(daysLogged) day\(daysLogged == 1 ? "" : "s") you logged in "
+            + "\(period). Today isn't counted until it's over. Tap a nutrient to chart it."
+    }
+
+    private func averageRow(_ item: Nutrient, value: Double, range: NutrientRange?) -> some View {
+        let isCharted = item == nutrient
+        let unit = item == .calories ? "kcal" : "g"
+        let state = (range?.max ?? 0) > 0 ? range?.state(consumed: value) : nil
+
+        return Button {
+            withAnimation(.snappy) { router.trendsNutrient = item }
+            Haptics.selection()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: item.symbolName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(AppTheme.color(for: item))
+                    .frame(width: 32, height: 32)
+                    .background(AppTheme.color(for: item).opacity(0.13),
+                                in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.displayName)
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    if let range, range.max > 0 {
+                        Text("Range \(AppFormatters.range(range)) \(unit)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                Spacer(minLength: 6)
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(AppFormatters.amount(value))
+                            .font(.system(.body, design: .rounded).weight(.heavy))
+                            .monospacedDigit()
+                        Text(unit)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let state {
+                        Text(statusLabel(state))
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(AppTheme.stateTextColor(for: state))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(AppTheme.stateFill(for: state), in: Capsule())
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(minHeight: AppTheme.minimumTapTarget)
+            // The nutrient on the chart is marked with a soft tint.
+            .background(isCharted ? AppTheme.subtleFill.opacity(0.7) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isCharted ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint("Shows \(item.displayName.lowercased()) on the chart")
+    }
+
+    private func statusLabel(_ state: RangeState) -> String {
+        switch state {
+        case .under: "Under"
+        case .within: "In range"
+        case .over: "Over"
+        }
+    }
+
+    /// The average logged day between `start` and the start of today, and
+    /// how many days that is. Today is left out while it's still going, and
+    /// days with nothing logged don't count, so neither drags the average down.
+    static func dailyAverages(entries: [FoodEntry], from start: Date, to now: Date,
+                              calendar: Calendar = LocalDay.calendar())
+        -> (average: Nutrition, daysLogged: Int) {
+        let today = calendar.startOfDay(for: now)
+        let finished = entries.filter { $0.consumedAt >= start && $0.consumedAt < today }
+        let days = Set(finished.map { calendar.startOfDay(for: $0.consumedAt) }).count
+        guard days > 0 else { return (.zero, 0) }
+        return (LocalDay.total(finished) * (1 / Double(days)), days)
     }
 }

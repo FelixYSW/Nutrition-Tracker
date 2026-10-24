@@ -35,7 +35,7 @@ struct SettingsView: View {
                 Group {
                     planSection
                     appearanceSection
-                    privacySection
+                    assistantSection
                     backupSection
                     aboutSection
                 }
@@ -101,10 +101,9 @@ struct SettingsView: View {
                 Button("Delete everything", role: .destructive) { deleteAll() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This removes your profile, targets, every food entry, past "
-                     + "assistant chats and all "
-                     + "retained photos from this iPhone. It cannot be undone. "
-                     + "Export a backup first if you might want this data back.")
+                Text("This removes your profile, daily ranges, every food entry and all "
+                     + "assistant chats and their photos from this iPhone. It cannot be "
+                     + "undone. Export a backup first if you might want this data back.")
             }
         }
     }
@@ -201,34 +200,36 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: Photos and privacy
+    // MARK: AI assistant
 
-    private var privacySection: some View {
+    /// Which AI answers, and what it is sent - the one part of the app that
+    /// leaves the phone.
+    private var assistantSection: some View {
         Section {
-            Toggle(isOn: Binding(
-                get: { settings.retainAnalysedImages },
-                set: { newValue in
-                    settings.retainAnalysedImages = newValue
-                    if !newValue { ImageStore.deleteAll() }
-                    save()
-                })) {
-                SettingsLabel("Keep analysed photos", systemImage: "photo")
+            LabeledContent {
+                Text(Self.assistantModelName)
+            } label: {
+                SettingsLabel("Model", systemImage: "sparkles")
             }
-            .tint(AppTheme.nativeSwitch)
-
-            Toggle(isOn: Binding(
-                get: { settings.storeCorrectionsForTraining },
-                set: { settings.storeCorrectionsForTraining = $0; save() })) {
-                SettingsLabel("Save my corrections", systemImage: "checkmark")
+            LabeledContent {
+                Text("Low")
+            } label: {
+                SettingsLabel("Reasoning effort", systemImage: "brain")
             }
-            .tint(AppTheme.nativeSwitch)
         } header: {
-            Text("Photos and privacy")
+            Text("AI assistant")
         } footer: {
-            Text("Everything stays on this iPhone. Corrections pair what photo analysis "
-                 + "guessed with what you saved, to help improve it later; they are "
-                 + "never uploaded.")
+            Text("To answer, the assistant sends OpenAI your message, any photos you attach, "
+                 + "your profile basics, daily ranges and food log. Searches for food, "
+                 + "brands and places also go through OpenAI. Chats are kept on this "
+                 + "iPhone under Past chats.")
         }
+    }
+
+    /// "GPT-6 Luna" for the default model, else the configured model's id.
+    static var assistantModelName: String {
+        let model = BundledAPIKey.assistantModel ?? OpenAIAssistantService.defaultModel
+        return model == "gpt-6-luna" ? "GPT-6 Luna" : model
     }
 
     // MARK: Backup
@@ -253,11 +254,6 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            NavigationLink {
-                AttributionView()
-            } label: {
-                SettingsLabel("Data sources and licences", systemImage: "books.vertical")
-            }
             LabeledContent {
                 Text(Self.versionString).monospacedDigit()
             } label: {
@@ -266,8 +262,8 @@ struct SettingsView: View {
         } header: {
             Text("About")
         } footer: {
-            Text("Calculated ranges and photo-based nutrition are estimates for "
-                 + "information only, not medical advice.")
+            Text("Daily ranges and AI nutrition figures are estimates for information "
+                 + "only, not medical advice.")
         }
     }
 
@@ -568,21 +564,43 @@ struct TargetsEditorView: View {
     @Environment(\.modelContext) private var context
 
     let target: NutritionTarget
+    @Query private var profiles: [UserProfile]
     @State private var ranges = NutritionTargetRanges.zero
+
+    /// What the profile works out to now, to compare with and reset to.
+    private var calculated: NutritionTargetRanges? {
+        profiles.first.map { NutritionTargetCalculator.calculate(profile: $0).ranges }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: AppTheme.pageSpacing) {
-                    ForEach(Nutrient.allCases) { nutrient in
-                        RangeEditorRow(nutrient: nutrient,
-                                       range: Binding(
-                                        get: { ranges[nutrient] },
-                                        set: { ranges[nutrient] = $0 }))
+                VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                    Text("Each target is a range: a minimum to reach every day and a "
+                         + "maximum not to go over. Tap one to change either end.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(spacing: 12) {
+                        ForEach(Nutrient.allCases) { nutrient in
+                            RangeEditorRow(nutrient: nutrient,
+                                           range: Binding(
+                                            get: { ranges[nutrient] },
+                                            set: { ranges[nutrient] = $0 }),
+                                           calculated: calculated?[nutrient])
+                        }
                     }
+
+                    Text("Ranges you change here stay as you set them when your profile "
+                         + "changes. The others are recalculated for you.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .appPageContent()
             }
+            .keyboardDismissControls()
             .appPageSurface()
             .navigationTitle("Daily ranges")
             .navigationBarTitleDisplayMode(.inline)
@@ -601,85 +619,6 @@ struct TargetsEditorView: View {
             }
             .onAppear { ranges = target.ranges }
         }
-    }
-}
-
-/// Attribution for every dataset and database the app relies on
-/// (spec sections 29, 38).
-struct AttributionView: View {
-    var body: some View {
-        List {
-            Group {
-                Section("Nutrition data") {
-                    AttributionRow(
-                        title: "MyFCD \u{2014} Malaysian Food Composition Database",
-                        detail: "Ministry of Health Malaysia. Lab-measured values for "
-                            + "local foods, compiled by hand into the bundled reference "
-                            + "table. Check its terms before redistributing.")
-                    AttributionRow(
-                        title: "Open Food Facts",
-                        detail: "Barcode product data, contributed by the community. "
-                            + "Product data under the Open Database Licence (ODbL).")
-                }
-
-                Section("Model training datasets") {
-                    AttributionRow(
-                        title: "FoodSeg103",
-                        detail: "Food segmentation base training set for Model A. "
-                            + "Research use; check its licence before distribution.")
-                    AttributionRow(
-                        title: "Nutrition5k",
-                        detail: "Google. Mass and nutrition labels for Model B. "
-                            + "Captured on a fixed overhead rig with depth sensing.")
-                    AttributionRow(
-                        title: "Malaysia Food-11",
-                        detail: "Kaggle. Small 11-class Malaysian starter set, "
-                            + "used for fine-tuning.")
-                    AttributionRow(
-                        title: "MF-150",
-                        detail: "IEEE DataPort. Multilabel Malaysian foods dataset for "
-                            + "ingredient detection.")
-                    AttributionRow(
-                        title: "Malaysian Food Recognition 1 & 2",
-                        detail: "Roboflow Universe, CC BY 4.0. Community "
-                            + "object-detection sets.")
-                }
-
-                Section {
-                    Text("Local-dish recognition starts weak: the public Malaysian "
-                         + "datasets are small, and Model B's portion estimates were "
-                         + "trained only on Nutrition5k, so its accuracy on local "
-                         + "food is unverified. Your own corrections are what "
-                         + "improve it over time.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } header: {
-                    Text("Accuracy")
-                }
-            }
-            // Soft card rows instead of the system's pure white.
-            .listRowBackground(AppTheme.cardBackground)
-        }
-        .scrollContentBackground(.hidden)
-        .background(AppTheme.background.ignoresSafeArea())
-        .navigationTitle("Data sources")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-struct AttributionRow: View {
-    let title: String
-    let detail: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.subheadline.weight(.medium))
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 2)
     }
 }
 

@@ -133,9 +133,10 @@ struct OpenAIAssistantService: AssistantServing {
 
     init(session: URLSession = {
         let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 60
+        // A reply with photos plus reasoning can take over a minute.
+        configuration.timeoutIntervalForRequest = 150
         // Reasoning plus a web search can take a while; allow for it.
-        configuration.timeoutIntervalForResource = 120
+        configuration.timeoutIntervalForResource = 180
         return URLSession(configuration: configuration)
     }(),
          baseURL: String = BundledAPIKey.assistantBaseURL ?? Self.defaultBaseURL,
@@ -209,16 +210,36 @@ struct OpenAIAssistantService: AssistantServing {
         [500, 502, 503, 504].contains(status)
     }
 
+    /// Sends one request. Switching to another app suspends this one and cuts
+    /// the connection, which used to surface as "timed out" or "needs an
+    /// internet connection". So iOS is asked for time to finish, and if the
+    /// request still dies while the app was away, it's resent once the user
+    /// is back. Resending is safe: each request is self-contained and nothing
+    /// is saved without the user confirming a card.
     private func perform(_ request: URLRequest) async throws -> (Data, Int) {
-        do {
-            let (data, response) = try await session.data(for: request)
-            return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
-        } catch let error as URLError
-            where error.code == .notConnectedToInternet || error.code == .networkConnectionLost {
-            throw AssistantServiceError.offline
-        } catch {
-            throw AssistantServiceError.requestFailed(detail: error.localizedDescription)
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            let started = Date.now
+            let token = await AppActivity.shared.beginBackgroundWork(named: "Assistant request")
+            do {
+                let (data, response) = try await session.data(for: request)
+                await AppActivity.shared.endBackgroundWork(token)
+                return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+            } catch {
+                await AppActivity.shared.endBackgroundWork(token)
+                let interruptedByBackground = await AppActivity.shared.wasBackgrounded(since: started)
+                if interruptedByBackground, attempt < maxAttempts, !Task.isCancelled {
+                    await AppActivity.shared.waitUntilActive()
+                    continue
+                }
+                if let urlError = error as? URLError,
+                   urlError.code == .notConnectedToInternet || urlError.code == .networkConnectionLost {
+                    throw AssistantServiceError.offline
+                }
+                throw AssistantServiceError.requestFailed(detail: error.localizedDescription)
+            }
         }
+        throw AssistantServiceError.requestFailed(detail: "the request could not be completed")
     }
 
     static func check(status: Int, model: String, body: Data? = nil) throws {

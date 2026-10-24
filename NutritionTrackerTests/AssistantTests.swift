@@ -616,6 +616,27 @@ final class AssistantToolExecutorTests: XCTestCase {
         XCTAssertEqual(count(context), 1)
     }
 
+    /// "The same overnight oats as on the 23rd": the log lists each
+    /// ingredient with its grams and per-100 g figures, ready to copy.
+    func testQueryEntriesListsIngredientsToRepeat() throws {
+        let context = TestSupport.makeContext()
+        let draft = FoodEntryDraft(name: "Overnight oats", ingredients: [
+            IngredientDraft(name: "rolled oats", quantity: 40, servingSize: 100, unit: .gram,
+                            nutritionPerServing: Nutrition(calories: 380, protein: 13,
+                                                           carbs: 60, fat: 7, fibre: 10))
+        ])
+        context.insert(draft.makeEntry())
+        try context.save()
+
+        let outcome = AssistantToolExecutor(context: context)
+            .execute(AssistantToolCall(id: "q", tool: .queryEntries, arguments: [:]))
+        guard case .result(let json) = outcome else { return XCTFail() }
+        XCTAssertTrue(json.contains("rolled oats"))
+        XCTAssertTrue(json.contains("\"grams\":40"))
+        XCTAssertTrue(json.contains("\"kcalPer100g\":380"))
+        XCTAssertTrue(json.contains("\"nutritionSource\":\"saved\""))
+    }
+
     func testQueryRejectsInvertedRange() {
         let outcome = AssistantToolExecutor(context: TestSupport.makeContext()).execute(
             AssistantToolCall(id: "q", tool: .queryEntries,
@@ -1412,6 +1433,25 @@ final class AssistantSafeguardTests: XCTestCase {
             lookedUp: []), "nothing looked up, nothing to enforce")
     }
 
+    /// The products a blocked call sent as estimates, so the block can be
+    /// lifted for them: it applies once, never in a loop.
+    func testBlockedProductsAreIdentifiedForRelease() {
+        let products = AssistantViewModel.productsSentAsEstimates(
+            in: ["foods": .array([food("Kinori teriyaki chicken taco")])],
+            lookedUp: ["Kinori Teriyaki Chicken sushi taco", "Farm Fresh milk"])
+        XCTAssertEqual(products, ["Kinori Teriyaki Chicken sushi taco"])
+    }
+
+    /// Only a lookup that found real figures holds the product to them.
+    func testLookupCountsOnlyWhenFiguresWereFound() {
+        XCTAssertTrue(AssistantViewModel.foundPublishedFigures(
+            in: "Per 100 g: 245 kcal, protein 12 g, carbs 30 g, fat 8 g."))
+        XCTAssertFalse(AssistantViewModel.foundPublishedFigures(
+            in: "NOT FOUND. Kinori doesn't publish nutrition information."))
+        XCTAssertFalse(AssistantViewModel.foundPublishedFigures(
+            in: "I couldn't find official nutrition facts for these tacos."))
+    }
+
     /// Correcting the brand of last night's shake keeps last night's time.
     func testAmendedCardWithoutATimeKeepsTheOldTime() {
         let lastNight = Date.now.addingTimeInterval(-3 * 3600)
@@ -1564,5 +1604,46 @@ final class AssistantReachTests: XCTestCase {
         XCTAssertNil(AssistantViewModel.namedPlace(in: ["place": .string("Near me")]))
         XCTAssertNil(AssistantViewModel.namedPlace(in: [:]))
         XCTAssertEqual(AssistantViewModel.namedPlace(in: ["place": .string("Pavilion KL")]), "Pavilion KL")
+    }
+}
+
+// MARK: - Empty chat
+
+@MainActor
+final class EmptyChatTests: XCTestCase {
+
+    func testMomentFollowsTheTimeOfDay() {
+        let calendar = TestSupport.calendar()
+        func moment(_ hour: Int) -> EmptyChatView.Moment {
+            .init(date: TestSupport.date(2026, 10, 20, hour, calendar: calendar), calendar: calendar)
+        }
+        XCTAssertEqual(moment(8), .breakfast)
+        XCTAssertEqual(moment(12), .lunch)
+        XCTAssertEqual(moment(16), .afternoon)
+        XCTAssertEqual(moment(19), .dinner)
+        XCTAssertEqual(moment(23), .lateNight)
+        XCTAssertEqual(moment(3), .lateNight)
+    }
+
+    /// Every part of the day offers the menu photo and a way to log a meal.
+    func testEveryMomentShowsWhatTheAssistantCanDo() {
+        for moment in [EmptyChatView.Moment.breakfast, .lunch, .afternoon, .dinner, .lateNight] {
+            XCTAssertTrue(moment.suggestions.contains { $0.action == .menuPhoto }, "\(moment)")
+            XCTAssertTrue(moment.suggestions.contains {
+                if case .draft = $0.action { return true } else { return false }
+            }, "\(moment)")
+        }
+    }
+
+    func testStatusLineSaysWhereTodayStands() {
+        let range = NutrientRange(min: 1800, max: 2100)
+        XCTAssertEqual(EmptyChatView.statusLine(caloriesSoFar: 1420, range: range, hasLoggedToday: true),
+                       "1420 kcal so far \u{00B7} 380 kcal to reach your range")
+        XCTAssertEqual(EmptyChatView.statusLine(caloriesSoFar: 1900, range: range, hasLoggedToday: true),
+                       "1900 kcal so far \u{00B7} in range")
+        XCTAssertTrue(EmptyChatView.statusLine(caloriesSoFar: 0, range: range, hasLoggedToday: false)
+            .hasPrefix("Nothing logged yet today"))
+        XCTAssertEqual(EmptyChatView.statusLine(caloriesSoFar: 0, range: nil, hasLoggedToday: false),
+                       "Ask me anything about what you eat.")
     }
 }

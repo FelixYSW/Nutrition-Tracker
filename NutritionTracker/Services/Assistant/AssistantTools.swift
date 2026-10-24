@@ -111,9 +111,11 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 "Where the per-100 g figures come from. \"label\": a nutrition table the user "
                     + "typed or photographed. \"brand\": the brand's published values found with "
                     + "lookUpProductNutrition. Both are used exactly as given, ahead of the app's "
-                    + "database. \"estimate\" (default): your guess, replaced by the database "
+                    + "database. \"saved\": copied from an entry already in the user's log "
+                    + "(queryEntries lists each ingredient's figures), used exactly as given. "
+                    + "\"estimate\" (default): your guess, replaced by the database "
                     + "when it knows the food.",
-                allowed: ["label", "brand", "estimate"])
+                allowed: ["label", "brand", "saved", "estimate"])
         ], required: ["name", "grams"])
 
         switch self {
@@ -571,6 +573,8 @@ enum AssistantArgumentParser {
         let declared: NutritionProvenance? = switch arguments["nutritionSource"]?.stringValue?.lowercased() {
         case "label": .nutritionLabel
         case "brand": .brandPublished
+        // Repeating something already logged: the same figures as before.
+        case "saved": .localVerified
         default: nil
         }
         if let declared, figures.calories > 0 || figures.energyFromMacros > 0 {

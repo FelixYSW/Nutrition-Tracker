@@ -43,6 +43,8 @@ struct AddMealView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                    PageHeader(title: "Add meal")
+
                     if let notice {
                         noticeCard(notice)
                     } else if drafts.contains(where: { $0.source == .photoAI }) {
@@ -91,9 +93,9 @@ struct AddMealView: View {
                 .appPageContent()
             }
             .appPageSurface()
-            .navigationTitle("Add meal")
+            // The title is drawn in the page, like every tab.
+            .toolbar(.hidden, for: .navigationBar)
             .keyboardDismissControls()
-            .navigationBarTitleDisplayMode(.large)
             .safeAreaInset(edge: .bottom) { saveBar }
             .alert("Could not save",
                    isPresented: Binding(get: { saveError != nil },

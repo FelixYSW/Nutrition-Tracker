@@ -88,24 +88,12 @@ struct DashboardView: View {
     // MARK: Sections
 
     private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(dayLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(AppFormatters.dayAndMonth.string(from: shownDay))
-                    .font(.system(.largeTitle, design: .rounded).weight(.heavy))
-                    .minimumScaleFactor(0.7)
-                    .lineLimit(1)
-                    .contentTransition(.numericText())
-            }
-            Spacer()
-            GlassIconButton(systemImage: "person",
-                            label: "Settings") {
+        PageHeader(title: AppFormatters.dayAndMonth.string(from: shownDay),
+                   subtitle: dayLabel) {
+            GlassIconButton(systemImage: "person", label: "Settings") {
                 isShowingSettings = true
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// "Wednesday" today; "Yesterday · Tuesday" or "Monday" for earlier days.
@@ -134,23 +122,24 @@ struct DashboardView: View {
 
             Spacer(minLength: 8)
 
-            if !isShowingToday {
-                Button {
-                    withAnimation(.snappy) { pickedDay = nil }
-                    Haptics.selection()
-                } label: {
-                    Label("Today", systemImage: "arrow.uturn.forward")
-                        .font(.system(.subheadline, design: .rounded).weight(.bold))
-                        .foregroundStyle(AppTheme.onAccent)
-                        .padding(.horizontal, 16)
-                        .frame(minHeight: AppTheme.minimumTapTarget)
-                        .background(AppTheme.accentFill, in: Capsule())
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back to today")
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            // Always in place, so the row never shifts; faded and disabled
+            // while today is already showing, like the forward button.
+            Button {
+                withAnimation(.snappy) { pickedDay = nil }
+                Haptics.selection()
+            } label: {
+                Text("Today")
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .foregroundStyle(AppTheme.onAccent)
+                    .padding(.horizontal, 18)
+                    .frame(minHeight: AppTheme.minimumTapTarget)
+                    .background(AppTheme.accentFill, in: Capsule())
+                    .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .disabled(isShowingToday)
+            .opacity(isShowingToday ? 0.35 : 1)
+            .accessibilityLabel("Back to today")
         }
     }
 

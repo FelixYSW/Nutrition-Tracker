@@ -7,6 +7,11 @@ import PhotosUI
 struct AssistantView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
+    @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var allEntries: [FoodEntry]
+    @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
+    /// The message box, so a suggestion like "Log my lunch" can open the
+    /// keyboard with the sentence started.
+    @FocusState private var isComposerFocused: Bool
 
     @State private var viewModel: AssistantViewModel?
     @State private var photoSelections: [PhotosPickerItem] = []
@@ -31,9 +36,9 @@ struct AssistantView: View {
                     ProgressView()
                 }
             }
-            .navigationTitle("Assistant")
+            // The title and buttons are drawn in the page, like every tab.
+            .toolbar(.hidden, for: .navigationBar)
             .keyboardDismissControls()
-            .navigationBarTitleDisplayMode(.inline)
             .fullScreenCover(item: $viewingPhoto) { photo in
                 PhotoViewer(images: photo.images, startIndex: photo.index)
             }
@@ -43,25 +48,6 @@ struct AssistantView: View {
                 Button("OK", role: .cancel) { cameraProblem = nil }
             } message: {
                 Text(cameraProblem ?? "")
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        isShowingHistory = true
-                    } label: {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .accessibilityLabel("Past chats")
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        withAnimation(.snappy) { viewModel?.startNewConversation() }
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .accessibilityLabel("New chat")
-                    }
-                    .disabled(viewModel?.messages.isEmpty ?? true)
-                }
             }
             .sheet(isPresented: $isShowingHistory) {
                 ChatHistoryView(currentID: viewModel?.conversationID) { conversation in
@@ -81,10 +67,34 @@ struct AssistantView: View {
     }
 
     @ViewBuilder
+    /// Title and chat buttons, pinned above the conversation.
+    private func header(viewModel: AssistantViewModel) -> some View {
+        PageHeader(title: "Assistant") {
+            HStack(spacing: 10) {
+                GlassIconButton(systemImage: "clock.arrow.circlepath", label: "Past chats") {
+                    isShowingHistory = true
+                }
+                GlassIconButton(systemImage: "square.and.pencil", label: "New chat") {
+                    withAnimation(.snappy) { viewModel.startNewConversation() }
+                }
+                .disabled(viewModel.messages.isEmpty)
+                .opacity(viewModel.messages.isEmpty ? 0.35 : 1)
+            }
+        }
+        .padding(.horizontal, AppTheme.cardPadding + 4)
+        .padding(.top, AppTheme.pageSpacing)
+        .padding(.bottom, 8)
+    }
+
     private func content(viewModel: AssistantViewModel) -> some View {
         VStack(spacing: 0) {
+            header(viewModel: viewModel)
             if viewModel.isAvailable {
-                transcript(viewModel: viewModel)
+                if viewModel.messages.isEmpty && !viewModel.isSending {
+                    emptyChat(viewModel: viewModel)
+                } else {
+                    transcript(viewModel: viewModel)
+                }
                 composer(viewModel: viewModel)
             } else {
                 // Nothing for the user to set up: just say it isn't available.
@@ -132,6 +142,8 @@ struct AssistantView: View {
         .overlay(alignment: .bottom) {
             if !isAtBottom && !viewModel.messages.isEmpty {
                 Button {
+                    // Used mid-typing too: jumping down mustn't close the keyboard.
+                    KeyboardDismissal.keepOpen()
                     jumpToBottom()
                 } label: {
                     Image(systemName: "arrow.down")
@@ -152,10 +164,6 @@ struct AssistantView: View {
     /// The messages, then "Thinking…", then an end-of-chat marker.
     private func transcriptRows(viewModel: AssistantViewModel) -> some View {
         LazyVStack(alignment: .leading, spacing: 14) {
-            if viewModel.messages.isEmpty {
-                suggestionsCard(viewModel: viewModel)
-            }
-
             ForEach(viewModel.messages) { message in
                 messageRow(message: message, viewModel: viewModel)
                     .id(message.id)
@@ -233,52 +241,26 @@ struct AssistantView: View {
         }
     }
 
-    private func suggestionsCard(viewModel: AssistantViewModel) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Ask about your own data")
-                .font(.headline)
-            Text("The assistant can see today's targets and food log, and your "
-                 + "recent trends. It always asks before changing anything.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(AssistantContextBuilder.dataSharingDisclosure)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            ForEach(Self.starterPrompts, id: \.self) { prompt in
-                Button {
-                    viewModel.composerText = prompt
-                } label: {
-                    HStack {
-                        Text(prompt)
-                            .font(.footnote)
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 4)
-                        Image(systemName: "arrow.up.left")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 11)
-                    .padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(AppTheme.stillToGo, lineWidth: 1))
-                    .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .appCard()
+    /// A new chat: greeting, where today stands, and suggestions for now.
+    private func emptyChat(viewModel: AssistantViewModel) -> some View {
+        let today = LocalDay.entries(allEntries, on: .now)
+        return EmptyChatView(
+            caloriesSoFar: LocalDay.total(today).calories,
+            calorieRange: targets.first?.ranges.calories,
+            hasLoggedToday: !today.isEmpty,
+            onAsk: { question in
+                viewModel.composerText = question
+                Task { await viewModel.send() }
+            },
+            onDraft: { start in
+                viewModel.composerText = start
+                isComposerFocused = true
+            },
+            onMenuPhoto: { fromCamera in
+                viewModel.composerText = "What should I order from this menu to fit my ranges?"
+                if fromCamera { openCamera() } else { isShowingPhotoPicker = true }
+            })
     }
-
-    static let starterPrompts = [
-        "What should I eat with the room I have left today?",
-        "How has my protein looked over the last week?",
-        "Add a plate of nasi lemak",
-        "What could I do better based on my log?"
-    ]
 
     @ViewBuilder
     private func messageRow(message: AssistantChatMessage,
@@ -427,6 +409,7 @@ struct AssistantView: View {
                                             set: { viewModel.composerText = $0 }),
                               axis: .vertical)
                         .lineLimit(1...5)
+                        .focused($isComposerFocused)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -436,17 +419,22 @@ struct AssistantView: View {
                 .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .stroke(AppTheme.subtleFill, lineWidth: 1))
 
-                Button {
-                    dismissKeyboard()
-                    Task { await viewModel.send() }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 34))
+                // Only there when there's something to send and the assistant
+                // is free; otherwise the text box takes the whole width.
+                if viewModel.canSend {
+                    Button {
+                        dismissKeyboard()
+                        Task { await viewModel.send() }
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 34))
+                    }
+                    .padding(.bottom, 2)
+                    .accessibilityLabel("Send")
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
                 }
-                .padding(.bottom, 2)
-                .disabled(!viewModel.canSend)
-                .accessibilityLabel(viewModel.isLoadingAttachment ? "Send, waiting for photos" : "Send")
             }
+            .animation(.snappy(duration: 0.2), value: viewModel.canSend)
         }
         .padding(.horizontal, AppTheme.cardPadding)
         .padding(.vertical, 10)
@@ -475,6 +463,15 @@ struct AssistantView: View {
 
     /// Thumbnails above the text, each with an x. One still loading shows a
     /// spinner in its place, as Claude does while an image uploads.
+    /// Opens the photos waiting to be sent in the viewer, at the one tapped.
+    /// Photos still loading are skipped.
+    private func preview(_ attachment: ComposerAttachment, in viewModel: AssistantViewModel) {
+        let loaded = viewModel.attachments.filter { $0.data != nil }
+        guard let index = loaded.firstIndex(where: { $0.id == attachment.id }) else { return }
+        KeyboardDismissal.keepOpen()
+        viewingPhoto = ViewedPhoto(images: loaded.compactMap(\.data), index: index)
+    }
+
     private func attachmentStrip(viewModel: AssistantViewModel) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
@@ -493,6 +490,11 @@ struct AssistantView: View {
                         }
                         .frame(width: 64, height: 64)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        // Tap to look at it full size before sending.
+                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .onTapGesture { preview(attachment, in: viewModel) }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityHint("Shows the photo full size")
 
                         Button {
                             withAnimation(.snappy) { viewModel.removeAttachment(id: attachment.id) }
@@ -805,22 +807,35 @@ struct ViewedPhoto: Identifiable {
     let index: Int
 }
 
-/// Full-screen view of a message's photos: swipe between them, pinch or
-/// double-tap to zoom.
+/// Full-screen view of photos: swipe between them, pinch or double-tap to
+/// zoom. The chat stays faintly visible behind a dark, see-through shade.
+/// Tap the shade around the photo, or drag the photo down, to close.
 struct PhotoViewer: View {
     let images: [Data]
     let startIndex: Int
 
     @Environment(\.dismiss) private var dismiss
     @State private var selection = 0
+    /// How far the photo has been dragged down; fades the shade as it goes.
+    @State private var dragOffset: CGFloat = 0
+
+    /// Shade opacity: mostly dark, lighter as the photo is pulled away.
+    private var shadeOpacity: Double {
+        0.82 * max(0.25, 1 - Double(dragOffset) / 600)
+    }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Color(hex: 0x141311).ignoresSafeArea()   // near-black, never pure #000
+            // Near-black (never pure #000), partly see-through.
+            Color(hex: 0x141311)
+                .opacity(shadeOpacity)
+                .ignoresSafeArea()
 
             TabView(selection: $selection) {
                 ForEach(images.indices, id: \.self) { index in
-                    ZoomablePhoto(data: images[index])
+                    ZoomablePhoto(data: images[index],
+                                  dragOffset: $dragOffset,
+                                  onClose: { dismiss() })
                         .tag(index)
                 }
             }
@@ -837,40 +852,214 @@ struct PhotoViewer: View {
                     .background(.ultraThinMaterial, in: Circle())
             }
             .padding()
+            .opacity(dragOffset > 0 ? 0 : 1)
             .accessibilityLabel("Close")
         }
+        // Our own shade replaces the cover's opaque background.
+        .presentationBackground(.clear)
         .onAppear { selection = min(max(startIndex, 0), max(images.count - 1, 0)) }
     }
 }
 
-/// One photo that can be pinched or double-tapped to zoom.
+/// One photo in the viewer. Zooming and panning use the system's own zooming
+/// scroll view, as in Photos: pinch zooms where the fingers are, a zoomed
+/// photo can be dragged around, and double-tap zooms in on the spot tapped.
+/// Not zoomed, a tap on the space around the photo or a drag down closes it.
 struct ZoomablePhoto: View {
     let data: Data
-    @State private var scale: CGFloat = 1
-    @GestureState private var pinch: CGFloat = 1
+    @Binding var dragOffset: CGFloat
+    let onClose: () -> Void
+
+    /// Pulled further than this, or flicked down, and the photo closes.
+    private let closeDistance: CGFloat = 120
 
     var body: some View {
         #if canImport(UIKit)
         if let image = UIImage(data: data) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .scaleEffect(scale * pinch)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .gesture(
-                    MagnifyGesture()
-                        .updating($pinch) { value, state, _ in state = value.magnification }
-                        .onEnded { value in
-                            scale = min(max(scale * value.magnification, 1), 4)
-                        })
-                .onTapGesture(count: 2) {
-                    withAnimation(.snappy) { scale = scale > 1 ? 1 : 2 }
-                }
-                .accessibilityLabel("Attached photo")
+            ZoomableImageView(
+                image: image,
+                onTapOutside: onClose,
+                onDismissDrag: { distance in dragOffset = max(0, distance) },
+                onDismissDragEnd: { distance, velocity in
+                    if distance > closeDistance || velocity > 900 {
+                        onClose()
+                    } else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            dragOffset = 0
+                        }
+                    }
+                })
+                .offset(y: dragOffset)
+                .ignoresSafeArea()
+                .accessibilityElement()
+                .accessibilityLabel("Photo")
+                .accessibilityAddTraits(.isImage)
+                .accessibilityAction(named: "Close", onClose)
         }
         #endif
     }
 }
+
+#if canImport(UIKit)
+/// A zooming `UIScrollView` around the image, with taps and the drag-down
+/// gesture added.
+struct ZoomableImageView: UIViewRepresentable {
+    let image: UIImage
+    let onTapOutside: () -> Void
+    /// How far the photo has been pulled down so far.
+    let onDismissDrag: (CGFloat) -> Void
+    /// The final distance and downward speed when the finger lifts.
+    let onDismissDragEnd: (CGFloat, CGFloat) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> ZoomScrollView {
+        let view = ZoomScrollView(image: image)
+        let coordinator = context.coordinator
+        view.delegate = coordinator
+        coordinator.scrollView = view
+
+        let doubleTap = UITapGestureRecognizer(target: coordinator,
+                                               action: #selector(Coordinator.doubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        view.addGestureRecognizer(doubleTap)
+
+        let singleTap = UITapGestureRecognizer(target: coordinator,
+                                               action: #selector(Coordinator.singleTapped(_:)))
+        singleTap.require(toFail: doubleTap)
+        view.addGestureRecognizer(singleTap)
+
+        let pullDown = UIPanGestureRecognizer(target: coordinator,
+                                              action: #selector(Coordinator.pulled(_:)))
+        pullDown.delegate = coordinator
+        view.addGestureRecognizer(pullDown)
+        coordinator.pullDown = pullDown
+        return view
+    }
+
+    func updateUIView(_ uiView: ZoomScrollView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
+        var parent: ZoomableImageView
+        weak var scrollView: ZoomScrollView?
+        weak var pullDown: UIPanGestureRecognizer?
+
+        init(_ parent: ZoomableImageView) { self.parent = parent }
+
+        private var isZoomed: Bool {
+            guard let scrollView else { return false }
+            return scrollView.zoomScale > scrollView.minimumZoomScale + 0.01
+        }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            (scrollView as? ZoomScrollView)?.imageView
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            (scrollView as? ZoomScrollView)?.centerImage()
+        }
+
+        /// Zooms in on the spot tapped, or back out.
+        @objc func doubleTapped(_ gesture: UITapGestureRecognizer) {
+            guard let scrollView else { return }
+            if isZoomed {
+                scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            } else {
+                let point = gesture.location(in: scrollView.imageView)
+                let scale: CGFloat = 2.5
+                let size = CGSize(width: scrollView.bounds.width / scale,
+                                  height: scrollView.bounds.height / scale)
+                scrollView.zoom(to: CGRect(x: point.x - size.width / 2,
+                                           y: point.y - size.height / 2,
+                                           width: size.width, height: size.height),
+                                animated: true)
+            }
+        }
+
+        /// A tap on the space around the photo closes the viewer.
+        @objc func singleTapped(_ gesture: UITapGestureRecognizer) {
+            guard let scrollView else { return }
+            let point = gesture.location(in: scrollView.imageView)
+            if !scrollView.imageView.bounds.contains(point) {
+                parent.onTapOutside()
+            }
+        }
+
+        @objc func pulled(_ gesture: UIPanGestureRecognizer) {
+            let distance = gesture.translation(in: gesture.view).y
+            switch gesture.state {
+            case .changed:
+                parent.onDismissDrag(distance)
+            case .ended, .cancelled:
+                parent.onDismissDragEnd(distance, gesture.velocity(in: gesture.view).y)
+            default:
+                break
+            }
+        }
+
+        /// The pull-down only starts on a downward, mostly vertical drag of a
+        /// photo that isn't zoomed; anything else is left to panning the
+        /// zoomed photo or swiping to the next one.
+        func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+            guard gesture === pullDown, let pan = gesture as? UIPanGestureRecognizer else {
+                return true
+            }
+            guard !isZoomed else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            return velocity.y > 0 && abs(velocity.y) > abs(velocity.x)
+        }
+    }
+}
+
+/// Scroll view that fits the image to the screen at 1x and keeps it centred
+/// at every zoom level.
+final class ZoomScrollView: UIScrollView {
+    let imageView: UIImageView
+    private var fittedSize: CGSize = .zero
+
+    init(image: UIImage) {
+        imageView = UIImageView(image: image)
+        super.init(frame: .zero)
+        imageView.contentMode = .scaleAspectFit
+        addSubview(imageView)
+        minimumZoomScale = 1
+        maximumZoomScale = 4
+        bouncesZoom = true
+        showsHorizontalScrollIndicator = false
+        showsVerticalScrollIndicator = false
+        contentInsetAdjustmentBehavior = .never
+        decelerationRate = .fast
+        backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // Fit the image to the screen once per size (first layout, rotation).
+        guard bounds.width > 0, bounds.height > 0, bounds.size != fittedSize else { return }
+        fittedSize = bounds.size
+        zoomScale = minimumZoomScale
+        let imageSize = imageView.image?.size ?? bounds.size
+        let fit = min(bounds.width / max(imageSize.width, 1),
+                      bounds.height / max(imageSize.height, 1))
+        imageView.frame = CGRect(x: 0, y: 0,
+                                 width: imageSize.width * fit, height: imageSize.height * fit)
+        contentSize = imageView.frame.size
+        centerImage()
+    }
+
+    /// Pads around an image smaller than the screen, so it sits in the middle.
+    func centerImage() {
+        let horizontal = max(0, (bounds.width - contentSize.width) / 2)
+        let vertical = max(0, (bounds.height - contentSize.height) / 2)
+        contentInset = UIEdgeInsets(top: vertical, left: horizontal,
+                                    bottom: vertical, right: horizontal)
+    }
+}
+#endif
 
 // MARK: - Chat scrolling
 
@@ -912,6 +1101,10 @@ private struct FollowingScrollView<Content: View>: View {
 
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var overflows = false
+    /// True while the animated jump to the end runs. Rows measured on the way
+    /// change the content height, and snapping to the end for each of those
+    /// cut into the animation and made it stutter.
+    @State private var isJumping = false
 
     private struct Metrics: Equatable {
         var atBottom: Bool
@@ -944,7 +1137,7 @@ private struct FollowingScrollView<Content: View>: View {
             // The content changed height while following - a reply grew, a
             // row was added, or estimated rows were measured and came out
             // shorter: keep exactly at the end, with no gap below it.
-            if new.contentHeight != old.contentHeight, isFollowing, new.overflows {
+            if new.contentHeight != old.contentHeight, isFollowing, new.overflows, !isJumping {
                 position.scrollTo(edge: .bottom)
             }
         }
@@ -957,7 +1150,15 @@ private struct FollowingScrollView<Content: View>: View {
         }
         .onChange(of: jumpRequest) { _, _ in
             guard overflows else { return }
-            withAnimation(.snappy) { position.scrollTo(edge: .bottom) }
+            isJumping = true
+            withAnimation(.smooth(duration: 0.45)) {
+                position.scrollTo(edge: .bottom)
+            } completion: {
+                isJumping = false
+                // Rows measured during the glide may have moved the end a
+                // little; settle on it exactly, without a second animation.
+                position.scrollTo(edge: .bottom)
+            }
         }
     }
 }

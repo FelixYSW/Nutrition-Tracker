@@ -488,84 +488,102 @@ struct SelectionRow: View {
 struct RangeEditorRow: View {
     let nutrient: Nutrient
     @Binding var range: NutrientRange
+    /// The calculated range, where there is one to compare with (Settings):
+    /// shows whether this one was edited, with a way back to the calculation.
+    var calculated: NutrientRange?
 
     @State private var minValue: Double = 0
     @State private var maxValue: Double = 0
-
-    /// Upper end of the sliders; generous enough for any realistic target.
-    private var sliderBound: Double {
-        switch nutrient {
-        case .calories: 4500
-        case .protein: 300
-        case .carbs: 600
-        case .fat: 200
-        case .fibre: 80
-        }
-    }
-
-    private var sliderStep: Double { nutrient == .calories ? 50 : 1 }
-
-    /// Closed, a row is the nutrient, its range and a band bar; tapping it
-    /// opens the two sliders.
+    /// Closed, a row is the nutrient and its range; open, it has a number box
+    /// for each end.
     @State private var isExpanded = false
 
+    private var unit: String { nutrient.unitLabel }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Button {
                 withAnimation(.snappy) { isExpanded.toggle() }
             } label: {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        Circle()
-                            .fill(AppTheme.color(for: nutrient))
-                            .frame(width: 10, height: 10)
-                            .accessibilityHidden(true)
+                HStack(alignment: .center, spacing: 10) {
+                    // Chevron before its text, like every chevron in the app.
+                    DisclosureChevron(isExpanded: isExpanded)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                    Circle()
+                        .fill(AppTheme.color(for: nutrient))
+                        .frame(width: 10, height: 10)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(nutrient.displayName)
                             .font(.system(.body, design: .rounded).weight(.semibold))
-                        if range.isManuallyModified {
-                            Text("Edited")
-                                .font(.caption2)
+                        if let status = statusLine {
+                            Text(status)
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 4)
-                        HStack(alignment: .firstTextBaseline, spacing: 3) {
-                            Text(AppFormatters.range(range))
-                                .font(.system(.title3, design: .rounded).weight(.heavy))
                                 .monospacedDigit()
-                                .minimumScaleFactor(0.7)
                                 .lineLimit(1)
-                            Text(nutrient.unitLabel)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                                .minimumScaleFactor(0.85)
                         }
                     }
-                    bandBar
+                    Spacer(minLength: 4)
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text(AppFormatters.range(range))
+                            .font(.system(.title3, design: .rounded).weight(.heavy))
+                            .monospacedDigit()
+                            .minimumScaleFactor(0.7)
+                            .lineLimit(1)
+                        Text(unit)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .frame(minHeight: AppTheme.minimumTapTarget)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint(isExpanded ? "Hides the sliders" : "Shows sliders for each end")
+            .accessibilityHint(isExpanded ? "Hides the minimum and maximum"
+                                          : "Change the minimum and maximum")
 
             if isExpanded {
-                SliderEntryRow(title: "Minimum", value: $minValue,
-                               range: 0...max(sliderBound, minValue),
-                               step: sliderStep, unitLabel: nutrient.unitLabel)
-                SliderEntryRow(title: "Maximum", value: $maxValue,
-                               range: 0...max(sliderBound, maxValue),
-                               step: sliderStep, unitLabel: nutrient.unitLabel)
+                HStack(alignment: .top, spacing: 12) {
+                    NumericEntryField(title: "Minimum", value: $minValue, unitLabel: unit,
+                                      allowsDecimal: false)
+                    NumericEntryField(title: "Maximum", value: $maxValue, unitLabel: unit,
+                                      allowsDecimal: false)
+                }
+                Text(nutrient == .calories
+                     ? "The minimum is what to reach each day; going over the maximum "
+                        + "makes the day too much."
+                     : "Reach at least the minimum each day, and stay under the maximum.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if minValue > maxValue, maxValue > 0 {
                 Text("Minimum is above maximum; they will be swapped.")
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(AppTheme.stateTextColor(for: .over))
+            }
+
+            if let calculated, range.isManuallyModified, calculated.max > 0 {
+                Button {
+                    withAnimation(.snappy) { range = calculated }
+                    Haptics.selection()
+                } label: {
+                    Label("Reset to calculated", systemImage: "arrow.counterclockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minHeight: AppTheme.minimumTapTarget)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.accent)
             }
         }
         .appCard()
-        .onAppear {
-            minValue = range.min
-            maxValue = range.max
-        }
+        .onAppear { syncFields() }
+        // A reset (or any change from outside) refreshes the boxes.
+        .onChange(of: range) { _, _ in syncFields() }
         .onChange(of: minValue) { _, newValue in
             guard newValue != range.min else { return }
             range = range.withManualMin(newValue)
@@ -576,23 +594,18 @@ struct RangeEditorRow: View {
         }
     }
 
-    /// The band drawn on a track that runs a little past the maximum, so the
-    /// gap between minimum and maximum reads at a glance.
-    private var bandBar: some View {
-        let scale = max(range.max * 1.15, 1)
-        let start = min(max(range.min / scale, 0), 1)
-        let end = min(max(range.max / scale, start), 1)
-        return GeometryReader { geometry in
-            let width = geometry.size.width
-            ZStack(alignment: .leading) {
-                Capsule().fill(AppTheme.subtleFill)
-                Capsule()
-                    .fill(AppTheme.color(for: nutrient))
-                    .frame(width: max(8, width * (end - start)))
-                    .offset(x: width * start)
-            }
+    /// "Calculated for you", or "Edited · calculated 2,181–2,486".
+    private var statusLine: String? {
+        guard let calculated, calculated.max > 0 else {
+            return range.isManuallyModified ? "Edited" : nil
         }
-        .frame(height: 10)
-        .accessibilityHidden(true)
+        return range.isManuallyModified
+            ? "Edited \u{00B7} calculated \(AppFormatters.range(calculated))"
+            : "Calculated for you"
+    }
+
+    private func syncFields() {
+        if minValue != range.min { minValue = range.min }
+        if maxValue != range.max { maxValue = range.max }
     }
 }

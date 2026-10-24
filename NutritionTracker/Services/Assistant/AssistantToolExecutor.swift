@@ -97,6 +97,10 @@ final class AssistantToolExecutor {
                 let protein: Double
                 let carbs: Double
                 let fat: Double
+                let fibre: Double
+                /// A composite entry's components, in addFoodEntry's own item
+                /// shape, so "the same as yesterday" can be logged again exactly.
+                let ingredients: [SavedIngredientRow]?
             }
             let startDate: String
             let endDate: String
@@ -124,10 +128,31 @@ final class AssistantToolExecutor {
                       calories: entry.total.calories.rounded(),
                       protein: entry.total.protein.rounded(),
                       carbs: entry.total.carbs.rounded(),
-                      fat: entry.total.fat.rounded())
+                      fat: entry.total.fat.rounded(),
+                      fibre: entry.total.fibre.rounded(),
+                      ingredients: entry.isComposite
+                          ? entry.orderedIngredients.map(Self.ingredientRow) : nil)
             })
 
         return try encode(payload)
+    }
+
+    /// One saved component as addFoodEntry would take it. Weighed components
+    /// get per-100 g figures; ones counted otherwise give only their total.
+    private static func ingredientRow(_ item: IngredientItem) -> SavedIngredientRow {
+        let isWeighed = (item.unit == .gram || item.unit == .millilitre) && item.servingSize > 0
+        let per100g = isWeighed ? item.nutritionPerServing * (100 / item.servingSize) : nil
+        func round1(_ value: Double?) -> Double? { value.map { ($0 * 10).rounded() / 10 } }
+        return .init(name: item.name,
+                     grams: isWeighed ? item.quantity : nil,
+                     amount: "\(AppFormatters.quantity(item.quantity, unit: item.unit)) "
+                        + item.unit.shortLabel,
+                     kcalPer100g: round1(per100g?.calories),
+                     proteinPer100g: round1(per100g?.protein),
+                     carbsPer100g: round1(per100g?.carbs),
+                     fatPer100g: round1(per100g?.fat),
+                     fibrePer100g: round1(per100g?.fibre),
+                     kcal: item.total.calories.rounded())
     }
 
     /// The figures a card would show for these foods, with nothing logged, so
@@ -411,6 +436,8 @@ final class AssistantToolExecutor {
         // A nutrition label - typed, photographed or the brand's own - beats
         // any database row, so those figures are never replaced.
         guard !item.provenance.isDeclared else { return item }
+        // Copied from an entry already in the log: repeat it exactly.
+        guard item.provenance != .localVerified else { return item }
         guard let hit = repository.lookup(canonicalID: nil, name: item.name) else { return item }
         var resolved = item
         resolved.nutritionPerServing = hit.nutritionPer100g
@@ -592,4 +619,21 @@ final class AssistantToolExecutor {
         let data = try encoder.encode(value)
         return String(decoding: data, as: UTF8.self)
     }
+}
+
+/// A saved entry's component as queryEntries lists it, in addFoodEntry's own
+/// item shape, so "the same as yesterday" can be logged again exactly.
+private struct SavedIngredientRow: Encodable {
+    let name: String
+    /// Grams (or ml) eaten; nil for a component counted in pieces or
+    /// servings, whose amount is in `amount`.
+    let grams: Double?
+    let amount: String
+    let kcalPer100g: Double?
+    let proteinPer100g: Double?
+    let carbsPer100g: Double?
+    let fatPer100g: Double?
+    let fibrePer100g: Double?
+    let kcal: Double
+    let nutritionSource = "saved"
 }

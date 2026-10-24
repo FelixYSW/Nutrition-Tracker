@@ -160,24 +160,32 @@ struct DaySummaryCard: View {
             Image(systemName: "flame.fill")
                 .font(.system(size: 22))
                 .foregroundStyle(AppTheme.flame)
-                .frame(width: 48, height: 48)
+                .frame(width: 42, height: 42)
                 .background(AppTheme.flame.opacity(0.14), in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    // One line whatever the day's numbers: a wider total used
+                    // to wrap the range text and make the card taller on some
+                    // days, nudging everything below it.
                     Text(AppFormatters.amount(nutrition.calories))
-                        .font(.system(size: 30, weight: .heavy, design: .rounded))
+                        .font(.system(size: 26, weight: .heavy, design: .rounded))
                         .monospacedDigit()
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)
+                        .layoutPriority(1)
                     Text("kcal")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     Spacer(minLength: 4)
                     if let range, range.max > 0 {
                         Text("range \(AppFormatters.range(range))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
                 }
                 if let range, range.max > 0 {

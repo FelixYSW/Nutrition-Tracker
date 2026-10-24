@@ -123,11 +123,11 @@ struct CompactMacroRing: View {
                           bandStart: range.bandFractions().start,
                           tint: AppTheme.color(for: nutrient),
                           bandTint: AppTheme.color(for: nutrient),
-                          lineWidth: 7)
-                    .frame(width: 66, height: 66)
+                          lineWidth: 6)
+                    .frame(width: 56, height: 56)
 
                 Image(systemName: nutrient.symbolName)
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(AppTheme.color(for: nutrient))
             }
 
@@ -182,11 +182,11 @@ struct CalorieHeroCard: View {
                           tint: tint,
                           // Band in the arc's own colour, like the macro rings.
                           bandTint: tint,
-                          lineWidth: 13,
+                          lineWidth: 11,
                           trackColor: AppTheme.subtleFill)
                 ringCentre
             }
-            .frame(width: 112, height: 112)
+            .frame(width: 96, height: 96)
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Label {
@@ -201,7 +201,7 @@ struct CalorieHeroCard: View {
                 .foregroundStyle(AppTheme.textColor(for: .calories))
 
                 Text(AppFormatters.amount(consumed))
-                    .font(.system(size: 44, weight: .heavy, design: .rounded))
+                    .font(.system(size: 38, weight: .heavy, design: .rounded))
                     .monospacedDigit()
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
@@ -245,7 +245,7 @@ struct CalorieHeroCard: View {
         } else {
             // Just the flame, like the app icon; the numbers sit beside it.
             Image(systemName: "flame.fill")
-                .font(.system(size: 40))
+                .font(.system(size: 32))
                 .foregroundStyle(AppTheme.flame)
         }
     }

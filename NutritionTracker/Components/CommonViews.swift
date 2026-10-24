@@ -300,6 +300,20 @@ func dismissKeyboard() {
     #endif
 }
 
+/// Lets a button opt out of "tap anywhere to close the keyboard", for controls
+/// used while typing - like the chat's jump-to-latest button.
+@MainActor
+enum KeyboardDismissal {
+    private static var keepOpenUntil = Date.distantPast
+
+    /// Call from a button's action: this tap won't close the keyboard.
+    static func keepOpen() {
+        keepOpenUntil = .now.addingTimeInterval(0.4)
+    }
+
+    static var isKeepingOpen: Bool { Date.now < keepOpenUntil }
+}
+
 #if canImport(UIKit)
 /// Closes the keyboard when the user taps anywhere that isn't a text field.
 ///
@@ -331,7 +345,16 @@ struct TapToDismissKeyboard: UIViewRepresentable {
         }
 
         @objc private func closeKeyboard() {
-            installedWindow?.endEditing(true)
+            // A moment's wait lets a button tapped by this same touch say it
+            // keeps the keyboard up (see `KeyboardDismissal.keepOpen`),
+            // whichever of the two iOS handles first.
+            let window = installedWindow
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                MainActor.assumeIsolated {
+                    guard !KeyboardDismissal.isKeepingOpen else { return }
+                    window?.endEditing(true)
+                }
+            }
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,

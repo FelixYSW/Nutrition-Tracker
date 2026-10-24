@@ -61,6 +61,8 @@ struct CalendarView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                    PageHeader(title: "Calendar")
+
                     Picker("View", selection: sectionBinding) {
                         ForEach(Section.allCases) { Text($0.displayName).tag($0) }
                     }
@@ -79,8 +81,8 @@ struct CalendarView: View {
                 viewportHeight = height
             }
             .appPageSurface()
-            .navigationTitle("Calendar")
-            .navigationBarTitleDisplayMode(.large)
+            // The title is drawn in the page, like every tab.
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(item: $editingDraft) { draft in
                 EditEntrySheet(draft: draft)
             }
@@ -121,7 +123,11 @@ struct CalendarView: View {
                               entries: allEntries,
                               calorieRange: targets.first?.ranges.calories ?? .zero,
                               highlightedPeriod: period?.interval,
-                              onDayTapped: { withAnimation(.snappy) { period = nil } })
+                              // Only leaves week/month mode when it's on: an
+                              // animated no-op still re-laid out the page.
+                              onDayTapped: {
+                                  if period != nil { withAnimation(.snappy) { period = nil } }
+                              })
                 .appCard()
 
             // At least a screen tall, whatever the day holds. Otherwise tapping
@@ -485,7 +491,11 @@ struct CalendarMonthGrid: View {
         }
 
         return Button {
-            selectedDate = date
+            // Switching day is instant: nothing on the page slides or resizes
+            // in an animation, so nothing seems to move.
+            var instant = Transaction()
+            instant.disablesAnimations = true
+            withTransaction(instant) { selectedDate = date }
             onDayTapped()
             Haptics.selection()
         } label: {
