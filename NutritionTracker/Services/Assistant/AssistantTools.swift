@@ -7,6 +7,7 @@ import Foundation
 /// requires a review step.
 enum AssistantTool: String, CaseIterable, Codable, Sendable {
     case addFoodEntry
+    case repeatFoodEntry
     case editFoodEntry
     case deleteFoodEntry
     case queryEntries
@@ -15,6 +16,9 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     case lookUpProductNutrition
     case findProducts
     case calculateNutrition
+    case updateProfile
+    case updateDailyRanges
+    case saveHealthNotes
 
     /// Tools answered from a live web search rather than the local database.
     var usesWebSearch: Bool {
@@ -24,7 +28,8 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
     /// Whether executing this tool changes the database.
     var isWrite: Bool {
         switch self {
-        case .addFoodEntry, .editFoodEntry, .deleteFoodEntry: true
+        case .addFoodEntry, .repeatFoodEntry, .editFoodEntry, .deleteFoodEntry,
+             .updateProfile, .updateDailyRanges, .saveHealthNotes: true
         case .queryEntries, .getTrends, .findFoodNearby, .lookUpProductNutrition, .findProducts,
              .calculateNutrition:
             false
@@ -47,6 +52,15 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 + "database. For each component also give your best per-100 g estimate; "
                 + "it is only used when the database has no match. Not for something the "
                 + "user forgot from a meal already logged - edit that entry instead."
+        case .repeatFoodEntry:
+            "Propose logging a food from the user's log again, exactly as it was - every "
+                + "ingredient, portion and figure copied by the app. Use it whenever the user "
+                + "says they had the same food as before (\"the same overnight oats as on the "
+                + "23rd\", \"my usual breakfast\", \"same as yesterday\"): find the entry with "
+                + "queryEntries and give its id, and when they ate it this time. Never "
+                + "rebuild such a food with addFoodEntry. If something changed (\"but with 2 "
+                + "scoops of whey\"), repeat it first, then change that item with "
+                + "editFoodEntry once it's saved. Shown as a confirmation card."
         case .editFoodEntry:
             "Propose changing an existing food entry, identified by its id - "
                 + "including when the user mentions something they forgot that was part "
@@ -67,6 +81,24 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
             "Search the web for places to eat and their menus and prices - around the "
                 + "user's current location, or in an area they name. Returns a summary with "
                 + "sources."
+        case .updateProfile:
+            "Propose changing the user's profile: weight, height, target weight, goal or "
+                + "activity level - e.g. a new weigh-in, or a goal changed on a doctor's "
+                + "advice. Their daily ranges are recalculated from it (ranges they set by "
+                + "hand are kept). Only the fields given change. Shown as a confirmation card."
+        case .updateDailyRanges:
+            "Propose new bounds for some daily ranges (calories, protein, carbs, fat, fibre) "
+                + "- e.g. a lower carb maximum for prediabetes, or a higher fibre minimum. Give "
+                + "only the nutrients that change, each with its new min and max. They are "
+                + "kept as set even when the profile changes later. Shown as a confirmation card."
+        case .saveHealthNotes:
+            "Propose saving the user's health conditions and how they affect eating - "
+                + "usually from a medical check-up report they shared. Send the complete list "
+                + "to keep (it replaces what is saved, so include existing notes from the "
+                + "context unless they no longer apply). Each note: the condition, the "
+                + "measured values with their date, and a few short, specific rules for food "
+                + "(e.g. \"At most 1 banana a day\", \"Limit prawns, organ meat and anchovies "
+                + "- high purine\"). Shown as a confirmation card."
         case .calculateNutrition:
             "Work out kcal, protein, carbs and fat for foods with the app's own nutrition "
                 + "data - exactly what a card would show - without logging anything. Call it "
@@ -121,6 +153,16 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
         switch self {
         case .addFoodEntry:
             return addFoodsSchema(item: item, replacesCard: replacesCard)
+
+        case .repeatFoodEntry:
+            return Self.object([
+                "id": Self.field("string", "UUID of the entry to log again, from queryEntries."),
+                "consumedAt": Self.field("string", "When the user ate it this time, ISO 8601. "
+                                         + "Omit for now."),
+                "servings": Self.field("number", "How many of that entry they had this time; "
+                                       + "1 (the default) is the same amount as before."),
+                "replacesCard": replacesCard
+            ], required: ["id"])
 
         case .editFoodEntry:
             return Self.object([
@@ -195,6 +237,41 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         case .calculateNutrition:
             return addFoodsSchema(item: item, replacesCard: nil)
+
+        case .updateProfile:
+            return Self.object([
+                "weightKg": Self.field("number", "Current weight in kg."),
+                "heightCm": Self.field("number", "Height in cm."),
+                "targetWeightKg": Self.field("number", "Goal weight in kg."),
+                "goal": Self.field("string", allowed: FitnessGoal.allCases.map(\.rawValue)),
+                "activityLevel": Self.field("string", allowed: ActivityLevel.allCases.map(\.rawValue)),
+                "reason": Self.field("string", "One line saying why, shown on the card, e.g. "
+                                     + "\"Weight from your check-up on 20 Oct\".")
+            ], required: [])
+
+        case .updateDailyRanges:
+            let change = Self.object([
+                "nutrient": Self.field("string", allowed: Nutrient.allCases.map(\.rawValue)),
+                "min": Self.field("number", "New minimum (kcal for calories, g otherwise)."),
+                "max": Self.field("number", "New maximum.")
+            ], required: ["nutrient", "min", "max"])
+            return Self.object([
+                "ranges": Self.array(of: change, "Only the nutrients that change."),
+                "reason": Self.field("string", "One line saying why, shown on the card.")
+            ], required: ["ranges"])
+
+        case .saveHealthNotes:
+            let note = Self.object([
+                "condition": Self.field("string", "e.g. \"Prediabetes\", \"High uric acid\"."),
+                "details": Self.field("string", "The measured values and the report date, "
+                                      + "e.g. \"HbA1c 6.1%, fasting glucose 6.3 mmol/L (20 Oct 2026)\"."),
+                "guidance": Self.array(of: Self.field("string"),
+                                       "Short, specific food rules for this condition.")
+            ], required: ["condition", "guidance"])
+            return Self.object([
+                "notes": Self.array(of: note, "Every note to keep - replaces the saved list."),
+                "reason": Self.field("string", "One line saying why, shown on the card.")
+            ], required: ["notes"])
         }
     }
 
@@ -274,6 +351,9 @@ struct PendingAssistantWrite: Identifiable, Equatable, Codable, Sendable {
         case add(FoodEntryDraft)
         case edit(entryID: UUID, draft: FoodEntryDraft, originalName: String)
         case delete(entryID: UUID, name: String, calories: Double)
+        case profile(ProfileUpdate)
+        case ranges(RangesUpdate)
+        case healthNotes(HealthNotesUpdate)
     }
 
     var confirmationTitle: String {
@@ -281,6 +361,9 @@ struct PendingAssistantWrite: Identifiable, Equatable, Codable, Sendable {
         case .add: "Add this food?"
         case .edit: "Update this food?"
         case .delete: "Delete this food?"
+        case .profile: "Update your profile?"
+        case .ranges: "Change your daily ranges?"
+        case .healthNotes: "Save your health notes?"
         }
     }
 
@@ -289,6 +372,8 @@ struct PendingAssistantWrite: Identifiable, Equatable, Codable, Sendable {
         case .add: "Add"
         case .edit: "Update"
         case .delete: "Delete"
+        case .profile, .ranges: "Update"
+        case .healthNotes: "Save"
         }
     }
 

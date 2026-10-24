@@ -478,6 +478,23 @@ extension Nutrient {
 
 // MARK: - Logo
 
+/// The app icon itself (a copy of it in the asset catalogue, since an app
+/// icon set can't be loaded as an image), with iOS's rounded icon corners.
+struct AppIconImage: View {
+    var size: CGFloat = 72
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.2237, style: .continuous)
+        Image("AppIconImage")
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size, height: size)
+            .clipShape(shape)
+            .overlay(shape.stroke(AppTheme.cardBorder, lineWidth: 1))
+            .accessibilityHidden(true)
+    }
+}
+
 /// The app icon's mark: a partly filled progress ring around a flame.
 /// Drawn with system shapes and the flame SF Symbol, so it scales cleanly and
 /// follows light and dark mode.

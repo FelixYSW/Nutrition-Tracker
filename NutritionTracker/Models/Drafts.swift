@@ -116,6 +116,25 @@ struct FoodEntryDraft: Identifiable, Codable, Equatable, Sendable {
         self.barcode = entry.barcode
     }
 
+    /// A fresh copy of this food for logging it again ("the same as on the
+    /// 23rd"): every ingredient, portion and figure as it was, but new ids -
+    /// so it saves as a separate entry with its own ingredient rows - at a new
+    /// time, scaled by `servings`, and without the original's photo file.
+    func repeated(at date: Date, servings: Double = 1) -> FoodEntryDraft {
+        var copy = self
+        copy.id = UUID()
+        copy.consumedAt = date
+        copy.quantity = quantity * max(servings, 0.01)
+        copy.photoPath = nil
+        copy.source = .assistant
+        copy.ingredients = ingredients.map { ingredient in
+            var item = ingredient
+            item.id = UUID()
+            return item
+        }
+        return copy
+    }
+
     /// Writes the draft back onto a persisted entry, reusing ingredient rows
     /// where the identifier still matches so SwiftData does not churn objects.
     func apply(to entry: FoodEntry) {

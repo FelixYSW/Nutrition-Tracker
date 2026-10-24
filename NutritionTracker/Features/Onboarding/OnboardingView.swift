@@ -77,7 +77,7 @@ struct OnboardingView: View {
         case .welcome:
             // Centred on the page, not in a card, like a launch screen.
             VStack(spacing: 20) {
-                AppLogoMark(size: 168)
+                AppIconImage(size: 140)
                     .padding(.top, 24)
                 Text("Track what you eat, in ranges.")
                     .font(.system(.title, design: .rounded).weight(.heavy))

@@ -637,6 +637,44 @@ final class AssistantToolExecutorTests: XCTestCase {
         XCTAssertTrue(json.contains("\"nutritionSource\":\"saved\""))
     }
 
+    /// Repeating an entry copies every ingredient, portion and figure into a
+    /// separate new entry at the new time; the original is untouched.
+    func testRepeatCopiesTheWholeEntry() throws {
+        let context = TestSupport.makeContext()
+        let original = FoodEntryDraft(name: "Overnight oats", consumedAt: .now.addingTimeInterval(-86_400),
+                                      ingredients: [
+            IngredientDraft(name: "rolled oats", quantity: 40, servingSize: 100, unit: .gram,
+                            nutritionPerServing: Nutrition(calories: 380, protein: 13, carbs: 60, fat: 7)),
+            IngredientDraft(name: "chocolate whey", quantity: 31, servingSize: 100, unit: .gram,
+                            nutritionPerServing: Nutrition(calories: 374, protein: 77, carbs: 10, fat: 3))
+        ]).makeEntry()
+        context.insert(original)
+        try context.save()
+
+        let executor = AssistantToolExecutor(context: context)
+        guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
+            id: "r", tool: .repeatFoodEntry, arguments: ["id": .string(original.id.uuidString)]))
+        else { return XCTFail("expected a card") }
+        _ = try executor.commit(write)
+
+        let entries = try context.fetch(FetchDescriptor<FoodEntry>())
+        XCTAssertEqual(entries.count, 2)
+        let copy = try XCTUnwrap(entries.first { $0.id != original.id })
+        XCTAssertEqual(copy.name, "Overnight oats")
+        XCTAssertEqual(copy.orderedIngredients.map(\.name), ["rolled oats", "chocolate whey"])
+        XCTAssertEqual(copy.orderedIngredients.map(\.quantity), [40, 31])
+        XCTAssertEqual(copy.total.calories, original.total.calories, accuracy: 0.001)
+        XCTAssertTrue(LocalDay.isToday(copy.consumedAt), "logged now, not on the original day")
+        XCTAssertEqual(original.orderedIngredients.count, 2, "the original keeps its ingredients")
+    }
+
+    func testRepeatOfAMissingEntryFails() {
+        let outcome = AssistantToolExecutor(context: TestSupport.makeContext()).execute(
+            AssistantToolCall(id: "r", tool: .repeatFoodEntry,
+                              arguments: ["id": .string(UUID().uuidString)]))
+        guard case .failure = outcome else { return XCTFail("expected failure") }
+    }
+
     func testQueryRejectsInvertedRange() {
         let outcome = AssistantToolExecutor(context: TestSupport.makeContext()).execute(
             AssistantToolCall(id: "q", tool: .queryEntries,
@@ -720,6 +758,7 @@ final class AssistantContextBuilderTests: XCTestCase {
     }
 
     /// Only what the assistant needs leaves the device (spec sections 29A, 39).
+    /// Target weight is sent now that the assistant can update the profile.
     func testPayloadOmitsUnneededPersonalDetail() throws {
         let context = TestSupport.makeContext()
         context.insert(UserProfile(dateOfBirth: TestSupport.date(1990, 1, 1), sex: .female,
@@ -727,11 +766,33 @@ final class AssistantContextBuilderTests: XCTestCase {
                                    goal: .loseWeight, activity: .light, bodyFatPercent: 28))
         try context.save()
 
-        let json = try AssistantContextBuilder(context: context).encodedJSON()
+        let json = try AssistantContextBuilder(context: context, healthNotes: { [] }).encodedJSON()
         XCTAssertFalse(json.contains("dateOfBirth"))
         XCTAssertFalse(json.contains("bodyFat"))
-        XCTAssertFalse(json.contains("targetWeight"))
+        XCTAssertTrue(json.contains("\"targetWeightKg\":55"))
         XCTAssertFalse(json.lowercased().contains("photo"))
+    }
+
+    /// Health notes and the last few days' food - dishes with what was in
+    /// them - go to the assistant, for warnings like "a lot of prawns yesterday".
+    func testContextCarriesHealthNotesAndRecentDays() throws {
+        let context = TestSupport.makeContext()
+        let yesterday = Calendar.autoupdatingCurrent.date(byAdding: .day, value: -1, to: .now)!
+        context.insert(FoodEntryDraft(name: "Prawn mee", consumedAt: yesterday, ingredients: [
+            IngredientDraft(name: "prawns", quantity: 250, servingSize: 100, unit: .gram,
+                            nutritionPerServing: Nutrition(calories: 99, protein: 24)),
+            IngredientDraft(name: "yellow noodles", quantity: 150, servingSize: 100, unit: .gram,
+                            nutritionPerServing: Nutrition(calories: 140, carbs: 28))
+        ]).makeEntry())
+        try context.save()
+
+        let note = HealthNote(condition: "High uric acid", details: "Uric acid 480 umol/L",
+                              guidance: ["Limit prawns and other shellfish"])
+        let json = try AssistantContextBuilder(context: context, healthNotes: { [note] })
+            .encodedJSON()
+        XCTAssertTrue(json.contains("High uric acid"))
+        XCTAssertTrue(json.contains("Limit prawns and other shellfish"))
+        XCTAssertTrue(json.contains("prawns 250 g"))
     }
 
     func testPayloadScopedToTodayNotWholeDatabase() throws {
@@ -1634,16 +1695,199 @@ final class EmptyChatTests: XCTestCase {
             }, "\(moment)")
         }
     }
+}
 
-    func testStatusLineSaysWhereTodayStands() {
-        let range = NutrientRange(min: 1800, max: 2100)
-        XCTAssertEqual(EmptyChatView.statusLine(caloriesSoFar: 1420, range: range, hasLoggedToday: true),
-                       "1420 kcal so far \u{00B7} 380 kcal to reach your range")
-        XCTAssertEqual(EmptyChatView.statusLine(caloriesSoFar: 1900, range: range, hasLoggedToday: true),
-                       "1900 kcal so far \u{00B7} in range")
-        XCTAssertTrue(EmptyChatView.statusLine(caloriesSoFar: 0, range: range, hasLoggedToday: false)
-            .hasPrefix("Nothing logged yet today"))
-        XCTAssertEqual(EmptyChatView.statusLine(caloriesSoFar: 0, range: nil, hasLoggedToday: false),
-                       "Ask me anything about what you eat.")
+// MARK: - Replies stay in their own chat
+
+/// Holds each reply until the test releases it, so the test can switch chats
+/// while a reply is still on its way.
+final class GatedAssistantService: AssistantServing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var gate: CheckedContinuation<Void, Never>?
+    private var callWaiter: CheckedContinuation<Void, Never>?
+    private var wasCalled = false
+    let reply: String
+
+    init(reply: String) { self.reply = reply }
+
+    var isConfigured: Bool { true }
+
+    func send(turns: [AssistantTurn], contextJSON: String,
+              tools: [AssistantTool]) async throws -> AssistantResponse {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            gate = continuation
+            wasCalled = true
+            let waiter = callWaiter
+            callWaiter = nil
+            lock.unlock()
+            waiter?.resume()
+        }
+        return AssistantResponse(text: reply, toolCalls: [])
+    }
+
+    /// Returns once a request is waiting at the gate.
+    func waitUntilCalled() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if wasCalled {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                callWaiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func release() {
+        lock.lock()
+        let waiting = gate
+        gate = nil
+        lock.unlock()
+        waiting?.resume()
+    }
+}
+
+@MainActor
+final class ConversationIsolationTests: XCTestCase {
+
+    /// Sending, then starting a new chat before the reply comes: the reply
+    /// lands in the chat it was asked in, and the new chat stays empty.
+    func testReplyArrivingAfterSwitchingStaysInItsChat() async {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let store = ChatHistoryStore(directory: directory)
+        let context = TestSupport.makeContext()
+        let service = GatedAssistantService(reply: "Logged your teh tarik.")
+        let viewModel = AssistantViewModel(service: service,
+                                           executor: AssistantToolExecutor(context: context),
+                                           contextBuilder: AssistantContextBuilder(context: context),
+                                           historyStore: store)
+
+        viewModel.composerText = "I had a teh tarik"
+        let sending = Task { await viewModel.send() }
+        await service.waitUntilCalled()
+        let firstChat = viewModel.conversationID
+
+        viewModel.startNewConversation()
+        XCTAssertNotEqual(viewModel.conversationID, firstChat)
+
+        service.release()
+        await sending.value
+
+        XCTAssertTrue(viewModel.messages.isEmpty, "the new chat got nothing")
+        XCTAssertFalse(viewModel.isSending, "the new chat isn't busy")
+        let saved = store.all().first { $0.id == firstChat }
+        let replies = saved?.messages.compactMap { message -> String? in
+            if case .assistant(let text) = message.kind { return text } else { return nil }
+        }
+        XCTAssertEqual(replies, ["Logged your teh tarik."])
+    }
+
+    /// Going back to a chat while its reply is still coming shows it live.
+    func testReturningToAChatStillWorkingShowsItLive() async {
+        let context = TestSupport.makeContext()
+        let service = GatedAssistantService(reply: "Here you go.")
+        let viewModel = AssistantViewModel(service: service,
+                                           executor: AssistantToolExecutor(context: context),
+                                           contextBuilder: AssistantContextBuilder(context: context))
+
+        viewModel.composerText = "Hi"
+        let sending = Task { await viewModel.send() }
+        await service.waitUntilCalled()
+        let firstChat = viewModel.conversationID
+        viewModel.startNewConversation()
+
+        viewModel.open(SavedConversation(id: firstChat, title: "Hi", createdAt: .now,
+                                         updatedAt: .now, messages: [], turns: []))
+        XCTAssertTrue(viewModel.isSending, "still working when reopened")
+        XCTAssertEqual(viewModel.messages.count, 1, "the live chat, not the saved copy")
+
+        service.release()
+        await sending.value
+        XCTAssertEqual(viewModel.messages.count, 2)
+    }
+}
+
+// MARK: - Profile, ranges and health notes
+
+@MainActor
+final class AssistantHealthToolsTests: XCTestCase {
+
+    override func tearDown() {
+        HealthNotesStore.shared.deleteAll()
+        super.tearDown()
+    }
+
+    private func contextWithProfile() throws -> ModelContext {
+        let context = TestSupport.makeContext()
+        let profile = UserProfile(dateOfBirth: TestSupport.date(2004, 1, 1), sex: .female,
+                                  heightCm: 163, weightKg: 100, targetWeightKg: 60,
+                                  goal: .loseWeight, activity: .sedentary)
+        context.insert(profile)
+        context.insert(NutritionTarget(ranges: NutritionTargetCalculator.calculate(profile: profile).ranges))
+        try context.save()
+        return context
+    }
+
+    /// A new weigh-in updates the profile and recalculates the ranges.
+    func testProfileUpdateRecalculatesRanges() throws {
+        let context = try contextWithProfile()
+        let before = try XCTUnwrap(context.loadNutritionTarget()).ranges.calories
+        let executor = AssistantToolExecutor(context: context)
+        guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
+            id: "p", tool: .updateProfile, arguments: ["weightKg": .number(95)]))
+        else { return XCTFail("expected a card") }
+        guard case .profile(let update) = write.action else { return XCTFail() }
+        XCTAssertEqual(update.lines, ["Weight 100 -> 95 kg"])
+
+        _ = try executor.commit(write)
+        XCTAssertEqual(context.loadUserProfile()?.weightKg, 95)
+        XCTAssertLessThan(try XCTUnwrap(context.loadNutritionTarget()).ranges.calories.min, before.min)
+    }
+
+    func testProfileUpdateWithNothingNewIsRefused() throws {
+        let outcome = AssistantToolExecutor(context: try contextWithProfile()).execute(
+            AssistantToolCall(id: "p", tool: .updateProfile, arguments: ["weightKg": .number(100)]))
+        guard case .failure = outcome else { return XCTFail("expected failure") }
+    }
+
+    /// Ranges the assistant sets are kept as set by hand.
+    func testRangeUpdateIsSavedAsManual() throws {
+        let context = try contextWithProfile()
+        let executor = AssistantToolExecutor(context: context)
+        guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
+            id: "r", tool: .updateDailyRanges, arguments: ["ranges": .array([.object([
+                "nutrient": .string("carbs"), "min": .number(120), "max": .number(150)])])]))
+        else { return XCTFail("expected a card") }
+        _ = try executor.commit(write)
+
+        let carbs = try XCTUnwrap(context.loadNutritionTarget()).ranges.carbs
+        XCTAssertEqual(carbs.min, 120)
+        XCTAssertEqual(carbs.max, 150)
+        XCTAssertTrue(carbs.isManuallyModified)
+    }
+
+    func testCaloriesCantGoBelowTheFloor() throws {
+        let outcome = AssistantToolExecutor(context: try contextWithProfile()).execute(
+            AssistantToolCall(id: "r", tool: .updateDailyRanges, arguments: ["ranges": .array([
+                .object(["nutrient": .string("calories"), "min": .number(800), "max": .number(1000)])
+            ])]))
+        guard case .failure = outcome else { return XCTFail("expected failure") }
+    }
+
+    func testHealthNotesAreSaved() throws {
+        let executor = AssistantToolExecutor(context: try contextWithProfile())
+        guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
+            id: "h", tool: .saveHealthNotes, arguments: ["notes": .array([.object([
+                "condition": .string("Prediabetes"),
+                "details": .string("HbA1c 6.1% (20 Oct 2026)"),
+                "guidance": .array([.string("At most 1 banana a day")])])])]))
+        else { return XCTFail("expected a card") }
+        _ = try executor.commit(write)
+
+        XCTAssertEqual(HealthNotesStore.shared.notes.map(\.condition), ["Prediabetes"])
+        XCTAssertEqual(HealthNotesStore.shared.notes.first?.guidance, ["At most 1 banana a day"])
     }
 }

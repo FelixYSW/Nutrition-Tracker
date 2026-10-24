@@ -56,10 +56,18 @@ final class AssistantToolExecutor {
             case .addFoodEntry:
                 let writes = try proposeAdd(call: call)
                 return writes.count == 1 ? .awaitingConfirmation(writes[0]) : .awaitingConfirmations(writes)
+            case .repeatFoodEntry:
+                return .awaitingConfirmation(try proposeRepeat(call: call))
             case .editFoodEntry:
                 return .awaitingConfirmation(try proposeEdit(call: call))
             case .deleteFoodEntry:
                 return .awaitingConfirmation(try proposeDelete(call: call))
+            case .updateProfile:
+                return .awaitingConfirmation(try proposeProfile(call: call))
+            case .updateDailyRanges:
+                return .awaitingConfirmation(try proposeRanges(call: call))
+            case .saveHealthNotes:
+                return .awaitingConfirmation(try proposeHealthNotes(call: call))
             }
         } catch let error as AssistantToolError {
             return .failure(error.localizedDescription)
@@ -446,6 +454,151 @@ final class AssistantToolExecutor {
         return resolved
     }
 
+    // MARK: Profile, ranges and health notes
+
+    /// New profile values, checked against believable bounds, with a line per
+    /// change for the card.
+    private func proposeProfile(call: AssistantToolCall) throws -> PendingAssistantWrite {
+        let tool = AssistantTool.updateProfile.rawValue
+        guard let profile = context.loadUserProfile() else {
+            throw AssistantToolError.malformedArguments(tool: tool, detail: "there is no profile yet")
+        }
+        let arguments = call.arguments
+        var update = ProfileUpdate(lines: [], reason: arguments["reason"]?.stringValue)
+
+        func number(_ key: String, in range: ClosedRange<Double>) throws -> Double? {
+            guard let value = arguments[key]?.doubleValue else { return nil }
+            guard range.contains(value) else {
+                throw AssistantToolError.malformedArguments(
+                    tool: tool, detail: "\(key) must be between \(Int(range.lowerBound)) and "
+                        + "\(Int(range.upperBound))")
+            }
+            return (value * 10).rounded() / 10
+        }
+        if let weight = try number("weightKg", in: 30...300), weight != profile.weightKg {
+            update.weightKg = weight
+            update.lines.append("Weight \(AppFormatters.amount(profile.weightKg)) -> "
+                                + "\(AppFormatters.amount(weight)) kg")
+        }
+        if let height = try number("heightCm", in: 120...230), height != profile.heightCm {
+            update.heightCm = height
+            update.lines.append("Height \(AppFormatters.amount(profile.heightCm)) -> "
+                                + "\(AppFormatters.amount(height)) cm")
+        }
+        if let target = try number("targetWeightKg", in: 30...300),
+           target != profile.targetWeightKg {
+            update.targetWeightKg = target
+            let old = profile.targetWeightKg.map { "\(AppFormatters.amount($0)) kg" } ?? "none"
+            update.lines.append("Target weight \(old) -> \(AppFormatters.amount(target)) kg")
+        }
+        if let raw = arguments["goal"]?.stringValue, let goal = FitnessGoal(rawValue: raw),
+           goal != profile.goal {
+            update.goal = goal
+            update.lines.append("Goal \(profile.goal.displayName) -> \(goal.displayName)")
+        }
+        if let raw = arguments["activityLevel"]?.stringValue,
+           let activity = ActivityLevel(rawValue: raw), activity != profile.activity {
+            update.activity = activity
+            update.lines.append("Activity \(profile.activity.displayName) -> \(activity.displayName)")
+        }
+        guard !update.lines.isEmpty else {
+            throw AssistantToolError.malformedArguments(
+                tool: tool, detail: "nothing to change - every value given is already the profile's")
+        }
+        return PendingAssistantWrite(id: call.id, tool: .updateProfile, action: .profile(update))
+    }
+
+    /// New bounds for the nutrients given; the rest stay as they are. Kept as
+    /// set by hand, so a later profile change doesn't recalculate them away.
+    private func proposeRanges(call: AssistantToolCall) throws -> PendingAssistantWrite {
+        let tool = AssistantTool.updateDailyRanges.rawValue
+        guard let target = context.loadNutritionTarget() else {
+            throw AssistantToolError.malformedArguments(tool: tool, detail: "there are no daily ranges yet")
+        }
+        let raw = (call.arguments["ranges"]?.arrayValue ?? []).compactMap(\.objectValue)
+        var changes: [RangesUpdate.Change] = []
+        for item in raw {
+            guard let name = item["nutrient"]?.stringValue, let nutrient = Nutrient(rawValue: name),
+                  let min = item["min"]?.doubleValue, let max = item["max"]?.doubleValue else {
+                throw AssistantToolError.malformedArguments(
+                    tool: tool, detail: "each range needs a nutrient, a min and a max")
+            }
+            let ceiling: Double = nutrient == .calories ? 6000 : 600
+            guard min >= 0, max > min, max <= ceiling else {
+                throw AssistantToolError.malformedArguments(
+                    tool: tool, detail: "\(name): min must be below max, and max at most "
+                        + "\(Int(ceiling))")
+            }
+            // The same safety floor the app's own calculation keeps to.
+            let floor = NutritionTargetCalculator.calorieFloor(
+                for: context.loadUserProfile()?.sex ?? .female)
+            if nutrient == .calories, min < floor {
+                throw AssistantToolError.malformedArguments(
+                    tool: tool, detail: "calories min can't go below \(Int(floor)) kcal")
+            }
+            let old = target.ranges[nutrient]
+            let new = old.withManualMin(min.rounded()).withManualMax(max.rounded())
+            changes.append(.init(nutrient: name, old: old, new: new))
+        }
+        guard !changes.isEmpty else {
+            throw AssistantToolError.malformedArguments(tool: tool, detail: "ranges is empty")
+        }
+        return PendingAssistantWrite(
+            id: call.id, tool: .updateDailyRanges,
+            action: .ranges(RangesUpdate(changes: changes,
+                                         reason: call.arguments["reason"]?.stringValue)))
+    }
+
+    /// The full list of health notes to keep.
+    private func proposeHealthNotes(call: AssistantToolCall) throws -> PendingAssistantWrite {
+        let raw = (call.arguments["notes"]?.arrayValue ?? []).compactMap(\.objectValue)
+        let notes = raw.compactMap { item -> HealthNote? in
+            guard let condition = item["condition"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !condition.isEmpty else { return nil }
+            let guidance = (item["guidance"]?.arrayValue ?? []).compactMap(\.stringValue)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return HealthNote(condition: condition,
+                              details: item["details"]?.stringValue ?? "",
+                              guidance: guidance)
+        }
+        guard notes.count == raw.count else {
+            throw AssistantToolError.malformedArguments(
+                tool: AssistantTool.saveHealthNotes.rawValue, detail: "every note needs a condition")
+        }
+        return PendingAssistantWrite(
+            id: call.id, tool: .saveHealthNotes,
+            action: .healthNotes(HealthNotesUpdate(notes: notes,
+                                                   reason: call.arguments["reason"]?.stringValue)))
+    }
+
+    /// "The same as on the 23rd": a card holding an exact copy of a logged
+    /// entry - every ingredient, portion and figure - at the new time. The app
+    /// copies it, so nothing depends on the model retyping the ingredients.
+    private func proposeRepeat(call: AssistantToolCall) throws -> PendingAssistantWrite {
+        let id = try AssistantArgumentParser.parseEntryID(call.arguments["id"])
+        guard let entry = context.fetchEntry(id: id) else {
+            throw AssistantToolError.entryNotFound(id: id.uuidString)
+        }
+        let consumedAt = AssistantArgumentParser.parseDate(call.arguments["consumedAt"]) ?? .now
+        // Food can't be eaten in the future; a time ahead of now is a date
+        // the model worked out wrongly.
+        if consumedAt.timeIntervalSinceNow > 15 * 60 {
+            throw AssistantToolError.malformedArguments(
+                tool: AssistantTool.repeatFoodEntry.rawValue,
+                detail: "consumedAt is in the future - use localDate, yesterdayDate and "
+                    + "localTime from the context, or omit it for now")
+        }
+        let servings = call.arguments["servings"]?.doubleValue ?? 1
+        guard servings > 0, servings <= 20 else {
+            throw AssistantToolError.malformedArguments(
+                tool: AssistantTool.repeatFoodEntry.rawValue,
+                detail: "servings must be a positive number, 1 for the same amount as before")
+        }
+        let draft = FoodEntryDraft(entry: entry).repeated(at: consumedAt, servings: servings)
+        return PendingAssistantWrite(id: call.id, tool: .repeatFoodEntry, action: .add(draft))
+    }
+
     private func proposeEdit(call: AssistantToolCall) throws -> PendingAssistantWrite {
         let id = try AssistantArgumentParser.parseEntryID(call.arguments["id"])
 
@@ -595,6 +748,46 @@ final class AssistantToolExecutor {
             context.delete(entry)
             try context.save()
             return try encode(["status": "deleted", "name": name])
+
+        case .profile(let update):
+            guard let profile = context.loadUserProfile() else {
+                throw AssistantToolError.malformedArguments(
+                    tool: AssistantTool.updateProfile.rawValue, detail: "there is no profile")
+            }
+            if let weight = update.weightKg { profile.weightKg = weight }
+            if let height = update.heightCm { profile.heightCm = height }
+            if let target = update.targetWeightKg { profile.targetWeightKg = target }
+            if let goal = update.goal { profile.goal = goal }
+            if let activity = update.activity { profile.activity = activity }
+            // Recalculates the ranges, keeping any set by hand, and saves.
+            TargetUpdater.update(for: profile, in: context)
+            return try encode(["status": "updated",
+                               "detail": "Profile updated: " + update.lines.joined(separator: "; ")
+                                   + ". Daily ranges recalculated; the new ranges are in the "
+                                   + "context of the next message."])
+
+        case .ranges(let update):
+            guard let target = context.loadNutritionTarget() else {
+                throw AssistantToolError.malformedArguments(
+                    tool: AssistantTool.updateDailyRanges.rawValue, detail: "there are no ranges")
+            }
+            var ranges = target.ranges
+            for change in update.changes {
+                guard let nutrient = Nutrient(rawValue: change.nutrient) else { continue }
+                ranges[nutrient] = change.new
+            }
+            target.ranges = ranges
+            try context.save()
+            return try encode(["status": "updated",
+                               "detail": "Daily ranges changed: " + update.changes.map {
+                                   "\($0.nutrient) \(AppFormatters.range($0.new))"
+                               }.joined(separator: "; ")])
+
+        case .healthNotes(let update):
+            HealthNotesStore.shared.save(update.notes)
+            return try encode(["status": "saved",
+                               "detail": "Health notes saved: "
+                                   + update.notes.map(\.condition).joined(separator: ", ")])
         }
     }
 
@@ -605,6 +798,9 @@ final class AssistantToolExecutor {
         case .add: "add"
         case .edit: "edit"
         case .delete: "delete"
+        case .profile: "profile change"
+        case .ranges: "range change"
+        case .healthNotes: "health notes"
         }
         return (try? encode([
             "status": "declined",

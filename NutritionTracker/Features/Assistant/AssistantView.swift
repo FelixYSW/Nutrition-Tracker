@@ -7,8 +7,6 @@ import PhotosUI
 struct AssistantView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
-    @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var allEntries: [FoodEntry]
-    @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
     /// The message box, so a suggestion like "Log my lunch" can open the
     /// keyboard with the sentence started.
     @FocusState private var isComposerFocused: Bool
@@ -241,13 +239,9 @@ struct AssistantView: View {
         }
     }
 
-    /// A new chat: greeting, where today stands, and suggestions for now.
+    /// A new chat: greeting and suggestions for this time of day.
     private func emptyChat(viewModel: AssistantViewModel) -> some View {
-        let today = LocalDay.entries(allEntries, on: .now)
-        return EmptyChatView(
-            caloriesSoFar: LocalDay.total(today).calories,
-            calorieRange: targets.first?.ranges.calories,
-            hasLoggedToday: !today.isEmpty,
+        EmptyChatView(
             onAsk: { question in
                 viewModel.composerText = question
                 Task { await viewModel.send() }
@@ -652,6 +646,67 @@ struct AssistantConfirmationCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+        case .profile(let update):
+            changeList(update.lines, reason: update.reason,
+                       footnote: "Your daily ranges are recalculated from the new profile; "
+                           + "ranges you set by hand stay as they are.")
+
+        case .ranges(let update):
+            changeList(update.changes.map { change in
+                let name = Nutrient(rawValue: change.nutrient)?.displayName ?? change.nutrient
+                let unit = change.nutrient == Nutrient.calories.rawValue ? "kcal" : "g"
+                return "\(name) \(AppFormatters.range(change.old)) -> "
+                    + "\(AppFormatters.range(change.new)) \(unit)"
+            }, reason: update.reason,
+                       footnote: "Kept as set, even when your profile changes later.")
+
+        case .healthNotes(let update):
+            VStack(alignment: .leading, spacing: 10) {
+                if let reason = update.reason, !reason.isEmpty {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(update.notes) { note in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(note.condition)
+                            .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        if !note.details.isEmpty {
+                            Text(note.details)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(note.guidance, id: \.self) { rule in
+                            Label(rule, systemImage: "checkmark.circle")
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                Text("Stays on this iPhone and goes to the assistant with each message. "
+                     + "Not medical advice - follow your doctor's.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The lines of a profile or range change, each on its own row.
+    private func changeList(_ lines: [String], reason: String?, footnote: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let reason, !reason.isEmpty {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(lines, id: \.self) { line in
+                Text(line)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+            }
+            Text(footnote)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

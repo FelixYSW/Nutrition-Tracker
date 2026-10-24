@@ -122,18 +122,19 @@ struct DashboardView: View {
 
             Spacer(minLength: 8)
 
-            // Always in place, so the row never shifts; faded and disabled
-            // while today is already showing, like the forward button.
+            // Always in place, so the row never shifts. Drawn like the day
+            // arrows - the same glass and ink - and faded and disabled while
+            // today is already showing, like the forward arrow.
             Button {
                 withAnimation(.snappy) { pickedDay = nil }
                 Haptics.selection()
             } label: {
                 Text("Today")
-                    .font(.system(.subheadline, design: .rounded).weight(.bold))
-                    .foregroundStyle(AppTheme.onAccent)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
                     .padding(.horizontal, 18)
                     .frame(minHeight: AppTheme.minimumTapTarget)
-                    .background(AppTheme.accentFill, in: Capsule())
+                    .appGlass(in: Capsule(), interactive: true)
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)

@@ -16,9 +16,23 @@ struct AssistantContext: Codable, Equatable, Sendable {
         var weightKg: Double
         var goal: String
         var activityLevel: String
-        /// Deliberately omitted from the payload: date of birth, target weight
-        /// and body-fat percentage, none of which the assistant needs to answer
-        /// "what should I eat".
+        /// For proposing profile changes against a goal weight.
+        var targetWeightKg: Double?
+        /// Deliberately omitted from the payload: date of birth and body-fat
+        /// percentage, which the assistant doesn't need.
+    }
+
+    struct HealthNoteSummary: Codable, Equatable, Sendable {
+        var condition: String
+        var details: String
+        var guidance: [String]
+    }
+
+    /// One earlier day's food, as short lines with the dishes' components,
+    /// so the assistant can spot e.g. a lot of prawns yesterday.
+    struct DayFoods: Codable, Equatable, Sendable {
+        var date: String
+        var foods: [String]
     }
 
     struct RangeSummary: Codable, Equatable, Sendable {
@@ -76,6 +90,10 @@ struct AssistantContext: Codable, Equatable, Sendable {
     /// Yesterday's entries, included only in the small hours, when "last
     /// night" still means yesterday.
     var entriesYesterday: [EntrySummary]?
+    /// Health conditions to take into account, from the user's check-ups.
+    var healthNotes: [HealthNoteSummary]?
+    /// What was eaten on each of the last few days, newest first.
+    var recentDays: [DayFoods]?
     var trend: TrendSummary?
     /// Plain-language note so the model does not invent numbers.
     var note: String
@@ -87,13 +105,19 @@ struct AssistantContextBuilder {
 
     private let context: ModelContext
     private let calendar: Calendar
+    private let healthNotes: () -> [HealthNote]
 
     /// How far back the trend summary looks.
     nonisolated static let trendWindowDays = 14
+    /// Earlier days whose food goes in the context, for health-related
+    /// warnings ("a lot of prawns yesterday") and repeats.
+    nonisolated static let recentDayCount = 3
 
-    init(context: ModelContext, calendar: Calendar = .autoupdatingCurrent) {
+    init(context: ModelContext, calendar: Calendar = .autoupdatingCurrent,
+         healthNotes: @escaping () -> [HealthNote] = { HealthNotesStore.shared.notes }) {
         self.context = context
         self.calendar = calendar
+        self.healthNotes = healthNotes
     }
 
     func build(now: Date = .now) -> AssistantContext {
@@ -101,6 +125,7 @@ struct AssistantContextBuilder {
         let target = context.loadNutritionTarget()
         let todaysEntries = context.fetchEntries(on: now, calendar: calendar)
         let consumed = LocalDay.total(todaysEntries)
+        let notes = healthNotes()
 
         let dateFormatter = DateFormatter()
         dateFormatter.calendar = calendar
@@ -150,13 +175,45 @@ struct AssistantContextBuilder {
                       heightCm: $0.heightCm,
                       weightKg: $0.weightKg,
                       goal: $0.goalRaw,
-                      activityLevel: $0.activityRaw)
+                      activityLevel: $0.activityRaw,
+                      targetWeightKg: $0.targetWeightKg)
             },
             targetRanges: ranges,
             entriesToday: todaysEntries.map(Self.summary(of:)),
             entriesYesterday: yesterdaysEntries?.map(Self.summary(of:)),
+            healthNotes: notes.isEmpty ? nil : notes.map {
+                .init(condition: $0.condition, details: $0.details, guidance: $0.guidance)
+            },
+            recentDays: recentDays(now: now, formatter: dateFormatter),
             trend: buildTrend(target: target, now: now),
             note: Self.note)
+    }
+
+    /// The last few days' food, newest first, skipping days with nothing
+    /// logged. Each food lists its components with amounts, so something
+    /// eaten inside a dish (prawns in a mee) counts too.
+    private func recentDays(now: Date, formatter: DateFormatter) -> [AssistantContext.DayFoods]? {
+        var days: [AssistantContext.DayFoods] = []
+        for offset in 1...Self.recentDayCount {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: now) else { continue }
+            let entries = context.fetchEntries(on: day, calendar: calendar)
+            guard !entries.isEmpty else { continue }
+            days.append(.init(date: formatter.string(from: day),
+                              foods: entries.map(Self.foodLine(for:))))
+        }
+        return days.isEmpty ? nil : days
+    }
+
+    /// "Prawn mee (prawns 120 g, yellow noodles 150 g)" or "Banana 120 g".
+    static func foodLine(for entry: FoodEntry) -> String {
+        guard entry.isComposite else {
+            return "\(entry.name) \(AppFormatters.quantity(entry.quantity, unit: entry.unit)) "
+                + entry.unit.shortLabel
+        }
+        let parts = entry.orderedIngredients.map {
+            "\($0.name) \(AppFormatters.quantity($0.quantity, unit: $0.unit)) \($0.unit.shortLabel)"
+        }
+        return "\(entry.name) (\(parts.joined(separator: ", ")))"
     }
 
     private func yesterdayLabel(now: Date) -> String {
@@ -260,12 +317,15 @@ struct AssistantContextBuilder {
 
     nonisolated static let systemPrompt = """
     You are the in-app nutrition assistant for a personal iPhone food-tracking \
-    app. You help the user with four things:
+    app. You help the user with five things:
 
     1. Suggesting what to eat, fitted to the room left in today's target ranges.
     2. Logging, editing and deleting food on request.
     3. Summarising their own logged trends.
     4. Suggesting improvements grounded only in their actual logged data.
+    5. Keeping their profile, daily ranges and health notes up to date - from a \
+    new weigh-in, a goal they set, or a medical check-up report they share - \
+    and applying their health notes to everything above.
 
     When to log:
     - Only propose an entry (addFoodEntry, editFoodEntry, deleteFoodEntry) when \
@@ -434,14 +494,58 @@ struct AssistantContextBuilder {
     yesterday"), find it with queryEntries for that date (or the last few \
     days if no date is given). Never ask for the amounts again - they are \
     in the log.
-    - queryEntries lists each ingredient of a composite entry with its grams \
-    and per-100 g figures, already in addFoodEntry's item shape. Propose \
-    the same entry with those items copied exactly - same names, grams and \
-    figures, nutritionSource "saved" - at the new time. A simple entry \
-    without ingredients is repeated with the same name, amount and totals.
-    - If the user says what changed ("but with 2 scoops of whey"), change \
-    only that item. If several earlier entries could match, ask which one \
-    in one short question, naming them with their dates.
+    - Then call repeatFoodEntry with that entry's id and the new time. The \
+    app copies the whole entry - every ingredient, its portion and its \
+    figures - so never rebuild a repeated food with addFoodEntry. For a \
+    different amount of the whole thing ("a double portion"), set servings.
+    - If one ingredient changed ("but with 2 scoops of whey"), use \
+    addFoodEntry instead with every ingredient from queryEntries copied \
+    exactly (same names, grams and per-100 g figures, nutritionSource \
+    "saved") and only that one item changed.
+    - If several earlier entries could match, ask which one in one short \
+    question, naming them with their dates.
+
+    Health notes:
+    - healthNotes in the context are the user's conditions (e.g. prediabetes, \
+    high uric acid), each with rules for food. Apply them every time you \
+    log, suggest or answer. If a food breaks a rule or goes over a limit - a \
+    second banana when the rule is "at most 1 banana a day" - still log it if \
+    they ask, but add one short, kind line saying so and what would suit \
+    them better. Don't lecture, and don't repeat the same warning in a chat.
+    - Check recentDays (the last few days, with what was in each dish) and \
+    today's entries for build-ups that matter to a condition: with high uric \
+    acid and a lot of prawns, shellfish, anchovies, organ meat or beer \
+    yesterday, say to go easy on them today and suggest lower-purine choices; \
+    with prediabetes and several sweet drinks or desserts recently, say so \
+    when they log another. Name the food and the day ("you had about 250 g \
+    of prawns yesterday").
+    - Suggestions follow the notes too: never suggest a food a note limits \
+    when that limit is already reached.
+
+    Check-up reports and health conditions:
+    - When the user shares a medical check-up report (photo or text), read \
+    the values that matter for eating: blood sugar (HbA1c, fasting glucose), \
+    lipids (total cholesterol, LDL, HDL, triglycerides), uric acid, liver \
+    (ALT, AST), kidney (creatinine, eGFR), blood pressure, weight and BMI, and \
+    any vitamin or iron results. Use the report's own reference ranges. Say \
+    in plain words which are out of range and what that means for food.
+    - Then propose, each as its own card: saveHealthNotes with one note per \
+    relevant condition - the values with the report date, and 2 to 5 \
+    specific, countable food rules (e.g. "At most 1 banana a day", "Prawns \
+    and other shellfish at most once a week, a small portion", "No sweet \
+    drinks; teh/kopi kosong or siew dai instead"); updateProfile if the \
+    report's weight or height differs from the profile; and updateDailyRanges \
+    only where a change clearly helps (e.g. a lower carb maximum and higher \
+    fibre minimum for prediabetes). Keep existing notes unless the report \
+    shows they no longer apply. Explain each change in a line.
+    - The user can also just tell you about a condition or a doctor's advice \
+    ("I have high uric acid", "the doctor said under 150 g carbs") - offer \
+    to save it the same way.
+    - Direct requests change the profile or ranges straight away: "I'm 97 kg \
+    now" -> updateProfile; "set my protein to 100-130 g" -> updateDailyRanges.
+    - You're not a doctor: never diagnose or contradict their doctor, and \
+    keep advice general. If a result looks seriously high or low, suggest \
+    seeing their doctor soon.
 
     Suggesting what to eat:
     - Be direct. Say exactly what to have and how much, e.g. "2 sticks of satay \

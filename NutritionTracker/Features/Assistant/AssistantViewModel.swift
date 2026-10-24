@@ -29,12 +29,52 @@ struct AssistantChatMessage: Identifiable, Equatable, Codable {
 /// Holds the tool-call loop: send -> model replies with tool calls -> read tools
 /// run immediately -> write tools surface a confirmation card and the loop
 /// pauses until the user decides.
+/// One conversation's state: what the user sees, what the model is sent, and
+/// any open cards.
+///
+/// Each chat has its own, so a reply still on its way keeps writing to the
+/// chat it was asked in even after the user opens another one - before, all
+/// chats shared one set of state and a late reply landed in whichever chat
+/// was on screen.
+@MainActor
+@Observable
+final class ChatSession {
+    let id: UUID
+    let createdAt: Date
+
+    var messages: [AssistantChatMessage] = []
+    var isSending = false
+    var pendingWrites: [PendingAssistantWrite] = []
+    var replacedWriteIDs: Set<String> = []
+    var unansweredCardIDs: [String] = []
+    var contextNotes: [String] = []
+    var turns: [AssistantTurn] = []
+    var deferredResults: [AssistantTurn.Block] = []
+    var cardOutcomes: [String: [String]] = [:]
+    var lookedUpProducts: [String] = []
+
+    init(id: UUID = UUID(), createdAt: Date = .now) {
+        self.id = id
+        self.createdAt = createdAt
+    }
+
+    /// Kept in memory when the user switches away: a reply is on its way, or
+    /// cards are waiting for an answer.
+    var needsKeeping: Bool { isSending || !pendingWrites.isEmpty }
+}
+
 @MainActor
 @Observable
 final class AssistantViewModel {
 
-    private(set) var messages: [AssistantChatMessage] = []
-    private(set) var isSending = false
+    /// The chat on screen.
+    private(set) var session = ChatSession()
+    /// Chats switched away from that are still working or have open cards,
+    /// by id, so opening them again shows them live, not a saved copy.
+    private var keptSessions: [UUID: ChatSession] = [:]
+
+    var messages: [AssistantChatMessage] { session.messages }
+    var isSending: Bool { session.isSending }
 
     /// The reply currently appearing word by word, and how many characters of
     /// it are showing. The message itself always holds the whole reply, so
@@ -45,17 +85,23 @@ final class AssistantViewModel {
     /// Cards awaiting confirmation, in the order shown. A meal of several
     /// dishes (miso soup, chawanmushi, salmon don) gets one card per dish, so
     /// each can be confirmed, cancelled or changed on its own.
-    private(set) var pendingWrites: [PendingAssistantWrite] = []
+    var pendingWrites: [PendingAssistantWrite] { session.pendingWrites }
     /// The first open card, for callers that deal with one at a time.
     var pendingWrite: PendingAssistantWrite? { pendingWrites.first }
     /// Cards closed because the user asked for changes and a new one replaced them.
-    private(set) var replacedWriteIDs: Set<String> = []
+    var replacedWriteIDs: Set<String> { session.replacedWriteIDs }
     /// Open cards from the latest model turn that still owe it a tool result.
     /// Once a card's "still waiting" result has gone out (the user kept
     /// chatting), its eventual outcome goes in `contextNotes` instead.
-    private var unansweredCardIDs: [String] = []
+    private var unansweredCardIDs: [String] {
+        get { session.unansweredCardIDs }
+        set { session.unansweredCardIDs = newValue }
+    }
     /// Outcomes to tell the model with the next message, without asking it to reply.
-    private var contextNotes: [String] = []
+    private var contextNotes: [String] {
+        get { session.contextNotes }
+        set { session.contextNotes = newValue }
+    }
 
     var composerText = ""
     /// Photos attached to the next message, in the order added. An attachment
@@ -92,14 +138,21 @@ final class AssistantViewModel {
         attachments.removeAll { $0.id == id }
     }
 
-    private var turns: [AssistantTurn] = []
+    private var turns: [AssistantTurn] {
+        get { session.turns }
+        set { session.turns = newValue }
+    }
     /// Tool results for the latest model turn, held until every card in it has
     /// an answer (or the user sends another message).
-    private var deferredResults: [AssistantTurn.Block] = []
+    private var deferredResults: [AssistantTurn.Block] {
+        get { session.deferredResults }
+        set { session.deferredResults = newValue }
+    }
     /// Outcomes of cards whose call made several cards, until all are answered.
-    private var cardOutcomes: [String: [String]] = [:]
-    /// Products looked up with lookUpProductNutrition in this chat.
-    private var lookedUpProducts: [String] = []
+    private var cardOutcomes: [String: [String]] {
+        get { session.cardOutcomes }
+        set { session.cardOutcomes = newValue }
+    }
 
     private let service: AssistantServing
     private let executor: AssistantToolExecutor
@@ -123,8 +176,7 @@ final class AssistantViewModel {
     /// Finds where the user is, for food nearby when they don't name a place.
     private let locator: CurrentLocating?
     /// The chat on screen. Changes when starting a new chat or opening an old one.
-    private(set) var conversationID = UUID()
-    private var conversationCreatedAt = Date.now
+    var conversationID: UUID { session.id }
 
     init(service: AssistantServing,
          executor: AssistantToolExecutor,
@@ -187,15 +239,21 @@ final class AssistantViewModel {
         attachments = []
         finishReveal()
 
-        // Show the message straight away; the photo analysis below can take a moment.
-        append(.user(text: text, images: images))
+        // The chat this message belongs to. Everything below writes to it,
+        // even if the user opens another chat before the reply arrives.
+        let chat = session
+
+        // Show the message straight away, and save it so it's in Past chats
+        // even while the reply is still on its way.
+        append(.user(text: text, images: images), to: chat)
+        persist(chat)
 
         // A card left open gets its "still waiting" result first, then any
         // outcomes the model hasn't heard about go in front of the message.
         notePendingCardBeforeNewMessage()
-        var blocks: [AssistantTurn.Block] = contextNotes.map { .text("[Note: \($0)]") }
-        contextNotes = []
-        if !images.isEmpty, photoAnalyser != nil { isSending = true }
+        var blocks: [AssistantTurn.Block] = chat.contextNotes.map { .text("[Note: \($0)]") }
+        chat.contextNotes = []
+        if !images.isEmpty, photoAnalyser != nil { chat.isSending = true }
         for (index, image) in images.enumerated() {
             blocks.append(.image(image))
             // With the food models installed, the app's own recognition and
@@ -209,37 +267,43 @@ final class AssistantViewModel {
         // Photos sent on their own still need a question for the model; the
         // chat shows just the photos, as Claude and ChatGPT do.
         blocks.append(.text(text.isEmpty ? Self.photoOnlyPrompt : text))
-        turns.append(AssistantTurn(role: .user, blocks: blocks))
+        chat.turns.append(AssistantTurn(role: .user, blocks: blocks))
 
-        await runLoop()
-        persist()
+        await runLoop(in: chat)
+        persist(chat)
+        // Finished in the background with nothing left open: no need to keep
+        // it in memory - opening it again loads the saved copy.
+        if chat !== session, !chat.needsKeeping {
+            keptSessions[chat.id] = nil
+        }
     }
 
     /// Sends the conversation and processes tool calls until the model stops
-    /// calling tools or proposes a write.
-    private func runLoop() async {
-        isSending = true
-        defer { isSending = false }
+    /// calling tools or proposes a write. Works on `chat` throughout, which
+    /// may no longer be the chat on screen by the time a reply arrives.
+    private func runLoop(in chat: ChatSession) async {
+        chat.isSending = true
+        defer { chat.isSending = false }
 
         for _ in 0..<Self.maxToolRoundTrips {
             let contextJSON: String
             do {
                 contextJSON = try contextBuilder.encodedJSON()
             } catch {
-                append(.error("Could not assemble your nutrition context."))
+                append(.error("Could not assemble your nutrition context."), to: chat)
                 return
             }
 
             let response: AssistantResponse
             do {
-                response = try await service.send(turns: turns,
+                response = try await service.send(turns: chat.turns,
                                                    contextJSON: contextJSON,
                                                    tools: AssistantTool.allCases)
             } catch let error as AssistantServiceError {
-                append(.error(error.localizedDescription))
+                append(.error(error.localizedDescription), to: chat)
                 return
             } catch {
-                append(.error(error.localizedDescription))
+                append(.error(error.localizedDescription), to: chat)
                 return
             }
 
@@ -251,15 +315,20 @@ final class AssistantViewModel {
                 .toolUse(id: $0.id, name: $0.tool.rawValue, input: $0.arguments, extra: $0.extra)
             }
             if !assistantBlocks.isEmpty {
-                turns.append(AssistantTurn(role: .assistant, blocks: assistantBlocks))
+                chat.turns.append(AssistantTurn(role: .assistant, blocks: assistantBlocks))
             }
 
-            // A turn that proposes an entry shows only the card: the card is
-            // the reply, so any text alongside it is not displayed.
-            let proposesWrite = response.toolCalls.contains { $0.tool.isWrite }
+            // A turn that proposes a food entry shows only the card: the card
+            // is the reply, so any text alongside it is not displayed. Profile,
+            // range and health-note cards keep their text - reading a check-up
+            // report, the explanation is the point.
+            let foodWrites: Set<AssistantTool> = [.addFoodEntry, .repeatFoodEntry,
+                                                  .editFoodEntry, .deleteFoodEntry]
+            let proposesWrite = response.toolCalls.contains { foodWrites.contains($0.tool) }
             if let text = response.text, !proposesWrite {
-                append(.assistant(text))
-                if let id = messages.last?.id { reveal(id, text: text) }
+                append(.assistant(text), to: chat)
+                // Word by word only when the user is looking at this chat.
+                if chat === session, let id = chat.messages.last?.id { reveal(id, text: text) }
             }
 
             guard response.hasToolCalls else { return }
@@ -291,14 +360,14 @@ final class AssistantViewModel {
                         }
                     }
                     let (question, activity) = Self.webQuestion(for: call, currentPlace: here)
-                    append(.toolActivity(activity))
+                    append(.toolActivity(activity), to: chat)
                     let (content, failed, summary) = await searchWeb(question)
                     // Only a lookup that actually found published figures
                     // holds the product to them; "nothing found" doesn't.
                     if call.tool == .lookUpProductNutrition, !failed,
                        let summary, Self.foundPublishedFigures(in: summary),
                        let product = call.arguments["product"]?.stringValue {
-                        lookedUpProducts.append(product)
+                        chat.lookedUpProducts.append(product)
                     }
                     resultBlocks.append(.toolResult(id: call.id, content: content, isError: failed))
                     continue
@@ -311,10 +380,10 @@ final class AssistantViewModel {
                 // unable to log the food at all.
                 if [.addFoodEntry, .editFoodEntry, .calculateNutrition].contains(call.tool),
                    let detail = Self.unusedBrandFigures(in: call.arguments,
-                                                        lookedUp: lookedUpProducts) {
+                                                        lookedUp: chat.lookedUpProducts) {
                     let blocked = Set(Self.productsSentAsEstimates(in: call.arguments,
-                                                                   lookedUp: lookedUpProducts))
-                    lookedUpProducts.removeAll { blocked.contains($0) }
+                                                                   lookedUp: chat.lookedUpProducts))
+                    chat.lookedUpProducts.removeAll { blocked.contains($0) }
                     resultBlocks.append(.toolResult(id: call.id, content: detail, isError: true))
                     continue
                 }
@@ -324,7 +393,7 @@ final class AssistantViewModel {
                 // to amend the card instead of failing.
                 if call.tool == .editFoodEntry || call.tool == .deleteFoodEntry,
                    let target = call.arguments["id"]?.stringValue,
-                   let card = pendingWrites.first(where: { $0.id == target }) {
+                   let card = chat.pendingWrites.first(where: { $0.id == target }) {
                     resultBlocks.append(.toolResult(
                         id: call.id,
                         content: Self.unsavedCardResult(for: card, tool: call.tool),
@@ -334,7 +403,7 @@ final class AssistantViewModel {
 
                 switch executor.execute(call) {
                 case .result(let json):
-                    append(.toolActivity(Self.activityLabel(for: call.tool)))
+                    append(.toolActivity(Self.activityLabel(for: call.tool)), to: chat)
                     resultBlocks.append(.toolResult(id: call.id, content: json, isError: false))
 
                 case .failure(let message):
@@ -368,18 +437,18 @@ final class AssistantViewModel {
             }
 
             if !proposals.isEmpty {
-                openCards(proposals, replacing: replacing, keepsTime: keepsTime)
+                openCards(proposals, replacing: replacing, keepsTime: keepsTime, in: chat)
                 // Held until the user answers every card, or sends another message.
-                deferredResults = resultBlocks
-                unansweredCardIDs = proposals.map(\.id)
+                chat.deferredResults = resultBlocks
+                chat.unansweredCardIDs = proposals.map(\.id)
                 return
             }
 
-            turns.append(AssistantTurn(role: .user, blocks: resultBlocks))
+            chat.turns.append(AssistantTurn(role: .user, blocks: resultBlocks))
         }
 
         append(.error("The assistant kept requesting data without answering. "
-                      + "Try rephrasing your question."))
+                      + "Try rephrasing your question."), to: chat)
     }
 
     // MARK: Web search
@@ -569,21 +638,21 @@ final class AssistantViewModel {
     /// replaces: correcting the brand of last night's shake mustn't move it
     /// to now.
     private func openCards(_ proposals: [PendingAssistantWrite], replacing: [String: String],
-                           keepsTime: Set<String> = []) {
+                           keepsTime: Set<String> = [], in chat: ChatSession) {
         for proposal in proposals {
             var write = proposal
-            let target = replacing[write.id] ?? pendingWrites.first {
+            let target = replacing[write.id] ?? chat.pendingWrites.first {
                 Self.cardTitle(for: $0).caseInsensitiveCompare(Self.cardTitle(for: write)) == .orderedSame
             }?.id
-            if let target, let index = pendingWrites.firstIndex(where: { $0.id == target }) {
+            if let target, let index = chat.pendingWrites.firstIndex(where: { $0.id == target }) {
                 if keepsTime.contains(write.id) {
-                    write = Self.retimed(write, like: pendingWrites[index])
+                    write = Self.retimed(write, like: chat.pendingWrites[index])
                 }
-                replacedWriteIDs.insert(target)
-                pendingWrites.remove(at: index)
+                chat.replacedWriteIDs.insert(target)
+                chat.pendingWrites.remove(at: index)
             }
-            pendingWrites.append(write)
-            append(.proposal(write))
+            chat.pendingWrites.append(write)
+            append(.proposal(write), to: chat)
         }
     }
 
@@ -593,7 +662,7 @@ final class AssistantViewModel {
         guard case .add(var draft) = write.action else { return write }
         let time: Date? = switch other.action {
         case .add(let old), .edit(_, let old, _): old.consumedAt
-        case .delete: nil
+        case .delete, .profile, .ranges, .healthNotes: nil
         }
         guard let time else { return write }
         draft.consumedAt = time
@@ -603,7 +672,7 @@ final class AssistantViewModel {
     /// Closes one card and records its outcome without calling the model.
     private func record(_ write: PendingAssistantWrite, resultJSON: String,
                         isError: Bool, note: String) {
-        pendingWrites.removeAll { $0.id == write.id }
+        session.pendingWrites.removeAll { $0.id == write.id }
         if let index = unansweredCardIDs.firstIndex(of: write.id) {
             unansweredCardIDs.remove(at: index)
             let call = Self.callID(ofCard: write.id)
@@ -725,6 +794,9 @@ final class AssistantViewModel {
         switch write.action {
         case .add(let draft), .edit(_, let draft, _): draft.name
         case .delete(_, let name, _): name
+        case .profile: "your profile"
+        case .ranges: "your daily ranges"
+        case .healthNotes: "your health notes"
         }
     }
 
@@ -741,6 +813,14 @@ final class AssistantViewModel {
             "Update \(draft.name)"
         case .delete(_, let name, _):
             "Delete \(name)"
+        case .profile(let update):
+            "Update profile: " + update.lines.joined(separator: "; ")
+        case .ranges(let update):
+            "Change ranges: " + update.changes.map {
+                "\($0.nutrient) \(AppFormatters.range($0.new))"
+            }.joined(separator: "; ")
+        case .healthNotes(let update):
+            "Save health notes: " + update.notes.map(\.condition).joined(separator: ", ")
         }
         return "{\"status\":\"awaiting_user\",\"cardID\":\"\(escape(write.id))\","
             + "\"card\":\"\(escape(card))\",\"detail\":\"Shown to the user as a confirmation "
@@ -751,39 +831,58 @@ final class AssistantViewModel {
 
     // MARK: Chat history
 
-    /// Saves the chat on screen, once it has at least one message from the user.
-    func persist() {
+    /// Saves a chat - the one on screen unless another is given - once it has
+    /// at least one message from the user.
+    func persist(_ chat: ChatSession? = nil) {
+        let chat = chat ?? session
         guard let historyStore,
-              messages.contains(where: { if case .user = $0.kind { return true }; return false })
+              chat.messages.contains(where: { if case .user = $0.kind { return true }; return false })
         else { return }
-        historyStore.save(SavedConversation(id: conversationID,
-                                            title: SavedConversation.title(for: messages),
-                                            createdAt: conversationCreatedAt,
+        historyStore.save(SavedConversation(id: chat.id,
+                                            title: SavedConversation.title(for: chat.messages),
+                                            createdAt: chat.createdAt,
                                             // Time of the last message, not of saving:
                                             // saves also happen on opening history,
                                             // switching chats and leaving the app.
-                                            updatedAt: messages.last?.timestamp ?? conversationCreatedAt,
-                                            messages: messages,
-                                            turns: turns))
+                                            updatedAt: chat.messages.last?.timestamp ?? chat.createdAt,
+                                            messages: chat.messages,
+                                            turns: chat.turns))
     }
 
     /// Saves the current chat and starts an empty one.
     func startNewConversation() {
-        persist()
-        resetState()
-        conversationID = UUID()
-        conversationCreatedAt = .now
+        switchTo(ChatSession())
     }
 
-    /// Reopens a saved chat so the user can read it or carry on.
+    /// Reopens a chat so the user can read it or carry on. One still working
+    /// or with open cards comes back live; any other is loaded from its save.
     func open(_ conversation: SavedConversation) {
         guard conversation.id != conversationID else { return }
+        if let kept = keptSessions[conversation.id] {
+            switchTo(kept)
+            return
+        }
+        let chat = ChatSession(id: conversation.id, createdAt: conversation.createdAt)
+        chat.messages = conversation.messages
+        chat.turns = Self.closingUnansweredToolCalls(in: conversation.turns)
+        switchTo(chat)
+    }
+
+    /// Puts another chat on screen. The one being left is saved, and kept in
+    /// memory while its reply is still coming or its cards are still open, so
+    /// the reply lands in it - not in the chat the user moved to.
+    private func switchTo(_ next: ChatSession) {
         persist()
-        resetState()
-        conversationID = conversation.id
-        conversationCreatedAt = conversation.createdAt
-        messages = conversation.messages
-        turns = Self.closingUnansweredToolCalls(in: conversation.turns)
+        finishReveal()
+        if session.needsKeeping {
+            keptSessions[session.id] = session
+        } else {
+            keptSessions[session.id] = nil
+        }
+        keptSessions[next.id] = nil
+        session = next
+        attachments = []
+        composerText = ""
     }
 
     /// A chat saved while a card was still open has a tool call with no
@@ -810,25 +909,11 @@ final class AssistantViewModel {
         return turns + [AssistantTurn(role: .user, blocks: closed)]
     }
 
-    private func resetState() {
-        finishReveal()
-        messages = []
-        turns = []
-        deferredResults = []
-        pendingWrites = []
-        unansweredCardIDs = []
-        contextNotes = []
-        lookedUpProducts = []
-        cardOutcomes = [:]
-        replacedWriteIDs = []
-        attachments = []
-        composerText = ""
-    }
-
     // MARK: Transcript helpers
 
-    private func append(_ kind: AssistantChatMessage.Kind) {
-        messages.append(AssistantChatMessage(kind: kind))
+    /// Adds a message to a chat - the one on screen unless another is given.
+    private func append(_ kind: AssistantChatMessage.Kind, to chat: ChatSession? = nil) {
+        (chat ?? session).messages.append(AssistantChatMessage(kind: kind))
     }
 
     // MARK: Reply reveal
@@ -902,6 +987,12 @@ final class AssistantViewModel {
             "Updated \(draft.name)."
         case .delete(_, let name, _):
             "Deleted \(name)."
+        case .profile:
+            "Profile updated. Daily ranges recalculated."
+        case .ranges:
+            "Daily ranges updated."
+        case .healthNotes(let update):
+            "Health notes saved (\(update.notes.count))."
         }
     }
 

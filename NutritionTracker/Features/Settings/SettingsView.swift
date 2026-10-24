@@ -20,6 +20,7 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearance = AppAppearance.light.rawValue
     @State private var isConfirmingDeleteAll = false
     @State private var isConfirmingImport: BackupFile?
+    @State private var healthNotes: [HealthNote] = []
 
     private var settings: AppSettings { context.loadAppSettings() }
     private var profile: UserProfile? { profiles.first }
@@ -36,6 +37,7 @@ struct SettingsView: View {
                     planSection
                     appearanceSection
                     assistantSection
+                    healthSection
                     backupSection
                     aboutSection
                 }
@@ -57,6 +59,7 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onAppear { healthNotes = HealthNotesStore.shared.notes }
             .sheet(isPresented: $isShowingProfileEditor) {
                 if let profile { ProfileEditorView(profile: profile) }
             }
@@ -118,9 +121,7 @@ struct SettingsView: View {
                 if profile != nil { isShowingProfileEditor = true }
             } label: {
                 HStack(spacing: 14) {
-                    AppLogoMark(size: 52)
-                        .background(AppTheme.skyCard, in: RoundedRectangle(
-                            cornerRadius: 14, style: .continuous))
+                    AppIconImage(size: 52)
                     VStack(alignment: .leading, spacing: 3) {
                         if let profile {
                             Text(profile.goal.displayName)
@@ -220,9 +221,53 @@ struct SettingsView: View {
             Text("AI assistant")
         } footer: {
             Text("To answer, the assistant sends OpenAI your message, any photos you attach, "
-                 + "your profile basics, daily ranges and food log. Searches for food, "
-                 + "brands and places also go through OpenAI. Chats are kept on this "
-                 + "iPhone under Past chats.")
+                 + "your profile basics, daily ranges, health notes and recent food log. "
+                 + "Searches for food, brands and places also go through OpenAI. Chats are "
+                 + "kept on this iPhone under Past chats.")
+        }
+    }
+
+    // MARK: Health notes
+
+    /// Conditions the assistant takes into account, usually saved from a
+    /// check-up report sent in the chat. Swipe one to delete it.
+    private var healthSection: some View {
+        Section {
+            if healthNotes.isEmpty {
+                Text("None yet. Send the assistant a photo of a check-up report, or tell it "
+                     + "about a condition such as prediabetes or high uric acid, and it can "
+                     + "save notes that shape its advice.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(healthNotes) { note in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(note.condition)
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                        if !note.details.isEmpty {
+                            Text(note.details)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(note.guidance, id: \.self) { rule in
+                            Text("\u{2022} \(rule)")
+                                .font(.footnote)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .onDelete { offsets in
+                    for index in offsets { HealthNotesStore.shared.delete(id: healthNotes[index].id) }
+                    healthNotes = HealthNotesStore.shared.notes
+                }
+            }
+        } header: {
+            Text("Health notes")
+        } footer: {
+            Text("Kept on this iPhone. Guidance for the assistant, not medical advice - "
+                 + "always follow your doctor's.")
         }
     }
 
@@ -355,6 +400,7 @@ struct SettingsView: View {
         BackupService(context: context).deleteAllData(includingImages: true)
         LegacySecretCleanup.deleteStoredKeys()
         ChatHistoryStore.shared.deleteAll()
+        HealthNotesStore.shared.deleteAll()
         let settings = context.loadAppSettings()
         settings.hasCompletedOnboarding = false
         save()
