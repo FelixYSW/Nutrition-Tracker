@@ -194,7 +194,7 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
         case .queryEntries:
             return Self.object([
                 "startDate": Self.field("string", "ISO 8601 date. Defaults to today."),
-                "endDate": Self.field("string", "ISO 8601 date, exclusive. Defaults to tomorrow.")
+                "endDate": Self.field("string", "ISO 8601 date, inclusive: the last day to read (the same as startDate for one day). Defaults to today.")
             ], required: [])
 
         case .findProducts:

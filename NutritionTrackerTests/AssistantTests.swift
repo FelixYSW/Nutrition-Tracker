@@ -675,6 +675,28 @@ final class AssistantToolExecutorTests: XCTestCase {
         guard case .failure = outcome else { return XCTFail("expected failure") }
     }
 
+    /// The same date as start and end reads that whole day, as people mean it.
+    func testQueryEndDateIsInclusive() throws {
+        let context = TestSupport.makeContext()
+        let calendar = Calendar.autoupdatingCurrent
+        let day = calendar.date(byAdding: .day, value: -2, to: calendar.startOfDay(for: .now))!
+        context.insert(TestSupport.entry(name: "Overnight oats",
+                                         at: day.addingTimeInterval(8 * 3600), calories: 420))
+        try context.save()
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        let date = formatter.string(from: day)
+
+        let outcome = AssistantToolExecutor(context: context).execute(AssistantToolCall(
+            id: "q", tool: .queryEntries,
+            arguments: ["startDate": .string(date), "endDate": .string(date)]))
+        guard case .result(let json) = outcome else { return XCTFail("expected a result") }
+        XCTAssertTrue(json.contains("Overnight oats"))
+    }
+
     func testQueryRejectsInvertedRange() {
         let outcome = AssistantToolExecutor(context: TestSupport.makeContext()).execute(
             AssistantToolCall(id: "q", tool: .queryEntries,

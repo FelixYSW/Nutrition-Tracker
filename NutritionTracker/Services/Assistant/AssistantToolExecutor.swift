@@ -82,8 +82,14 @@ final class AssistantToolExecutor {
         let now = Date.now
         let start = AssistantArgumentParser.parseDate(arguments["startDate"])
             ?? LocalDay.start(of: now, calendar: calendar)
-        let end = AssistantArgumentParser.parseDate(arguments["endDate"])
+        var end = AssistantArgumentParser.parseDate(arguments["endDate"])
             ?? LocalDay.interval(containing: now, calendar: calendar).end
+        // A plain date as the end means through that whole day, so
+        // "2026-10-23" to "2026-10-23" is the 23rd, as people mean it.
+        if let raw = arguments["endDate"]?.stringValue?.trimmingCharacters(in: .whitespaces),
+           raw.count == 10, let next = calendar.date(byAdding: .day, value: 1, to: end) {
+            end = next
+        }
 
         guard end > start else {
             throw AssistantToolError.malformedArguments(
