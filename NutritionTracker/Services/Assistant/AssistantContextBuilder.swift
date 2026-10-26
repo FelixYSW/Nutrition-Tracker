@@ -289,13 +289,17 @@ struct AssistantContextBuilder {
                                               count: Self.trendWindowDays,
                                               calendar: calendar)
 
+        // Each day against the ranges in force on it, not today's.
+        let allTargets = context.fetchNutritionTargets()
         let ranges = target.ranges
         var tallies: [String: [String: Int]] = [:]
         for nutrient in Nutrient.allCases {
             let tally = TrendAggregator.tally(buckets: buckets,
                                               nutrient: nutrient,
-                                              range: ranges[nutrient],
-                                              scale: .daily)
+                                              scale: .daily) { bucket in
+                allTargets.effective(on: bucket.interval.start, calendar: calendar)?
+                    .ranges[nutrient] ?? ranges[nutrient]
+            }
             tallies[nutrient.rawValue] = [
                 "under": tally.under,
                 "within": tally.within,

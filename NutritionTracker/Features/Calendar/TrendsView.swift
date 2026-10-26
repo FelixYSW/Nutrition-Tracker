@@ -36,8 +36,16 @@ struct TrendsView: View {
         TrendAggregator.buckets(entries: allEntries, scale: scale, endingOn: .now)
     }
 
+    /// The current range, for deciding whether the legend is worth showing.
     private var range: NutrientRange {
-        targets.first?.ranges[nutrient] ?? .zero
+        targets.effective(on: .now)?.ranges[nutrient] ?? .zero
+    }
+
+    /// The range a bucket was measured against: the one in force on its last
+    /// day so far, so earlier periods keep the ranges they had.
+    private func range(for bucket: TrendBucket) -> NutrientRange {
+        let lastDay = min(bucket.interval.end.addingTimeInterval(-1), .now)
+        return targets.effective(on: lastDay)?.ranges[nutrient] ?? .zero
     }
 
     private var bucketsWithData: [TrendBucket] {
@@ -90,16 +98,18 @@ struct TrendsView: View {
 
             Chart {
                 // The shaded target band, drawn behind the bars.
-                if range.max > 0,
-                   let first = buckets.first?.interval.start,
-                   let last = buckets.last?.interval.end {
-                    RectangleMark(
-                        xStart: .value("Start", first),
-                        xEnd: .value("End", last),
-                        yStart: .value("Minimum", range.min),
-                        yEnd: .value("Maximum", range.max))
-                        // Green, like the in-range bars it holds.
-                        .foregroundStyle(AppTheme.within.opacity(0.2))
+                // One piece per bucket, so the band steps where the ranges did.
+                ForEach(buckets) { bucket in
+                    let bucketRange = range(for: bucket)
+                    if bucketRange.max > 0 {
+                        RectangleMark(
+                            xStart: .value("Start", bucket.interval.start),
+                            xEnd: .value("End", bucket.interval.end),
+                            yStart: .value("Minimum", bucketRange.min),
+                            yEnd: .value("Maximum", bucketRange.max))
+                            // Green, like the in-range bars it holds.
+                            .foregroundStyle(AppTheme.within.opacity(0.2))
+                    }
                 }
 
                 ForEach(buckets) { bucket in
@@ -111,7 +121,8 @@ struct TrendsView: View {
                             y: .value(nutrient.displayName, value))
                             // Green in range, orange over, neutral grey under.
                             .foregroundStyle(
-                                AppTheme.summaryColor(for: range.state(consumed: value)))
+                                AppTheme.summaryColor(
+                                    for: range(for: bucket).state(consumed: value)))
                             // A sparse bucket is drawn hollow-ish so an average
                             // over two logged days is not read as a full week.
                             .opacity(bucket.isSparse ? 0.45 : 1)

@@ -118,20 +118,32 @@ extension ModelContext {
     /// the ranges they were measured against: the first change on a day adds a
     /// new record, and further changes that day update it.
     @discardableResult
-    func saveTargetRanges(_ ranges: NutritionTargetRanges, now: Date = .now,
+    func saveTargetRanges(_ ranges: NutritionTargetRanges, maintenance: Double? = nil,
+                          now: Date = .now,
                           calendar: Calendar = LocalDay.calendar()) -> NutritionTarget {
-        if let latest = loadNutritionTarget() {
-            if latest.ranges == ranges { return latest }
+        let latest = loadNutritionTarget()
+        // Without a new figure, maintenance carries over from the last record.
+        let maintenance = maintenance ?? latest?.maintenanceCalories
+        if let latest {
+            if latest.ranges == ranges, latest.maintenanceCalories == maintenance { return latest }
             if calendar.isDate(latest.createdAt, inSameDayAs: now) {
                 latest.ranges = ranges
+                latest.maintenanceCalories = maintenance
                 return latest
             }
         }
         let target = NutritionTarget(ranges: ranges)
         target.createdAt = now
         target.updatedAt = now
+        target.maintenanceCalories = maintenance
         insert(target)
         return target
+    }
+
+    /// Every record of the daily ranges, for looking up the ones in force on
+    /// any given day.
+    func fetchNutritionTargets() -> [NutritionTarget] {
+        (try? fetch(FetchDescriptor<NutritionTarget>())) ?? []
     }
 
     /// Entries for one local calendar day, filtered in the store rather than in

@@ -123,6 +123,10 @@ final class NutritionTarget {
     var fibre: NutrientRange
     var createdAt: Date
     var updatedAt: Date
+    /// Estimated calories burned in a day (TDEE) when these ranges were set, so
+    /// a past day's deficit is measured against what applied then. Nil on
+    /// records saved before this was kept.
+    var maintenanceCalories: Double?
 
     init(ranges: NutritionTargetRanges) {
         self.calories = ranges.calories

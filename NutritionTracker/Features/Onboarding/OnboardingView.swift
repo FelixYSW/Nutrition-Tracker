@@ -370,6 +370,7 @@ struct OnboardingView: View {
         profile.markTargetsCalculated()
 
         let target = NutritionTarget(ranges: editableRanges)
+        target.maintenanceCalories = NutritionTargetCalculator.calculate(profile: profile).tdee
         context.insert(target)
 
         let settings = context.loadAppSettings()

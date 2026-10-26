@@ -606,12 +606,16 @@ enum TargetUpdater {
     /// Recalculates and saves the targets. Any bound the user edited by hand
     /// is kept, so an automatic update never undoes a deliberate choice.
     static func update(for profile: UserProfile, in context: ModelContext) {
-        let ranges = NutritionTargetCalculator.calculate(profile: profile).ranges
+        let breakdown = NutritionTargetCalculator.calculate(profile: profile)
+        let ranges = breakdown.ranges
         if let target = context.loadNutritionTarget() {
-            // From today on only: earlier days keep their ranges.
-            context.saveTargetRanges(target.merging(recalculated: ranges))
+            // From today on only: earlier days keep their ranges and maintenance.
+            context.saveTargetRanges(target.merging(recalculated: ranges),
+                                     maintenance: breakdown.tdee)
         } else {
-            context.insert(NutritionTarget(ranges: ranges))
+            let created = NutritionTarget(ranges: ranges)
+            created.maintenanceCalories = breakdown.tdee
+            context.insert(created)
         }
         profile.markTargetsCalculated()
         try? context.save()
