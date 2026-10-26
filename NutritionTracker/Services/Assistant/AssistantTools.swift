@@ -108,7 +108,8 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 + "facts (e.g. \"Farm Fresh full cream milk\", \"Milo 3in1\", \"Gardenia "
                 + "Original Classic bread\"). Use it before logging any named brand or "
                 + "chain item the user didn't give a label for, then log it with "
-                + "nutritionSource \"brand\". Returns a summary with sources."
+                + "nutritionSource \"brand\". Put every brand item of the message in one "
+                + "call (\"A and B\"): each search is billed. Returns a summary with sources."
         case .findProducts:
             "Search the web for real products the user can buy - e.g. \"high protein bread "
                 + "in Malaysia\", \"low sugar yoghurt\" - with their brand names and published "
@@ -318,7 +319,7 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
     private static func object(_ properties: [String: Any], required: [String]) -> [String: Any] {
         var schema: [String: Any] = ["type": "object", "properties": properties]
-        // Omitted when empty: some providers (Gemini among them) are strict
+        // Omitted when empty: some providers are strict
         // about function schemas, and an absent list means the same thing.
         if !required.isEmpty { schema["required"] = required }
         return schema

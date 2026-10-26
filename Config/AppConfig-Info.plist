@@ -15,9 +15,5 @@
 	<string>$(ASSISTANT_MODEL)</string>
 	<key>AssistantBaseURL</key>
 	<string>$(ASSISTANT_BASE_URL)</string>
-	<key>SearchAPIKey</key>
-	<string>$(SEARCH_API_KEY)</string>
-	<key>SearchModel</key>
-	<string>$(SEARCH_MODEL)</string>
 </dict>
 </plist>

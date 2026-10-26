@@ -37,8 +37,6 @@ targets:
         ASSISTANT_API_KEY: ''
         ASSISTANT_MODEL: ''
         ASSISTANT_BASE_URL: ''
-        SEARCH_API_KEY: ''
-        SEARCH_MODEL: ''
         INFOPLIST_KEY_CFBundleDisplayName: Nutrition Tracker
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIUserInterfaceStyle: Automatic

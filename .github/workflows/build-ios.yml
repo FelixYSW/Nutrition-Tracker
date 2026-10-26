@@ -55,10 +55,6 @@ jobs:
         #   ASSISTANT_MODEL    variable, optional; app default is gpt-6-luna
         #   ASSISTANT_BASE_URL variable, optional; app default is OpenAI's API
         #                      (https://api.openai.com/v1, Responses API)
-        #   SEARCH_API_KEY     secret, optional; a Gemini key used only for web search
-        #                      (brand nutrition, food nearby, products). The chat
-        #                      always uses ASSISTANT_API_KEY; there is no fallback.
-        #   SEARCH_MODEL       variable, optional; app default tries several Gemini 2.5 names in turn
         # They go into a temporary xcconfig outside the repo rather than onto the
         # xcodebuild command line, which xcodebuild would echo into the log.
         # Without the key the app still builds; the assistant says "not available".
@@ -70,8 +66,6 @@ jobs:
           ASSISTANT_API_KEY: ${{ secrets.ASSISTANT_API_KEY }}
           ASSISTANT_MODEL: ${{ vars.ASSISTANT_MODEL }}
           ASSISTANT_BASE_URL: ${{ vars.ASSISTANT_BASE_URL }}
-          SEARCH_API_KEY: ${{ secrets.SEARCH_API_KEY }}
-          SEARCH_MODEL: ${{ vars.SEARCH_MODEL }}
         run: |
           set -euo pipefail
           CONFIG="$RUNNER_TEMP/assistant.xcconfig"
@@ -93,17 +87,6 @@ jobs:
           if [ -n "${ASSISTANT_BASE_URL:-}" ]; then
             echo "ASSISTANT_BASE_URL = $(esc "$ASSISTANT_BASE_URL")" >> "$CONFIG"
             echo "Base URL override: $ASSISTANT_BASE_URL"
-          fi
-          if [ -n "${SEARCH_API_KEY:-}" ]; then
-            echo "::add-mask::$SEARCH_API_KEY"
-            echo "SEARCH_API_KEY = $(esc "$SEARCH_API_KEY")" >> "$CONFIG"
-            echo "Search key present; it will be built in (value not logged)."
-          else
-            echo "::warning::No SEARCH_API_KEY secret set; web search (brand lookups, food nearby) will say it isn't available."
-          fi
-          if [ -n "${SEARCH_MODEL:-}" ]; then
-            echo "SEARCH_MODEL = $(esc "$SEARCH_MODEL")" >> "$CONFIG"
-            echo "Search model override: $SEARCH_MODEL"
           fi
           # Stamp the GitHub run number as the build number, so Settings > About >
           # Version shows exactly which build is installed (e.g. "2.0 (42)").
@@ -216,12 +199,6 @@ jobs:
             echo "Assistant key is built into the app."
           else
             echo "::warning::The app has no assistant key, so the assistant will show 'not available'. Add the ASSISTANT_API_KEY secret."
-          fi
-          SEARCH_VALUE="$(/usr/libexec/PlistBuddy -c 'Print :SearchAPIKey' "$PLIST" 2>/dev/null || true)"
-          if [ -n "$SEARCH_VALUE" ] && [ "${SEARCH_VALUE#\$(}" = "$SEARCH_VALUE" ]; then
-            echo "Search key is built into the app."
-          else
-            echo "::warning::The app has no search key, so web search will say it isn't available. Add the SEARCH_API_KEY secret."
           fi
 
       - name: Package unsigned IPA

@@ -574,8 +574,8 @@ struct AssistantContextBuilder {
 
     20. TOOL USE AND ERRORS
     - At most 5 tool round trips per user message. Use the fewest round trips.
+    - Every web search is billed, so keep them few. Brand foods in one message (a burger and its fries): ONE lookUpProductNutrition call with all of them in product, e.g. "McDonald's McChicken and medium French fries". Never one call per item, and never look up the same product twice in a conversation: reuse the figures you already have.
     - Call independent tools together in one turn:
-      - several lookUpProductNutrition calls;
       - getTrends + queryEntries;
       - saveHealthNotes + updateDailyRanges;
       - calculateNutrition for several options in one call.
@@ -687,9 +687,8 @@ struct AssistantContextBuilder {
     Example 2: McDonald's photo, unwrapped burger and fries box
     Context: localDate 2026-10-27, localTime "12:55, Tuesday 27 October 2026".
     User: [photo: unwrapped burger with breaded chicken patty, shredded lettuce and mayo on a sesame bun; beside it a red McDonald's medium fries box] "lunch"
-    Turn 1 calls (together):
-    lookUpProductNutrition(product: "McDonald's McChicken", country: "Malaysia")
-    lookUpProductNutrition(product: "McDonald's French Fries medium", country: "Malaysia")
+    Turn 1 call (one search for both):
+    lookUpProductNutrition(product: "McDonald's McChicken and McDonald's French Fries medium", country: "Malaysia")
     Tool results (example): McChicken per burger 147 g: 400 kcal, P 15 g, C 40 g, F 20 g, fibre 2 g. Medium fries per serving 114 g: 340 kcal, P 4 g, C 44 g, F 16 g, fibre 4 g.
     Turn 2 call:
     addFoodEntry(foods: [
