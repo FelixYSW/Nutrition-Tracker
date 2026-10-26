@@ -169,8 +169,26 @@ struct CalorieHeroCard: View {
     let range: NutrientRange
     /// A past day: shortfalls read "short", not "to go".
     var isDayOver = false
+    /// Estimated calories burned in a day (TDEE). With it, the card also says
+    /// how far under or over that the day's food is.
+    var maintenance: Double?
 
     private var progress: Double { range.progress(consumed: consumed) }
+
+    /// Nothing is said before the first food is logged: a whole day's worth of
+    /// "deficit" from an empty log would only mislead.
+    private var balanceText: String? {
+        guard let maintenance, maintenance > 0, consumed > 0 else { return nil }
+        let gap = CalorieBalance.deficit(consumed: consumed, maintenance: maintenance)
+        let amount = AppFormatters.amount(abs(gap).rounded())
+        let usual = "maintenance \(AppFormatters.amount(maintenance.rounded())) kcal"
+        if isDayOver {
+            return gap >= 0 ? "Deficit about \(amount) kcal (\(usual))"
+                            : "Surplus about \(amount) kcal (\(usual))"
+        }
+        return gap >= 0 ? "About \(amount) kcal under maintenance so far (\(usual))"
+                        : "About \(amount) kcal over maintenance (\(usual))"
+    }
     /// The ring is ink, like the app icon; the flame inside carries the colour.
     private var tint: Color { AppTheme.accentFill }
 
@@ -222,6 +240,12 @@ struct CalorieHeroCard: View {
                         .padding(.vertical, 5)
                         .background(AppTheme.stateFill(for: state), in: Capsule())
                         .padding(.top, 4)
+                    if let balanceText {
+                        Text(balanceText)
+                            .font(.footnote)
+                            .foregroundStyle(AppTheme.skyCardText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 } else {
                     Text("No targets yet. Set them in Settings.")
                         .font(.footnote)

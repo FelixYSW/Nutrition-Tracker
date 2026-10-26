@@ -183,4 +183,9 @@ final class NutritionTargetCalculatorTests: XCTestCase {
             }
         }
     }
+
+    func testCalorieBalanceIsPositiveForADeficit() {
+        XCTAssertEqual(CalorieBalance.deficit(consumed: 1_600, maintenance: 2_100), 500)
+        XCTAssertEqual(CalorieBalance.deficit(consumed: 2_300, maintenance: 2_100), -200)
+    }
 }

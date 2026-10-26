@@ -51,6 +51,13 @@ struct GeminiSearchService: Sendable {
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             (data, status) = try await perform(request)
         }
+        // Gemini's 429 says which limit was hit (per-minute, per-day, or no free
+        // quota for this model or tool); "rate limited" alone hid that.
+        if status == 429 {
+            let reason = OpenAIAssistantService.providerErrorMessage(from: data)
+                .map { " - \($0)" } ?? ""
+            throw AssistantServiceError.requestFailed(detail: "search HTTP 429\(reason)")
+        }
         try OpenAIAssistantService.check(status: status, model: model, body: data)
         return try Self.decode(data: data)
     }

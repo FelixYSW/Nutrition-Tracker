@@ -53,6 +53,11 @@ struct DashboardView: View {
         targets.sorted { $0.updatedAt > $1.updatedAt }.first?.ranges ?? .zero
     }
 
+    /// What the profile says the body uses in a day, for the deficit line.
+    private var maintenance: Double? {
+        profiles.first.map { NutritionTargetCalculator.calculate(profile: $0).tdee }
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -60,7 +65,7 @@ struct DashboardView: View {
                     header
                     dayControls
                     CalorieHeroCard(consumed: consumed.calories, range: ranges.calories,
-                                    isDayOver: !isShowingToday)
+                                    isDayOver: !isShowingToday, maintenance: maintenance)
                     ringsCard
                     if isShowingToday, let profile = profiles.first,
                        profile.isCheckInDue(intervalDays: checkInIntervalDays),
