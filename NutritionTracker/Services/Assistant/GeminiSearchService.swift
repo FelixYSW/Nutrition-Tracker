@@ -10,10 +10,20 @@ import Foundation
 struct GeminiSearchService: Sendable {
 
     static let defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
-    static let defaultModel = "gemini-2.5-flash"
+    /// Gemini models, in the order tried. Only Gemini 2.x has free Search
+    /// grounding quota, and which names the API still serves can change, so a
+    /// 404 moves on to the next one. `SEARCH_MODEL`, when set, is used alone.
+    static let defaultModels = [
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        // The family name on its own, in case the API accepts it, and the
+        // always-current aliases, which only count if the names above are gone.
+        "gemini-2.5", "gemini-pro-latest", "gemini-flash-latest"
+    ]
+    /// The model that last answered, tried first next time.
+    private static let workingModelKey = "geminiSearch.workingModel"
 
     private let session: URLSession
-    private let model: String
+    private let models: [String]
 
     init(session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -21,14 +31,35 @@ struct GeminiSearchService: Sendable {
         configuration.timeoutIntervalForResource = 90
         return URLSession(configuration: configuration)
     }(),
-         model: String = BundledAPIKey.searchModel ?? Self.defaultModel) {
+         models: [String] = BundledAPIKey.searchModel.map { [$0] } ?? Self.defaultModels) {
         self.session = session
-        self.model = model
+        self.models = models
     }
 
     var isConfigured: Bool { BundledAPIKey.hasSearchKey }
 
     func searchWeb(_ question: String) async throws -> WebSearchResult {
+        let remembered = UserDefaults.standard.string(forKey: Self.workingModelKey)
+        let order = models.contains { $0 == remembered }
+            ? [remembered].compactMap { $0 } + models.filter { $0 != remembered }
+            : models
+        for model in order {
+            do {
+                let result = try await search(question, model: model)
+                if models.count > 1 {
+                    UserDefaults.standard.set(model, forKey: Self.workingModelKey)
+                }
+                return result
+            } catch AssistantServiceError.modelUnavailable {
+                // Not served to this key: nothing was run, so try the next.
+                continue
+            }
+        }
+        throw AssistantServiceError.requestFailed(
+            detail: "none of the search models (\(order.joined(separator: ", "))) is available (HTTP 404)")
+    }
+
+    private func search(_ question: String, model: String) async throws -> WebSearchResult {
         guard let apiKey = BundledAPIKey.search else {
             throw AssistantServiceError.requestFailed(detail: "web search isn't available")
         }
