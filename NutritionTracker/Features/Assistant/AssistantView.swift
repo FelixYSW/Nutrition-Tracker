@@ -250,7 +250,21 @@ struct AssistantView: View {
     }
 
     /// A new chat: greeting and suggestions for this time of day.
+    ///
+    /// Scrolls, and shrinks to what the composer leaves, so a tall composer
+    /// (photos plus several lines of text) with the keyboard up is never
+    /// pushed down behind the keyboard by this screen's minimum height.
     private func emptyChat(viewModel: AssistantViewModel) -> some View {
+        GeometryReader { geometry in
+            ScrollView {
+                emptyChatContent(viewModel: viewModel)
+                    .frame(minHeight: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private func emptyChatContent(viewModel: AssistantViewModel) -> some View {
         EmptyChatView(
             onAsk: { question in
                 viewModel.composerText = question
@@ -954,8 +968,8 @@ struct ViewedPhoto: Identifiable {
 }
 
 /// Full-screen view of photos: swipe between them, pinch or double-tap to
-/// zoom. The chat stays faintly visible behind a dark, see-through shade.
-/// Tap the shade around the photo, or drag the photo down, to close.
+/// zoom. The chat is only just visible behind a dark shade. Closes with the
+/// x button or by dragging the photo down; tapping the shade does nothing.
 struct PhotoViewer: View {
     let images: [Data]
     let startIndex: Int
@@ -965,14 +979,14 @@ struct PhotoViewer: View {
     /// How far the photo has been dragged down; fades the shade as it goes.
     @State private var dragOffset: CGFloat = 0
 
-    /// Shade opacity: mostly dark, lighter as the photo is pulled away.
+    /// Shade opacity: nearly opaque, lighter as the photo is pulled away.
     private var shadeOpacity: Double {
-        0.82 * max(0.25, 1 - Double(dragOffset) / 600)
+        0.95 * max(0.25, 1 - Double(dragOffset) / 600)
     }
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // Near-black (never pure #000), partly see-through.
+            // Near-black (never pure #000), only slightly see-through.
             Color(hex: 0x141311)
                 .opacity(shadeOpacity)
                 .ignoresSafeArea()
@@ -1010,7 +1024,7 @@ struct PhotoViewer: View {
 /// One photo in the viewer. Zooming and panning use the system's own zooming
 /// scroll view, as in Photos: pinch zooms where the fingers are, a zoomed
 /// photo can be dragged around, and double-tap zooms in on the spot tapped.
-/// Not zoomed, a tap on the space around the photo or a drag down closes it.
+/// Not zoomed, a drag down closes it; a tap on the space around it does not.
 struct ZoomablePhoto: View {
     let data: Data
     @Binding var dragOffset: CGFloat
@@ -1024,7 +1038,6 @@ struct ZoomablePhoto: View {
         if let image = UIImage(data: data) {
             ZoomableImageView(
                 image: image,
-                onTapOutside: onClose,
                 onDismissDrag: { distance in dragOffset = max(0, distance) },
                 onDismissDragEnd: { distance, velocity in
                     if distance > closeDistance || velocity > 900 {
@@ -1051,7 +1064,6 @@ struct ZoomablePhoto: View {
 /// gesture added.
 struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
-    let onTapOutside: () -> Void
     /// How far the photo has been pulled down so far.
     let onDismissDrag: (CGFloat) -> Void
     /// The final distance and downward speed when the finger lifts.
@@ -1069,11 +1081,6 @@ struct ZoomableImageView: UIViewRepresentable {
                                                action: #selector(Coordinator.doubleTapped(_:)))
         doubleTap.numberOfTapsRequired = 2
         view.addGestureRecognizer(doubleTap)
-
-        let singleTap = UITapGestureRecognizer(target: coordinator,
-                                               action: #selector(Coordinator.singleTapped(_:)))
-        singleTap.require(toFail: doubleTap)
-        view.addGestureRecognizer(singleTap)
 
         let pullDown = UIPanGestureRecognizer(target: coordinator,
                                               action: #selector(Coordinator.pulled(_:)))
@@ -1121,15 +1128,6 @@ struct ZoomableImageView: UIViewRepresentable {
                                            y: point.y - size.height / 2,
                                            width: size.width, height: size.height),
                                 animated: true)
-            }
-        }
-
-        /// A tap on the space around the photo closes the viewer.
-        @objc func singleTapped(_ gesture: UITapGestureRecognizer) {
-            guard let scrollView else { return }
-            let point = gesture.location(in: scrollView.imageView)
-            if !scrollView.imageView.bounds.contains(point) {
-                parent.onTapOutside()
             }
         }
 
