@@ -175,24 +175,28 @@ struct CalorieHeroCard: View {
 
     private var progress: Double { range.progress(consumed: consumed) }
 
-    /// Nothing is said before the first food is logged: a whole day's worth of
-    /// "deficit" from an empty log would only mislead.
-    private var balanceText: String? {
+    /// Maintenance and the gap to what was eaten. Nil before the first food is
+    /// logged: a whole day's worth of "deficit" from an empty log would only
+    /// mislead.
+    private var balance: (maintenance: Double, gap: Double)? {
         guard let maintenance, maintenance > 0, consumed > 0 else { return nil }
-        let gap = CalorieBalance.deficit(consumed: consumed, maintenance: maintenance)
-        let amount = AppFormatters.amount(abs(gap).rounded())
-        let usual = "maintenance \(AppFormatters.amount(maintenance.rounded())) kcal"
-        if isDayOver {
-            return gap >= 0 ? "Deficit about \(amount) kcal (\(usual))"
-                            : "Surplus about \(amount) kcal (\(usual))"
-        }
-        return gap >= 0 ? "About \(amount) kcal under maintenance so far (\(usual))"
-                        : "About \(amount) kcal over maintenance (\(usual))"
+        return (maintenance, CalorieBalance.deficit(consumed: consumed, maintenance: maintenance))
     }
+
+    /// Within this many kcal either way reads as "at maintenance", not a
+    /// deficit or surplus: the estimate isn't that exact.
+    private let nearMaintenance = 50.0
+
+    private func gapLabel(_ gap: Double) -> String {
+        if abs(gap) < nearMaintenance { return "At maintenance" }
+        if isDayOver { return gap > 0 ? "Deficit" : "Surplus" }
+        return gap > 0 ? "Under so far" : "Over"
+    }
+
     /// The ring is ink, like the app icon; the flame inside carries the colour.
     private var tint: Color { AppTheme.accentFill }
 
-    var body: some View {
+    private var summary: some View {
         HStack(spacing: 18) {
             ZStack {
                 RangeRing(progress: progress,
@@ -240,12 +244,6 @@ struct CalorieHeroCard: View {
                         .padding(.vertical, 5)
                         .background(AppTheme.stateFill(for: state), in: Capsule())
                         .padding(.top, 4)
-                    if let balanceText {
-                        Text(balanceText)
-                            .font(.footnote)
-                            .foregroundStyle(AppTheme.skyCardText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 } else {
                     Text("No targets yet. Set them in Settings.")
                         .font(.footnote)
@@ -253,6 +251,31 @@ struct CalorieHeroCard: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            summary
+            if let balance {
+                Divider()
+                VStack(spacing: 8) {
+                    Text("Estimated energy balance \u{00B7} kcal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                    HStack(spacing: 0) {
+                        BalanceStat(label: "Maintenance",
+                                    value: AppFormatters.amount(balance.maintenance.rounded()))
+                        Divider().frame(height: 30)
+                        BalanceStat(label: "Eaten",
+                                    value: AppFormatters.amount(consumed.rounded()))
+                        Divider().frame(height: 30)
+                        BalanceStat(label: gapLabel(balance.gap),
+                                    value: "\u{2248} " + AppFormatters.amount(abs(balance.gap).rounded()))
+                    }
+                }
+            }
         }
         .appCard()
         .accessibilityElement(children: .combine)
@@ -272,5 +295,28 @@ struct CalorieHeroCard: View {
                 .font(.system(size: 32))
                 .foregroundStyle(AppTheme.flame)
         }
+    }
+}
+
+/// One figure in the calorie card's energy-balance row: a small label over a
+/// value, sharing the row's width with its neighbours.
+private struct BalanceStat: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(value)
+                .font(.system(.title3, design: .rounded).weight(.heavy))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
