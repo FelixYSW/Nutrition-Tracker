@@ -8,6 +8,8 @@ struct AssistantTurn: Equatable, Codable, Sendable {
         case text(String)
         /// JPEG bytes, for the menu-photo flow.
         case image(Data)
+        /// A PDF or plain-text file the user attached, e.g. a check-up report.
+        case file(name: String, data: Data)
         /// `extra` is opaque provider data kept with the call. Unused by the
         /// OpenAI client; kept so chats saved by earlier versions still load.
         case toolUse(id: String, name: String, input: [String: JSONValue], extra: JSONValue? = nil)
@@ -317,6 +319,7 @@ struct OpenAIAssistantService: AssistantServing {
         var items: [[String: Any]] = []
         var texts: [String] = []
         var images: [Data] = []
+        var files: [[String: Any]] = []
         var calls: [[String: Any]] = []
         var results: [[String: Any]] = []
 
@@ -326,6 +329,8 @@ struct OpenAIAssistantService: AssistantServing {
                 texts.append(text)
             case .image(let data):
                 images.append(data)
+            case .file(let name, let data):
+                files.append(filePart(name: name, data: data))
             case .toolUse(let id, let name, let input, _):
                 let arguments = (try? JSONSerialization.data(withJSONObject: unwrap(input)))
                     .map { String(decoding: $0, as: UTF8.self) } ?? "{}"
@@ -345,11 +350,12 @@ struct OpenAIAssistantService: AssistantServing {
         case .user:
             // Results first: they answer the calls in the previous turn.
             items.append(contentsOf: results)
-            if !images.isEmpty {
+            if !images.isEmpty || !files.isEmpty {
                 var parts: [[String: Any]] = images.map { data in
                     ["type": "input_image",
                      "image_url": "data:image/jpeg;base64,\(data.base64EncodedString())"]
                 }
+                parts.append(contentsOf: files)
                 if !text.isEmpty { parts.append(["type": "input_text", "text": text]) }
                 items.append(["role": "user", "content": parts])
             } else if !text.isEmpty {
@@ -357,6 +363,18 @@ struct OpenAIAssistantService: AssistantServing {
             }
         }
         return items
+    }
+
+    /// A PDF goes up as an `input_file`; any other file is plain text and is
+    /// sent as text under its file name.
+    static func filePart(name: String, data: Data) -> [String: Any] {
+        if name.lowercased().hasSuffix(".pdf") {
+            return ["type": "input_file",
+                    "filename": name,
+                    "file_data": "data:application/pdf;base64,\(data.base64EncodedString())"]
+        }
+        let body = String(decoding: data, as: UTF8.self)
+        return ["type": "input_text", "text": "[Attached file: \(name)]\n\(body)"]
     }
 
     /// `JSONValue` -> plain Foundation objects for JSONSerialization.

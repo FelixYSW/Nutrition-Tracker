@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import PhotosUI
+import UniformTypeIdentifiers
 
 /// Assistant chat, one of the five destinations in the floating tab bar
 /// (spec section 29A).
@@ -16,7 +17,9 @@ struct AssistantView: View {
     @State private var viewingPhoto: ViewedPhoto?
     @State private var isShowingPhotoPicker = false
     @State private var isShowingCamera = false
+    @State private var isShowingFileImporter = false
     @State private var cameraProblem: String?
+    @State private var attachmentProblem: String?
     @State private var isShowingHistory = false
     // Chat scrolling: whether the end of the chat is on screen, and whether
     // new content should keep it there (off once the user scrolls away).
@@ -46,6 +49,13 @@ struct AssistantView: View {
                 Button("OK", role: .cancel) { cameraProblem = nil }
             } message: {
                 Text(cameraProblem ?? "")
+            }
+            .alert("Can't attach that", isPresented: Binding(
+                get: { attachmentProblem != nil },
+                set: { if !$0 { attachmentProblem = nil } })) {
+                Button("OK", role: .cancel) { attachmentProblem = nil }
+            } message: {
+                Text(attachmentProblem ?? "")
             }
             .sheet(isPresented: $isShowingHistory) {
                 ChatHistoryView(currentID: viewModel?.conversationID) { conversation in
@@ -285,6 +295,17 @@ struct AssistantView: View {
             .padding(.leading, 40)
             .frame(maxWidth: .infinity, alignment: .trailing)
 
+        case .userFiles(let names):
+            VStack(alignment: .trailing, spacing: 6) {
+                ForEach(names.indices, id: \.self) { index in
+                    FileChip(name: names[index], isLoading: false)
+                        .frame(width: 180, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+            .padding(.leading, 40)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+
         case .assistant(let text):
             MarkdownText(viewModel.displayedText(text, for: message.id))
                 .font(.body)
@@ -374,11 +395,14 @@ struct AssistantView: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                // Attach: take a photo with the camera, or pick several.
+                // Attach: take a photo with the camera, or pick photos or files.
                 Menu {
                     Button("Take Photo", systemImage: "camera") { openCamera() }
                     Button("Choose Photos", systemImage: "photo.on.rectangle") {
                         isShowingPhotoPicker = true
+                    }
+                    Button("Choose File", systemImage: "doc") {
+                        isShowingFileImporter = true
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -388,10 +412,10 @@ struct AssistantView: View {
                 }
                 .disabled(!viewModel.canAttachMore)
                 .padding(.bottom, 3)
-                .accessibilityLabel("Attach photos")
+                .accessibilityLabel("Attach photos or files")
                 .accessibilityHint(viewModel.canAttachMore
-                                   ? "Take a photo or choose from your library"
-                                   : "Up to \(AssistantViewModel.maxAttachments) photos")
+                                   ? "Take a photo, or choose photos or a file"
+                                   : "Up to \(AssistantViewModel.maxAttachments) attachments")
 
                 VStack(alignment: .leading, spacing: 8) {
                     if !viewModel.attachments.isEmpty {
@@ -442,6 +466,12 @@ struct AssistantView: View {
             for item in items { attach(item, to: viewModel) }
             photoSelections = []
         }
+        .fileImporter(isPresented: $isShowingFileImporter,
+                      allowedContentTypes: [.pdf, .plainText, .commaSeparatedText, .json],
+                      allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls { attach(fileAt: url, to: viewModel) }
+        }
         #if canImport(UIKit)
         .fullScreenCover(isPresented: $isShowingCamera) {
             CameraPicker(onImage: { image in
@@ -460,7 +490,7 @@ struct AssistantView: View {
     /// Opens the photos waiting to be sent in the viewer, at the one tapped.
     /// Photos still loading are skipped.
     private func preview(_ attachment: ComposerAttachment, in viewModel: AssistantViewModel) {
-        let loaded = viewModel.attachments.filter { $0.data != nil }
+        let loaded = viewModel.attachments.filter { $0.data != nil && $0.fileName == nil }
         guard let index = loaded.firstIndex(where: { $0.id == attachment.id }) else { return }
         KeyboardDismissal.keepOpen()
         viewingPhoto = ViewedPhoto(images: loaded.compactMap(\.data), index: index)
@@ -472,7 +502,9 @@ struct AssistantView: View {
                 ForEach(viewModel.attachments) { attachment in
                     ZStack(alignment: .topTrailing) {
                         Group {
-                            if let data = attachment.data {
+                            if let name = attachment.fileName {
+                                FileChip(name: name, isLoading: attachment.data == nil)
+                            } else if let data = attachment.data {
                                 AttachmentImage(data: data)
                             } else {
                                 ZStack {
@@ -482,13 +514,15 @@ struct AssistantView: View {
                                 .accessibilityLabel("Loading photo")
                             }
                         }
-                        .frame(width: 64, height: 64)
+                        .frame(width: attachment.fileName == nil ? 64 : 140, height: 64)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        // Tap to look at it full size before sending.
+                        // Tap a photo to look at it full size before sending.
                         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .onTapGesture { preview(attachment, in: viewModel) }
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityHint("Shows the photo full size")
+                        .onTapGesture {
+                            if attachment.fileName == nil { preview(attachment, in: viewModel) }
+                        }
+                        .accessibilityAddTraits(attachment.fileName == nil ? .isButton : [])
+                        .accessibilityHint(attachment.fileName == nil ? "Shows the photo full size" : "")
 
                         Button {
                             withAnimation(.snappy) { viewModel.removeAttachment(id: attachment.id) }
@@ -500,7 +534,7 @@ struct AssistantView: View {
                         }
                         .buttonStyle(.plain)
                         .offset(x: 7, y: -7)
-                        .accessibilityLabel("Remove photo")
+                        .accessibilityLabel(attachment.fileName == nil ? "Remove photo" : "Remove file")
                     }
                     .transition(.scale.combined(with: .opacity))
                 }
@@ -513,11 +547,13 @@ struct AssistantView: View {
     }
 
     private func placeholder(for viewModel: AssistantViewModel) -> String {
-        switch viewModel.attachments.count {
-        case 0: "Ask anything about your nutrition"
-        case 1: "Ask about this photo"
-        default: "Ask about these photos"
-        }
+        let attachments = viewModel.attachments
+        if attachments.isEmpty { return "Ask anything about your nutrition" }
+        let hasFile = attachments.contains { $0.fileName != nil }
+        let hasPhoto = attachments.contains { $0.fileName == nil }
+        let noun = hasFile && hasPhoto ? "attachments" : hasFile ? "file" : "photo"
+        return attachments.count == 1 ? "Ask about this \(noun)"
+            : "Ask about these \(noun)\(noun.hasSuffix("s") ? "" : "s")"
     }
 
     // MARK: Attaching
@@ -550,6 +586,34 @@ struct AssistantView: View {
     #else
     private func openCamera() {}
     #endif
+
+    /// Reads a PDF or text file picked in Files. Over-size or unreadable files
+    /// are refused with a reason; the cap on attachments is shared with photos.
+    private func attach(fileAt url: URL, to viewModel: AssistantViewModel) {
+        let name = url.lastPathComponent
+        guard AssistantViewModel.fileExtensions.contains(url.pathExtension.lowercased()) else {
+            attachmentProblem = "\(name) isn't a PDF or text file."
+            return
+        }
+        guard let id = viewModel.beginAttachment(fileName: name) else {
+            attachmentProblem = "You can attach up to \(AssistantViewModel.maxAttachments) photos and files to one message."
+            return
+        }
+        Task {
+            let data = await Task.detached(priority: .userInitiated) { () -> Data? in
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                return try? Data(contentsOf: url)
+            }.value
+            if let data, data.count > AssistantViewModel.maxFileBytes {
+                attachmentProblem = "\(name) is larger than 10 MB."
+                viewModel.finishAttachment(id: id, data: nil)
+            } else {
+                if data == nil { attachmentProblem = "Couldn't read \(name)." }
+                viewModel.finishAttachment(id: id, data: data)
+            }
+        }
+    }
 
     private func attach(_ item: PhotosPickerItem, to viewModel: AssistantViewModel) {
         guard let id = viewModel.beginAttachment() else { return }
@@ -819,6 +883,33 @@ struct AttachmentImage: View {
         Rectangle()
             .fill(AppTheme.subtleFill)
             .overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+    }
+}
+
+/// A file attachment: icon and name, or a spinner while it loads.
+struct FileChip: View {
+    let name: String
+    let isLoading: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isLoading {
+                ProgressView()
+            } else {
+                Image(systemName: "doc.text")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            Text(name)
+                .font(.caption)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(AppTheme.subtleFill)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isLoading ? "Loading \(name)" : "File \(name)")
     }
 }
 

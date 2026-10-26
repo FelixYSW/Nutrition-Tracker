@@ -17,6 +17,8 @@ struct AssistantChatMessage: Identifiable, Equatable, Codable {
         case proposalResolved(summary: String, confirmed: Bool)
         case error(String)
         case toolActivity(String)
+        /// Names of the files sent with the next user message.
+        case userFiles([String])
     }
 
     var id = UUID()
@@ -108,8 +110,13 @@ final class AssistantViewModel {
     /// with no data yet is still loading and shows a spinner, as in Claude.
     private(set) var attachments: [ComposerAttachment] = []
 
-    /// Caps upload size and token use; four covers a menu spread over pages.
-    static let maxAttachments = 4
+    /// Photos and files together. Caps upload size and token use; the app's
+    /// own limit, not the provider's (OpenAI takes far more images per request).
+    static let maxAttachments = 10
+    /// Per file. Photos are downsized, so only files need a size cap.
+    static let maxFileBytes = 10_000_000
+    /// Kinds the composer accepts besides photos.
+    static let fileExtensions: Set<String> = ["pdf", "txt", "csv", "md", "json"]
 
     var canAttachMore: Bool { attachments.count < Self.maxAttachments }
     var remainingAttachmentSlots: Int { max(0, Self.maxAttachments - attachments.count) }
@@ -117,9 +124,9 @@ final class AssistantViewModel {
 
     /// Adds a loading placeholder straight away and returns its id; call
     /// `finishAttachment` once the photo is ready (or failed).
-    func beginAttachment() -> UUID? {
+    func beginAttachment(fileName: String? = nil) -> UUID? {
         guard canAttachMore else { return nil }
-        let attachment = ComposerAttachment()
+        let attachment = ComposerAttachment(fileName: fileName)
         attachments.append(attachment)
         return attachment.id
     }
@@ -160,6 +167,10 @@ final class AssistantViewModel {
 
     /// Guards against an unbounded tool loop if the model keeps calling tools.
     private static let maxToolRoundTrips = 5
+
+    /// Sent to the model when the user attaches a file without typing anything.
+    static let fileOnlyPrompt = "[The user sent only this file, with no message. Read it; "
+        + "if it is a check-up or lab report, follow section 17.]"
 
     /// Sent to the model when the user attaches a photo without typing anything.
     static let photoOnlyPrompt = "[The user sent only this photo, with no message. Follow "
@@ -227,8 +238,12 @@ final class AssistantViewModel {
 
     func send() async {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let images = attachments.compactMap(\.data)
-        guard !text.isEmpty || !images.isEmpty, !isLoadingAttachment else { return }
+        let images = attachments.filter { $0.fileName == nil }.compactMap(\.data)
+        let files = attachments.compactMap { attachment -> (name: String, data: Data)? in
+            guard let name = attachment.fileName, let data = attachment.data else { return nil }
+            return (name, data)
+        }
+        guard !text.isEmpty || !images.isEmpty || !files.isEmpty, !isLoadingAttachment else { return }
 
         guard isAvailable else {
             append(.error(AssistantServiceError.notConfigured.localizedDescription))
@@ -245,7 +260,8 @@ final class AssistantViewModel {
 
         // Show the message straight away, and save it so it's in Past chats
         // even while the reply is still on its way.
-        append(.user(text: text, images: images), to: chat)
+        if !files.isEmpty { append(.userFiles(files.map(\.name)), to: chat) }
+        if !text.isEmpty || !images.isEmpty { append(.user(text: text, images: images), to: chat) }
         persist(chat)
 
         // A card left open gets its "still waiting" result first, then any
@@ -264,9 +280,11 @@ final class AssistantViewModel {
                 blocks.append(.text(label + analysis))
             }
         }
-        // Photos sent on their own still need a question for the model; the
-        // chat shows just the photos, as Claude and ChatGPT do.
-        blocks.append(.text(text.isEmpty ? Self.photoOnlyPrompt : text))
+        for file in files { blocks.append(.file(name: file.name, data: file.data)) }
+        // Photos or files sent on their own still need a question for the
+        // model; the chat shows just the attachments, as Claude and ChatGPT do.
+        let attachmentOnlyPrompt = files.isEmpty ? Self.photoOnlyPrompt : Self.fileOnlyPrompt
+        blocks.append(.text(text.isEmpty ? attachmentOnlyPrompt : text))
         chat.turns.append(AssistantTurn(role: .user, blocks: blocks))
 
         await runLoop(in: chat)
@@ -1005,9 +1023,11 @@ final class AssistantViewModel {
     }
 }
 
-/// One photo in the composer. `data` is nil while it is still being loaded
-/// and downsized, which the composer shows as a spinner.
+/// One photo or file in the composer. `data` is nil while it is still being
+/// loaded and downsized, which the composer shows as a spinner. `fileName` is
+/// set for a file and nil for a photo.
 struct ComposerAttachment: Identifiable, Equatable {
     let id = UUID()
+    var fileName: String?
     var data: Data?
 }

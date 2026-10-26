@@ -20,6 +20,8 @@ struct SavedConversation: Codable, Identifiable, Equatable {
                 let line = Self.plainLine(text)
                 if !line.isEmpty { return line }
                 if !images.isEmpty { return images.count == 1 ? "Photo" : "\(images.count) photos" }
+            case .userFiles(let names):
+                if let first = names.first { return names.count == 1 ? first : "\(names.count) files" }
             case .assistant(let text):
                 let line = Self.plainLine(text)
                 if !line.isEmpty { return line }
@@ -61,6 +63,9 @@ struct SavedConversation: Codable, Identifiable, Equatable {
     /// The first thing the user asked, trimmed to a short title.
     static func title(for messages: [AssistantChatMessage]) -> String {
         for message in messages {
+            if case .userFiles(let names) = message.kind, let first = names.first {
+                return names.count == 1 ? first : "\(names.count) files"
+            }
             guard case .user(let text, let images) = message.kind else { continue }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {

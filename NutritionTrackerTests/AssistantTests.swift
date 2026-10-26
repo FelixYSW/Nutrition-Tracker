@@ -282,6 +282,22 @@ final class AssistantRequestEncodingTests: XCTestCase {
         XCTAssertTrue(arguments.contains("Teh Tarik"))
     }
 
+    func testPDFBecomesInputFileAndTextFileBecomesInputText() throws {
+        let turn = AssistantTurn(role: .user, blocks: [
+            .file(name: "checkup.pdf", data: Data([1, 2, 3])),
+            .file(name: "notes.txt", data: Data("HbA1c 6.3%".utf8)),
+            .text("Read these")])
+        let items = OpenAIAssistantService.encode(turn: turn)
+        let parts = try XCTUnwrap(items.first?["content"] as? [[String: Any]])
+        XCTAssertEqual(parts[0]["type"] as? String, "input_file")
+        XCTAssertEqual(parts[0]["filename"] as? String, "checkup.pdf")
+        XCTAssertTrue((parts[0]["file_data"] as? String)?
+            .hasPrefix("data:application/pdf;base64,") == true)
+        XCTAssertEqual(parts[1]["type"] as? String, "input_text")
+        XCTAssertEqual(parts[1]["text"] as? String, "[Attached file: notes.txt]\nHbA1c 6.3%")
+        XCTAssertEqual(parts[2]["text"] as? String, "Read these")
+    }
+
     func testPhotoBecomesInputImage() throws {
         let turn = AssistantTurn(role: .user, blocks: [.image(Data([1, 2, 3])), .text("What fits?")])
         let items = OpenAIAssistantService.encode(turn: turn)
