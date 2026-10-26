@@ -114,6 +114,26 @@ extension ModelContext {
         return try? fetch(descriptor).first
     }
 
+    /// Saves new ranges so they apply from today onwards. Days already over keep
+    /// the ranges they were measured against: the first change on a day adds a
+    /// new record, and further changes that day update it.
+    @discardableResult
+    func saveTargetRanges(_ ranges: NutritionTargetRanges, now: Date = .now,
+                          calendar: Calendar = LocalDay.calendar()) -> NutritionTarget {
+        if let latest = loadNutritionTarget() {
+            if latest.ranges == ranges { return latest }
+            if calendar.isDate(latest.createdAt, inSameDayAs: now) {
+                latest.ranges = ranges
+                return latest
+            }
+        }
+        let target = NutritionTarget(ranges: ranges)
+        target.createdAt = now
+        target.updatedAt = now
+        insert(target)
+        return target
+    }
+
     /// Entries for one local calendar day, filtered in the store rather than in
     /// memory. The bounds are computed in Swift because `#Predicate` cannot call
     /// `Calendar` methods.

@@ -782,7 +782,8 @@ final class AssistantToolExecutor {
                 guard let nutrient = Nutrient(rawValue: change.nutrient) else { continue }
                 ranges[nutrient] = change.new
             }
-            target.ranges = ranges
+            // From today on only: earlier days keep their ranges.
+            context.saveTargetRanges(ranges)
             try context.save()
             return try encode(["status": "updated",
                                "detail": "Daily ranges changed: " + update.changes.map {

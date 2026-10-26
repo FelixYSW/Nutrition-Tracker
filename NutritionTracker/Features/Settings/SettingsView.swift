@@ -608,7 +608,8 @@ enum TargetUpdater {
     static func update(for profile: UserProfile, in context: ModelContext) {
         let ranges = NutritionTargetCalculator.calculate(profile: profile).ranges
         if let target = context.loadNutritionTarget() {
-            target.apply(recalculated: ranges)
+            // From today on only: earlier days keep their ranges.
+            context.saveTargetRanges(target.merging(recalculated: ranges))
         } else {
             context.insert(NutritionTarget(ranges: ranges))
         }
@@ -668,7 +669,7 @@ struct TargetsEditorView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
-                        target.ranges = ranges
+                        context.saveTargetRanges(ranges)
                         try? context.save()
                         Haptics.success()
                         dismiss()

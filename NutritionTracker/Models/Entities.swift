@@ -152,6 +152,12 @@ final class NutritionTarget {
     /// Replaces the calculated bands while preserving any bound the user edited
     /// by hand, so a recalculation never silently discards a manual override.
     func apply(recalculated: NutritionTargetRanges) {
+        ranges = merging(recalculated: recalculated)
+    }
+
+    /// The recalculated bands with any bound the user edited by hand kept, as
+    /// `apply` would leave them, without changing this target.
+    func merging(recalculated: NutritionTargetRanges) -> NutritionTargetRanges {
         var merged = recalculated
         let existing = ranges
         for nutrient in Nutrient.allCases {
@@ -165,7 +171,18 @@ final class NutritionTarget {
             }
             merged[nutrient] = range
         }
-        ranges = merged
+        return merged
+    }
+}
+
+extension Collection where Element == NutritionTarget {
+    /// The ranges in force on `day`. A change of ranges applies from the day it
+    /// is made (today) onwards, so earlier days keep the ranges they had; a day
+    /// before the first record uses the first.
+    func effective(on day: Date, calendar: Calendar = LocalDay.calendar()) -> NutritionTarget? {
+        let ordered = sorted { $0.createdAt < $1.createdAt }
+        let dayStart = calendar.startOfDay(for: day)
+        return ordered.last { calendar.startOfDay(for: $0.createdAt) <= dayStart } ?? ordered.first
     }
 }
 

@@ -50,7 +50,8 @@ struct DashboardView: View {
     }
 
     private var ranges: NutritionTargetRanges {
-        targets.sorted { $0.updatedAt > $1.updatedAt }.first?.ranges ?? .zero
+        // The ranges that applied on the day shown, not today's.
+        targets.effective(on: shownDay)?.ranges ?? .zero
     }
 
     /// What the profile says the body uses in a day, for the deficit line.
