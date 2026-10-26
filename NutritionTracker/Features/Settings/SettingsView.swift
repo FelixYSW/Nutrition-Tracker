@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var isConfirmingDeleteAll = false
     @State private var isConfirmingImport: BackupFile?
     @State private var healthNotes: [HealthNote] = []
+    @AppStorage(UserProfile.checkInIntervalKey)
+    private var checkInIntervalDays = UserProfile.defaultCheckInIntervalDays
 
     private var settings: AppSettings { context.loadAppSettings() }
     private var profile: UserProfile? { profiles.first }
@@ -171,12 +173,20 @@ struct SettingsView: View {
                 isShowingTargetsEditor = true
             }
             .disabled(target == nil)
+
+            Picker(selection: $checkInIntervalDays) {
+                Text("Every week").tag(7)
+                Text("Every 2 weeks").tag(14)
+                Text("Every month").tag(30)
+            } label: {
+                SettingsLabel("Weight reminder", systemImage: "scalemass")
+            }
         } header: {
             Text("Your plan")
         } footer: {
             Text("Your daily ranges update automatically when you change your profile. "
-                 + "Any value you edited by hand is kept. Update your weight about every "
-                 + "two weeks; Today reminds you.")
+                 + "Any value you edited by hand is kept. Today reminds you to update your "
+                 + "weight as often as you choose above.")
         }
     }
 

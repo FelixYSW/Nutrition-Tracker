@@ -50,6 +50,14 @@ final class TargetUpdaterTests: XCTestCase {
         XCTAssertTrue(profile.isCheckInDue(now: created.addingTimeInterval(14 * 86_400)))
         XCTAssertEqual(profile.daysSinceUpdate(now: created.addingTimeInterval(5 * 86_400)), 5)
 
+        // The period is the user's choice: a week, two weeks or a month.
+        XCTAssertTrue(profile.isCheckInDue(now: created.addingTimeInterval(7 * 86_400),
+                                           intervalDays: 7))
+        XCTAssertFalse(profile.isCheckInDue(now: created.addingTimeInterval(29 * 86_400),
+                                            intervalDays: 30))
+        XCTAssertTrue(profile.isCheckInDue(now: created.addingTimeInterval(30 * 86_400),
+                                           intervalDays: 30))
+
         profile.markTargetsCalculated()
         XCTAssertFalse(profile.isCheckInDue())
     }

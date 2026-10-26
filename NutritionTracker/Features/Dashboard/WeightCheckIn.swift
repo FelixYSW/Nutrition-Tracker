@@ -63,7 +63,7 @@ struct WeightCheckInSheet: View {
                                        fractionDigits: 1)
                     } footer: {
                         Text("Weigh yourself in the morning, after the toilet and before eating, "
-                             + "about every two weeks.")
+                             + "as often as you set in Settings.")
                     }
                     Section {
                         Picker("Activity", selection: $activity) {

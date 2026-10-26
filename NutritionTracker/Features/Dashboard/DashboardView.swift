@@ -20,6 +20,8 @@ struct DashboardView: View {
     @State private var isShowingWeightCheckIn = false
     /// "Later" on the check-in card hides it for a few days.
     @AppStorage("weightCheckIn.snoozedUntil") private var checkInSnoozedUntil = 0.0
+    @AppStorage(UserProfile.checkInIntervalKey)
+    private var checkInIntervalDays = UserProfile.defaultCheckInIntervalDays
     @State private var editingDraft: FoodEntryDraft?
     @State private var entryPendingDeletion: FoodEntry?
 
@@ -61,7 +63,7 @@ struct DashboardView: View {
                                     isDayOver: !isShowingToday)
                     ringsCard
                     if isShowingToday, let profile = profiles.first,
-                       profile.isCheckInDue(),
+                       profile.isCheckInDue(intervalDays: checkInIntervalDays),
                        Date.now.timeIntervalSinceReferenceDate >= checkInSnoozedUntil {
                         WeightCheckInCard(profile: profile,
                                           onUpdate: { isShowingWeightCheckIn = true },
