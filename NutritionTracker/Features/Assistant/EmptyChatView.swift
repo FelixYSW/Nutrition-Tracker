@@ -25,14 +25,19 @@ struct EmptyChatView: View {
                 .font(.system(.title2, design: .rounded).weight(.heavy))
                 .multilineTextAlignment(.center)
 
-            // Two by two: four suggestions, never more than two rows.
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
-                                GridItem(.flexible(), spacing: 8)],
-                      spacing: 8) {
-                ForEach(moment.suggestions) { suggestion in
-                    chip(for: suggestion)
+            // Two by two: four suggestions, never more than two rows. Each
+            // chip is as wide as its icon and title, and each row sits in the
+            // middle.
+            VStack(spacing: 8) {
+                ForEach(Array(stride(from: 0, to: moment.suggestions.count, by: 2)), id: \.self) { start in
+                    HStack(spacing: 8) {
+                        ForEach(moment.suggestions[start..<min(start + 2, moment.suggestions.count)]) { suggestion in
+                            chip(for: suggestion)
+                        }
+                    }
                 }
             }
+            .frame(maxWidth: .infinity)
             .padding(.top, 4)
 
             Spacer(minLength: 12)
@@ -70,15 +75,15 @@ struct EmptyChatView: View {
     }
 
     private func chipLabel(_ suggestion: Suggestion) -> some View {
-        // Each fills its half of the row; a long title shrinks a little
-        // rather than wrapping.
+        // Just wide enough for the icon and title; on a very narrow screen
+        // a long title shrinks a little rather than wrapping.
         Label(suggestion.title, systemImage: suggestion.symbol)
             .font(.system(.subheadline, design: .rounded).weight(.semibold))
             .foregroundStyle(AppTheme.ink)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: AppTheme.minimumTapTarget)
+            .padding(.horizontal, 16)
+            .frame(minHeight: AppTheme.minimumTapTarget)
             .background(AppTheme.cardBackground, in: Capsule())
             .overlay(Capsule().stroke(AppTheme.cardBorder, lineWidth: 1))
             .contentShape(Capsule())
