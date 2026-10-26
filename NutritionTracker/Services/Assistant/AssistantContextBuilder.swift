@@ -18,6 +18,9 @@ struct AssistantContext: Codable, Equatable, Sendable {
         var activityLevel: String
         /// For proposing profile changes against a goal weight.
         var targetWeightKg: Double?
+        /// Estimated calories burned in a day (BMR x activity), for working out
+        /// a calorie deficit or surplus.
+        var estimatedMaintenanceCalories: Double?
         /// Deliberately omitted from the payload: date of birth and body-fat
         /// percentage, which the assistant doesn't need.
     }
@@ -182,7 +185,9 @@ struct AssistantContextBuilder {
                       weightKg: $0.weightKg,
                       goal: $0.goalRaw,
                       activityLevel: $0.activityRaw,
-                      targetWeightKg: $0.targetWeightKg)
+                      targetWeightKg: $0.targetWeightKg,
+                      estimatedMaintenanceCalories: NutritionTargetCalculator
+                          .calculate(profile: $0, now: now, calendar: calendar).tdee.rounded())
             },
             targetRanges: ranges,
             entriesToday: todaysEntries.map(Self.summary(of:)),
@@ -354,6 +359,7 @@ struct AssistantContextBuilder {
     - targetRanges: for each of calories, protein, carbs, fat, fibre: min, max, consumedToday, remainingToMax, neededToReachMin, state (under/within/over). Under a minimum is as off-track as over a maximum. Use these numbers directly; do not recompute them.
     - entriesToday: saved entries with id, name, time, amounts, macros and components. A food appears here only after the user tapped Add.
     - entriesYesterday: present only between 00:00 and 04:59.
+    - profile.estimatedMaintenanceCalories: roughly what the user burns in a day. Calorie deficit = that minus calories eaten (surplus if negative). Only meaningful for a finished day; for today say it is so far and that the day isn't over. It is an estimate: say "about", and about 7,700 kcal is roughly 1 kg of body fat.
     - healthNotes: conditions, measured values and food rules (e.g. "At most 1 banana a day"). Apply them to every log, suggestion and answer.
     - recentDays: the last 3 days' entries, newest first, each with its id, time and its components with grams. Use them for repeats and edits (by id), health patterns (e.g. prawns yesterday) and "same as usual".
     - trend: a 14-day summary with per-nutrient under/within/over day counts and average daily calories.

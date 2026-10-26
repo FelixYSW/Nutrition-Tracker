@@ -103,6 +103,15 @@ enum NutritionConstants {
     static let weightChangeRecalcThresholdKg: Double = 3.0
 }
 
+/// Calories eaten against maintenance (TDEE), the energy the body is estimated
+/// to use in a day. Both sides are estimates, so figures are shown as "about".
+enum CalorieBalance {
+    /// Positive is a deficit (ate less than maintenance), negative a surplus.
+    static func deficit(consumed: Double, maintenance: Double) -> Double {
+        maintenance - consumed
+    }
+}
+
 /// Deterministic daily-target maths. No AI anywhere in this file (spec section 6).
 enum NutritionTargetCalculator {
 
