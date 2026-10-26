@@ -227,7 +227,11 @@ final class AssistantToolExecutor {
         let entries = context.fetchEntries(from: windowStart, to: windowEnd)
         let buckets = TrendAggregator.buckets(entries: entries, scale: scale,
                                                endingOn: now, count: periods, calendar: calendar)
-        let ranges = context.loadNutritionTarget()?.ranges
+        // Each period and day is judged against the ranges in force then.
+        let allTargets = context.fetchNutritionTargets()
+        func rangesOn(_ date: Date) -> NutritionTargetRanges? {
+            allTargets.effective(on: date, calendar: calendar)?.ranges
+        }
 
         // Each logged day's totals: weekly and monthly views need more than
         // one average per period - how consistently each range was met.
@@ -274,30 +278,34 @@ final class AssistantToolExecutor {
             })
         }
 
-        func tallies(_ days: [Nutrition]) -> [String: [String: Int]]? {
-            guard let ranges, !days.isEmpty else { return nil }
+        func tallies(_ days: [(day: Date, total: Nutrition)]) -> [String: [String: Int]]? {
+            guard !days.isEmpty, days.contains(where: { rangesOn($0.day) != nil }) else { return nil }
             return Dictionary(uniqueKeysWithValues: Nutrient.allCases.map { nutrient in
                 var counts = ["under": 0, "within": 0, "over": 0]
                 for day in days {
-                    counts[ranges[nutrient].state(consumed: day[nutrient]).rawValue, default: 0] += 1
+                    guard let ranges = rangesOn(day.day) else { continue }
+                    counts[ranges[nutrient].state(consumed: day.total[nutrient]).rawValue,
+                           default: 0] += 1
                 }
                 return (nutrient.rawValue, counts)
             })
         }
 
-        func days(in interval: DateInterval) -> [Nutrition] {
+        func days(in interval: DateInterval) -> [(day: Date, total: Nutrition)] {
             // Half-open: the next period's first day starts exactly at `end`.
-            dayTotals.filter { $0.key >= interval.start && $0.key < interval.end }.map(\.value)
+            dayTotals.filter { $0.key >= interval.start && $0.key < interval.end }
+                .map { (day: $0.key, total: $0.value) }
         }
 
         let allDays = Array(dayTotals.values)
+        let datedDays = dayTotals.map { (day: $0.key, total: $0.value) }
         let weekend = dayTotals.filter { calendar.isDateInWeekend($0.key) }.map(\.value)
         let weekday = dayTotals.filter { !calendar.isDateInWeekend($0.key) }.map(\.value)
         let summary = Payload.Summary(daysLogged: allDays.count,
                                       averagePerLoggedDay: averages(allDays) ?? [:],
                                       weekdayAverage: averages(weekday),
                                       weekendAverage: averages(weekend),
-                                      dayStates: tallies(allDays))
+                                      dayStates: tallies(datedDays))
 
         let dateFormatter = DateFormatter()
         dateFormatter.calendar = calendar
@@ -313,7 +321,9 @@ final class AssistantToolExecutor {
             buckets: buckets.map { bucket in
                 let value = bucket.plotValue(for: scale)
                 var states: [String: String]?
-                if let ranges, bucket.hasData {
+                // The range in force on the period's last day so far.
+                let lastDay = min(bucket.interval.end.addingTimeInterval(-1), now)
+                if let ranges = rangesOn(lastDay), bucket.hasData {
                     states = Dictionary(uniqueKeysWithValues: Nutrient.allCases.map {
                         ($0.rawValue, ranges[$0].state(consumed: value[$0]).rawValue)
                     })
@@ -782,7 +792,8 @@ final class AssistantToolExecutor {
                 guard let nutrient = Nutrient(rawValue: change.nutrient) else { continue }
                 ranges[nutrient] = change.new
             }
-            target.ranges = ranges
+            // From today on only: earlier days keep their ranges.
+            context.saveTargetRanges(ranges)
             try context.save()
             return try encode(["status": "updated",
                                "detail": "Daily ranges changed: " + update.changes.map {

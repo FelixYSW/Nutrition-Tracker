@@ -356,6 +356,8 @@ final class AssistantViewModel {
             var replacing: [String: String] = [:]   // new card id -> card it replaces
             var keepsTime: Set<String> = []         // new cards sent without a time
 
+            // One note per reply is enough when several searches fail alike.
+            var shownSearchFailure = false
             for call in response.toolCalls {
                 // Web search goes out over the network, so it runs here rather
                 // than in the executor, which only reads the local database.
@@ -379,7 +381,13 @@ final class AssistantViewModel {
                     }
                     let (question, activity) = Self.webQuestion(for: call, currentPlace: here)
                     append(.toolActivity(activity), to: chat)
-                    let (content, failed, summary) = await searchWeb(question)
+                    let (content, failed, summary, failure) = await searchWeb(question)
+                    // The model only says "the lookup failed"; the reason (wrong
+                    // model name, no quota) is for the user to see.
+                    if let failure, !shownSearchFailure {
+                        shownSearchFailure = true
+                        append(.error("Search failed: \(failure)"), to: chat)
+                    }
                     // Only a lookup that actually found published figures
                     // holds the product to them; "nothing found" doesn't.
                     if call.tool == .lookUpProductNutrition, !failed,
@@ -544,8 +552,9 @@ final class AssistantViewModel {
         return lines.joined(separator: "\n")
     }
 
-    /// The tool result, whether it failed, and the answer text when it didn't.
-    private func searchWeb(_ question: String) async -> (String, Bool, String?) {
+    /// The tool result, whether it failed, the answer text when it didn't, and
+    /// the reason when it did.
+    private func searchWeb(_ question: String) async -> (String, Bool, String?, String?) {
         do {
             let result = try await service.searchWeb(question)
             struct Payload: Encodable {
@@ -554,10 +563,10 @@ final class AssistantViewModel {
                 let sources: [WebSearchResult.Source]
             }
             let data = try JSONEncoder().encode(Payload(summary: result.summary, sources: result.sources))
-            return (String(decoding: data, as: UTF8.self), false, result.summary)
+            return (String(decoding: data, as: UTF8.self), false, result.summary, nil)
         } catch {
             return ("{\"status\":\"error\",\"detail\":\"\(Self.escape(error.localizedDescription))\"}",
-                    true, nil)
+                    true, nil, error.localizedDescription)
         }
     }
 

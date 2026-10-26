@@ -50,12 +50,26 @@ struct DashboardView: View {
     }
 
     private var ranges: NutritionTargetRanges {
-        targets.sorted { $0.updatedAt > $1.updatedAt }.first?.ranges ?? .zero
+        // The ranges that applied on the day shown, not today's.
+        targets.effective(on: shownDay)?.ranges ?? .zero
     }
 
-    /// What the profile says the body uses in a day, for the deficit line.
+    /// What the body was estimated to use on the day shown, for the balance
+    /// row: the figure saved with that day's ranges, or the profile's for
+    /// records saved before it was kept.
     private var maintenance: Double? {
-        profiles.first.map { NutritionTargetCalculator.calculate(profile: $0).tdee }
+        targets.effective(on: shownDay)?.maintenanceCalories
+            ?? profiles.first.map { NutritionTargetCalculator.calculate(profile: $0).tdee }
+    }
+
+    /// An earlier day was measured against ranges that have since changed.
+    private var shownDayRangeNote: String? {
+        guard !isShowingToday,
+              let then = targets.effective(on: shownDay)?.ranges,
+              let now = targets.effective(on: today)?.ranges,
+              then != now else { return nil }
+        return "Ranges as they were on this day: \(AppFormatters.range(then.calories)) kcal. "
+            + "Today's are \(AppFormatters.range(now.calories)) kcal."
     }
 
     var body: some View {
@@ -66,6 +80,12 @@ struct DashboardView: View {
                     dayControls
                     CalorieHeroCard(consumed: consumed.calories, range: ranges.calories,
                                     isDayOver: !isShowingToday, maintenance: maintenance)
+                    if let note = shownDayRangeNote {
+                        Label(note, systemImage: "clock.arrow.circlepath")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     ringsCard
                     if isShowingToday, let profile = profiles.first,
                        profile.isCheckInDue(intervalDays: checkInIntervalDays),

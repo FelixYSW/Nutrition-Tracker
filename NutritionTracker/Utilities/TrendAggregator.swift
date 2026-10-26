@@ -221,6 +221,15 @@ enum TrendAggregator {
                       nutrient: Nutrient,
                       range: NutrientRange,
                       scale: TrendScale) -> StateTally {
+        tally(buckets: buckets, nutrient: nutrient, scale: scale) { _ in range }
+    }
+
+    /// Each bucket against the range that applied to it, so a later change of
+    /// ranges doesn't rewrite how earlier periods did.
+    static func tally(buckets: [TrendBucket],
+                      nutrient: Nutrient,
+                      scale: TrendScale,
+                      rangeFor: (TrendBucket) -> NutrientRange) -> StateTally {
         var tally = StateTally()
         for bucket in buckets {
             guard bucket.hasData else {
@@ -228,7 +237,7 @@ enum TrendAggregator {
                 continue
             }
             let value = bucket.plotValue(for: scale)[nutrient]
-            switch range.state(consumed: value) {
+            switch rangeFor(bucket).state(consumed: value) {
             case .under: tally.under += 1
             case .within: tally.within += 1
             case .over: tally.over += 1

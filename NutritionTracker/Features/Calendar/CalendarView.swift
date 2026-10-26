@@ -121,7 +121,7 @@ struct CalendarView: View {
             CalendarMonthGrid(selectedDate: selectedDateBinding,
                               month: monthBinding,
                               entries: allEntries,
-                              calorieRange: targets.first?.ranges.calories ?? .zero,
+                              calorieRange: { targets.effective(on: $0)?.ranges.calories ?? .zero },
                               highlightedPeriod: period?.interval,
                               // Only leaves week/month mode when it's on: an
                               // animated no-op still re-laid out the page.
@@ -151,8 +151,9 @@ struct CalendarView: View {
         let periodEntries = allEntries.filter {
             CalendarMonthGrid.day($0.consumedAt, isIn: period.interval)
         }
-        let summary = CalendarSelection.Summary(entries: periodEntries, in: period.interval,
-                                                calorieRange: targets.first?.ranges.calories)
+        let summary = CalendarSelection.Summary(
+            entries: periodEntries, in: period.interval, calorieRange: nil,
+            rangeOn: { targets.effective(on: $0)?.ranges.calories })
         let byDay = Dictionary(grouping: periodEntries) { LocalDay.start(of: $0.consumedAt) }
         let days = byDay.keys.sorted(by: >)
 
@@ -164,7 +165,7 @@ struct CalendarView: View {
                            badge: period.containsToday
                                ? (period.scale == .monthly ? "This month" : "This week") : nil,
                            nutrition: summary.dailyAverage,
-                           ranges: targets.first?.ranges,
+                           ranges: targets.effective(on: min(period.interval.end, .now))?.ranges,
                            footnote: summary.description)
 
             AppSectionHeading(title: "Food log",
@@ -238,7 +239,7 @@ struct CalendarView: View {
         VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
             DaySummaryCard(date: selectedDate,
                            nutrition: LocalDay.total(entries),
-                           ranges: targets.first?.ranges)
+                           ranges: targets.effective(on: selectedDate)?.ranges)
 
             AppSectionHeading(title: "Food log",
                               trailing: entries.isEmpty ? nil
@@ -320,7 +321,11 @@ struct CalendarSelection: Equatable {
         /// Logged days with calories within range, or nil without a target.
         var daysInCalorieRange: Int?
 
+        /// `rangeOn` gives each day its own calorie range, so a later change of
+        /// ranges doesn't rewrite how earlier days did; `calorieRange` is one
+        /// range for every day.
         init(entries: [FoodEntry], in interval: DateInterval, calorieRange: NutrientRange?,
+             rangeOn: ((Date) -> NutrientRange?)? = nil,
              now: Date = .now, calendar: Calendar = LocalDay.calendar()) {
             let totals = Dictionary(grouping: entries) { calendar.startOfDay(for: $0.consumedAt) }
                 .mapValues { LocalDay.total($0) }
@@ -329,10 +334,15 @@ struct CalendarSelection: Equatable {
             daysElapsed = max(0, calendar.dateComponents([.day], from: interval.start, to: end).day ?? 0)
             let sum = totals.values.reduce(Nutrition.zero, +)
             dailyAverage = daysLogged > 0 ? sum * (1 / Double(daysLogged)) : .zero
-            if let calorieRange, calorieRange.max > 0 {
-                daysInCalorieRange = totals.values.filter {
-                    calorieRange.state(consumed: $0.calories) == .within
-                }.count
+            if rangeOn != nil || (calorieRange?.max ?? 0) > 0 {
+                var inRange = 0
+                var anyTarget = false
+                for (day, total) in totals {
+                    guard let range = rangeOn?(day) ?? calorieRange, range.max > 0 else { continue }
+                    anyTarget = true
+                    if range.state(consumed: total.calories) == .within { inRange += 1 }
+                }
+                daysInCalorieRange = anyTarget ? inRange : nil
             } else {
                 daysInCalorieRange = nil
             }
@@ -359,7 +369,8 @@ struct CalendarSelection: Equatable {
 struct CalendarMonthGrid: View {
     @Binding var selectedDate: Date
     let entries: [FoodEntry]
-    let calorieRange: NutrientRange
+    /// The calorie range that applied on a given day.
+    let calorieRange: (Date) -> NutrientRange
     /// A week or month shown as a whole: its days are highlighted together
     /// instead of one selected day.
     var highlightedPeriod: DateInterval?
@@ -371,7 +382,7 @@ struct CalendarMonthGrid: View {
     @Binding var month: Date
 
     init(selectedDate: Binding<Date>, month: Binding<Date>, entries: [FoodEntry],
-         calorieRange: NutrientRange, highlightedPeriod: DateInterval? = nil,
+         calorieRange: @escaping (Date) -> NutrientRange, highlightedPeriod: DateInterval? = nil,
          onDayTapped: @escaping () -> Void = {}) {
         _selectedDate = selectedDate
         _month = month
@@ -458,9 +469,10 @@ struct CalendarMonthGrid: View {
         }
     }
 
-    private func rangeState(forCalories kcal: Double) -> RangeState? {
-        guard kcal > 0, calorieRange.max > 0 else { return nil }
-        return calorieRange.state(consumed: kcal)
+    private func rangeState(forCalories kcal: Double, on date: Date) -> RangeState? {
+        let range = calorieRange(date)
+        guard kcal > 0, range.max > 0 else { return nil }
+        return range.state(consumed: kcal)
     }
 
     /// Whether a day falls in a week or month. The period's end is the first
@@ -472,7 +484,7 @@ struct CalendarMonthGrid: View {
     }
 
     private func dayCell(_ date: Date, kcal: Double) -> some View {
-        let state = rangeState(forCalories: kcal)
+        let state = rangeState(forCalories: kcal, on: date)
         let inPeriod = highlightedPeriod.map { Self.day(date, isIn: $0) } ?? false
         // One selected day, or every day of the week or month shown - all
         // get the same outline.

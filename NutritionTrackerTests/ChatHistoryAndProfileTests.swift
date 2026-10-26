@@ -62,6 +62,42 @@ final class TargetUpdaterTests: XCTestCase {
         XCTAssertFalse(profile.isCheckInDue())
     }
 
+    func testNewRangesApplyFromTodayAndEarlierDaysKeepTheirs() throws {
+        let context = TestSupport.makeContext()
+        func ranges(weight: Double) -> NutritionTargetRanges {
+            NutritionTargetCalculator.calculate(weightKg: weight, heightCm: 170, age: 30,
+                                                sex: .female, goal: .maintain,
+                                                activity: .moderate).ranges
+        }
+        let light = ranges(weight: 60)
+        let heavy = ranges(weight: 90)
+        let first = TestSupport.date(2026, 10, 20)
+        let changed = TestSupport.date(2026, 10, 26)
+
+        context.saveTargetRanges(light, maintenance: 1_900, now: first)
+        context.saveTargetRanges(heavy, maintenance: 2_600, now: changed)
+        var all = try context.fetch(FetchDescriptor<NutritionTarget>())
+        XCTAssertEqual(all.count, 2, "a change on a later day adds a record")
+        XCTAssertEqual(all.effective(on: TestSupport.date(2026, 10, 24))?.ranges, light,
+                       "a day already over keeps its ranges")
+        XCTAssertEqual(all.effective(on: changed)?.ranges, heavy, "the day of the change")
+        XCTAssertEqual(all.effective(on: TestSupport.date(2026, 10, 30))?.ranges, heavy,
+                       "future days")
+        XCTAssertEqual(all.effective(on: TestSupport.date(2026, 10, 10))?.ranges, light,
+                       "before the first record uses the first")
+        // Maintenance is kept with the ranges it was worked out for.
+        XCTAssertEqual(all.effective(on: TestSupport.date(2026, 10, 24))?.maintenanceCalories, 1_900)
+        XCTAssertEqual(all.effective(on: changed)?.maintenanceCalories, 2_600)
+
+        // Changing again the same day updates that day's record.
+        context.saveTargetRanges(light, now: changed.addingTimeInterval(3_600))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<NutritionTarget>())
+            .effective(on: changed)?.maintenanceCalories, 2_600, "carried over when not given")
+        all = try context.fetch(FetchDescriptor<NutritionTarget>())
+        XCTAssertEqual(all.count, 2)
+        XCTAssertEqual(all.effective(on: changed)?.ranges, light)
+    }
+
     func testChangingWeightRecalculatesTargets() throws {
         let context = TestSupport.makeContext()
         let profile = makeProfile()
