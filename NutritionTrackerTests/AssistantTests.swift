@@ -344,13 +344,15 @@ final class AssistantRequestEncodingTests: XCTestCase {
         XCTAssertEqual(tools.first?["strict"] as? Bool, false)
     }
 
-    func testSearchBodyUsesTheWebSearchTool() throws {
-        let body = OpenAIAssistantService.makeSearchBody(model: "m", question: "Food near KLCC")
+    func testSearchBodyUsesGoogleSearchAtZeroTemperature() throws {
+        let body = GeminiSearchService.makeBody(question: "Food near KLCC")
         XCTAssertTrue(JSONSerialization.isValidJSONObject(body))
-        XCTAssertEqual(body["input"] as? String, "Food near KLCC")
+        let contents = try XCTUnwrap(body["contents"] as? [[String: Any]])
+        let parts = try XCTUnwrap(contents.first?["parts"] as? [[String: Any]])
+        XCTAssertEqual(parts.first?["text"] as? String, "Food near KLCC")
         let tools = try XCTUnwrap(body["tools"] as? [[String: Any]])
-        XCTAssertEqual(tools.first?["type"] as? String, "web_search")
-        XCTAssertEqual((body["reasoning"] as? [String: Any])?["effort"] as? String, "low")
+        XCTAssertNotNil(tools.first?["google_search"])
+        XCTAssertEqual((body["generationConfig"] as? [String: Any])?["temperature"] as? Int, 0)
     }
 }
 
@@ -1374,25 +1376,22 @@ final class AssistantWebSearchTests: XCTestCase {
     /// annotations, de-duplicated, with the link standing in for a missing title.
     func testSearchResponseGivesTextAndUniqueSources() throws {
         let json = """
-        {"output":[
-          {"type":"web_search_call","id":"ws_1","status":"completed",
-           "action":{"type":"search","query":"chicken rice near KLCC"}},
-          {"type":"message","role":"assistant","content":[
-            {"type":"output_text","text":"Stall A: chicken rice RM12. Stall B: soup RM10.",
-             "annotations":[
-               {"type":"url_citation","start_index":0,"end_index":5,"url":"https://a.example","title":"A"},
-               {"type":"url_citation","start_index":6,"end_index":9,"url":"https://a.example","title":"A again"},
-               {"type":"url_citation","start_index":10,"end_index":12,"url":"https://b.example","title":""}]}]}]}
+        {"candidates":[{"content":{"parts":[{"text":"Stall A: chicken rice RM12. "},
+                                            {"text":"Stall B: soup RM10."}]},
+          "groundingMetadata":{"groundingChunks":[
+            {"web":{"uri":"https://a.example","title":"A"}},
+            {"web":{"uri":"https://a.example","title":"A again"}},
+            {"web":{"uri":"https://b.example","title":""}}]}}]}
         """
-        let result = try OpenAIAssistantService.decodeSearch(data: Data(json.utf8))
+        let result = try GeminiSearchService.decode(data: Data(json.utf8))
         XCTAssertEqual(result.summary, "Stall A: chicken rice RM12. Stall B: soup RM10.")
         XCTAssertEqual(result.sources.map(\.url), ["https://a.example", "https://b.example"])
         XCTAssertEqual(result.sources.last?.title, "https://b.example", "falls back to the link")
     }
 
     func testEmptySearchResponseThrows() {
-        XCTAssertThrowsError(try OpenAIAssistantService.decodeSearch(
-            data: Data(#"{"output":[{"type":"web_search_call","status":"completed"}]}"#.utf8)))
+        XCTAssertThrowsError(try GeminiSearchService.decode(
+            data: Data(#"{"candidates":[{"content":{"parts":[]}}]}"#.utf8)))
     }
 
     @MainActor

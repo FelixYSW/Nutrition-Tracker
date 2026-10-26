@@ -233,7 +233,8 @@ struct SettingsView: View {
         } footer: {
             Text("To answer, the assistant sends OpenAI your message, any photos you attach, "
                  + "your profile basics, daily ranges, health notes and recent food log. "
-                 + "Searches for food, brands and places also go through OpenAI. Chats are "
+                 + "Searches for food, brands and places go to Google (Gemini) instead, as a "
+                 + "short question only: no photos, chat or health details. Chats are "
                  + "kept on this iPhone under Past chats.")
         }
     }
