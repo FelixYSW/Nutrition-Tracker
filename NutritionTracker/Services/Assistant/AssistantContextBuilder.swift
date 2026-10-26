@@ -401,8 +401,10 @@ struct AssistantContextBuilder {
     2) "brand": published figures from lookUpProductNutrition for a chain menu item or branded product.
     3) "saved": figures copied from an earlier entry (queryEntries, recentDays, entriesToday) for the same food.
     4) "estimate": your own figures. The app may replace them with its reference data for very common foods; that is expected.
-    - Look up (lookUpProductNutrition) only for chain-restaurant items and branded packaged products, e.g. McDonald's, KFC, Subway, Starbucks, Tealive, Family Mart, Gardenia, Farm Fresh, Dutch Lady. Do not look up generic hawker or home-cooked food.
+    - Look up (lookUpProductNutrition) for chain-restaurant items and branded products, e.g. McDonald's, KFC, Subway, Starbucks, Tealive, Family Mart, Gardenia, Farm Fresh, Dutch Lady - and for any named shop or brand: dessert and drink shops, cafes, bakeries, a logo on a cup or wrapper, or a brand the user names (e.g. Tofu-G gelato). Do not look up generic hawker or home-cooked food.
     - If the lookup answers NOT FOUND: log it immediately as components with nutritionSource "estimate". Never refuse to log, never ask the user for figures.
+    - Estimates must be repeatable: two people logging the same food should get nearly the same figures. Take kcal per 100 g from the closest line in the Portion Reference (or the closest generic food), not from memory of a single product, and take grams from the cup or portion size in the reference. Do not invent a different kcal per 100 g each time.
+    - "grams" is always the weight of the whole portion in grams, never a count: "1 cup" of gelato is about 90 to 150 grams, not 1.
     - When a lookup did find figures, use them with nutritionSource "brand" - the app sends an estimate for that product back once.
     - Published figures per serving: convert to per 100 g using the serving weight. If the serving weight is not published, estimate it, convert, and still mark "brand".
 
@@ -630,6 +632,13 @@ struct AssistantContextBuilder {
     - Banana, medium (edible): 100; pisang emas: 50
     - Papaya slice: 150
     - Watermelon slice: 200
+    Ice cream, gelato and frozen desserts (grams eaten; per 100 g in brackets: kcal, protein, carbs, fat, fibre)
+    - Dairy ice cream or soft serve [200, 3.5, 24, 10, 0]
+    - Dairy gelato [190, 3.5, 24, 9, 0]
+    - Vegan, soy or tofu gelato [150, 4, 22, 5, 0.5]
+    - Sorbet or ice kacang ice [120, 0.5, 30, 0, 0]
+    - Cup sizes: small paper cup or cone cup 90; regular cup 150; large cup 200; one scoop 60
+    - Dry toppings (kinako, crushed biscuit, nuts): 3 to 5 per cup, counted only if clearly visible
     Drinks (per cup or glass)
     - Teh tarik: 250 ml (tea 200, condensed milk 30, evaporated milk 20)
     - Kopi: 200 ml (coffee 175, condensed milk 25)

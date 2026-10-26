@@ -619,14 +619,30 @@ enum AssistantArgumentParser {
     /// the model is told which items to fix instead.
     static func checkItems(_ value: JSONValue?, tool: AssistantTool) throws {
         let raw = (value?.arrayValue ?? []).compactMap(\.objectValue)
-        let unusable = raw.filter { parseItem($0) == nil }
+        let unusable = raw.filter { parseItem($0) == nil || looksLikeCount($0) }
             .map { $0["name"]?.stringValue ?? "an unnamed item" }
         guard !unusable.isEmpty else { return }
         throw AssistantToolError.malformedArguments(
             tool: tool.rawValue,
-            detail: "these items have no usable \"grams\" (a weight between 1 and "
-                + "\(Int(maximumItemGrams)), not a count): \(unusable.joined(separator: ", ")). "
+            detail: "these items have no usable \"grams\" (the weight of the whole portion, "
+                + "up to \(Int(maximumItemGrams)) grams, not a count - \"1 cup\" is the "
+                + "grams in the cup): \(unusable.joined(separator: ", ")). "
                 + "Send them again with their weight - nothing was logged")
+    }
+
+    /// Words for a portion that holds more than a few grams, so a tiny weight
+    /// next to one means a count was sent as grams ("1 cup" with grams 1 logged
+    /// 3 kcal for a gelato).
+    static let portionWords: Set<String> = [
+        "cup", "bowl", "plate", "glass", "serving", "srv", "scoop", "slice", "piece",
+        "pack", "packet", "bottle", "can", "portion", "cone"
+    ]
+
+    static func looksLikeCount(_ arguments: [String: JSONValue]) -> Bool {
+        guard let grams = gramsValue(in: arguments), grams < 10,
+              let name = arguments["name"]?.stringValue else { return false }
+        let words = Set(name.lowercased().split { !$0.isLetter }.map(String.init))
+        return !words.isDisjoint(with: portionWords)
     }
 
     /// The weight eaten. Models don't always use the schema's name for it, so
