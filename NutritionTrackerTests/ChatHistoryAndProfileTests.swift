@@ -43,6 +43,17 @@ final class TargetUpdaterTests: XCTestCase {
                     weightKg: weight, goal: .maintain, activity: .moderate)
     }
 
+    func testCheckInIsDueAfterTwoWeeksAndClearedByAnUpdate() throws {
+        let profile = makeProfile()
+        let created = profile.updatedAt
+        XCTAssertFalse(profile.isCheckInDue(now: created.addingTimeInterval(13 * 86_400)))
+        XCTAssertTrue(profile.isCheckInDue(now: created.addingTimeInterval(14 * 86_400)))
+        XCTAssertEqual(profile.daysSinceUpdate(now: created.addingTimeInterval(5 * 86_400)), 5)
+
+        profile.markTargetsCalculated()
+        XCTAssertFalse(profile.isCheckInDue())
+    }
+
     func testChangingWeightRecalculatesTargets() throws {
         let context = TestSupport.makeContext()
         let profile = makeProfile()

@@ -175,7 +175,8 @@ struct SettingsView: View {
             Text("Your plan")
         } footer: {
             Text("Your daily ranges update automatically when you change your profile. "
-                 + "Any value you edited by hand is kept.")
+                 + "Any value you edited by hand is kept. Update your weight about every "
+                 + "two weeks; Today reminds you.")
         }
     }
 

@@ -78,6 +78,21 @@ final class UserProfile {
         updatedAt = .now
     }
 
+    /// How often the app asks for a fresh weight. Two weeks is long enough for
+    /// a real trend to show and short enough that the ranges don't go stale.
+    static let checkInIntervalDays = 14
+
+    /// Whole days since the profile (and so the targets) were last updated.
+    func daysSinceUpdate(now: Date = .now, calendar: Calendar = .autoupdatingCurrent) -> Int {
+        max(0, calendar.dateComponents([.day], from: updatedAt, to: now).day ?? 0)
+    }
+
+    /// Time to ask for a weight: two weeks since the last update, or the stored
+    /// targets no longer match the profile.
+    func isCheckInDue(now: Date = .now) -> Bool {
+        targetsLikelyStale || daysSinceUpdate(now: now) >= Self.checkInIntervalDays
+    }
+
     /// True when the profile has drifted enough from the snapshot that the stored
     /// targets are probably stale. Weight threshold is deliberately generous so
     /// day-to-day fluctuation does not nag the user.
