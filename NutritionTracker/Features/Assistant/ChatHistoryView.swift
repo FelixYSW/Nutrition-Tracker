@@ -40,6 +40,9 @@ struct ChatHistoryView: View {
                                     Button("Delete", systemImage: "trash", role: .destructive) {
                                         delete(conversation)
                                     }
+                                    // Red like the health notes' swipe to delete: the
+                                    // app's dark tint would otherwise colour it.
+                                    .tint(.red)
                                 }
                             }
                         }
