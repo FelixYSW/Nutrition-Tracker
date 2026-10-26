@@ -536,7 +536,8 @@ final class AssistantViewModel {
 
     static func productNutritionQuestion(product: String, country: String?) -> String {
         var lines = [
-            "Find the official nutrition facts for \(product).",
+            "Find the official nutrition facts for \(product). If more than one product is "
+                + "named, answer for each one separately under its own name.",
             "Give per 100 g (or per 100 ml for drinks): energy in kcal, protein, carbohydrate, "
                 + "total fat and dietary fibre in grams. If the label only gives per serving, "
                 + "give the serving size too and convert to per 100 g.",

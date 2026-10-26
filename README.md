@@ -159,9 +159,9 @@ python ml/scripts/compile_reference.py
 
 > **Current state:** the 14 MyFCD rows are **blank placeholders** waiting for real values. The 19 generic rows are typical reference figures entered by hand; spot-check them. Until MyFCD is filled in, Malaysian dishes rely on manual entry or Model B.
 
-## AI assistant (OpenAI GPT-6 Luna, searches on Gemini)
+## AI assistant (OpenAI GPT-6 Luna)
 
-The assistant has **no user settings**. It uses API keys built into the app at build time. Chat goes to OpenAI's **Responses API** with **GPT-6 Luna at low reasoning effort**. Web searches (food nearby, a brand's nutrition, real products) go to **Gemini with Google Search grounding**, using a separate key. The search sends only the question text, never photos, the chat or the user's nutrition data. There is no fallback: with no search key, or if a search fails, the assistant carries on without it and says so.
+The assistant has **no user settings**. It uses one API key built into the app at build time, and talks to OpenAI's **Responses API** with **GPT-6 Luna at low reasoning effort**. Web searches (food nearby, a brand's nutrition, real products) use OpenAI's built-in web search tool with the same key.
 
 The Responses API is used rather than Chat Completions because GPT-6 Luna only allows function calling in Chat Completions with reasoning turned off, and the assistant needs both. Requests are sent with `store: false`, so OpenAI doesn't keep them as stored responses.
 
@@ -177,14 +177,6 @@ The Responses API is used rather than Chat Completions because GPT-6 Luna only a
 
 Without the secret, the app still builds, and the assistant says it isn't available.
 
-### Turn on web search (Gemini)
-
-1. Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Restrict it to the Generative Language API and set a daily quota in Google Cloud.
-2. Under **Settings → Secrets and variables → Actions → Secrets**, add **`SEARCH_API_KEY`** with that key.
-3. Optional, under **Variables**: **`SEARCH_MODEL`** (default: tries `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5` and the `-latest` aliases in turn).
-
-Without `SEARCH_API_KEY` the app builds and chats as normal, but brand lookups and food-nearby searches report that search isn't available.
-
 ### Optional: change model or endpoint (no code changes)
 
 Add these under **Settings → Secrets and variables → Actions → Variables**. They're variables, not secrets. Leave them unset to use the defaults.
@@ -193,22 +185,21 @@ Add these under **Settings → Secrets and variables → Actions → Variables**
 |---|---|
 | `ASSISTANT_MODEL` | `gpt-6-luna` |
 | `ASSISTANT_BASE_URL` | `https://api.openai.com/v1` |
-| `SEARCH_MODEL` | tries `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5` and the `-latest` aliases in turn |
 
-The endpoint must speak OpenAI's Responses API, and the model must support function tools. The search model must support Google Search grounding.
+The endpoint must speak OpenAI's Responses API, and the model must support function tools and the `web_search` tool.
 
 ### Cost
 
-GPT-6 Luna costs $0.10 per million input tokens ($0.01 cached) and $0.50 per million output tokens, with reasoning tokens billed as output. Web searches are billed by Google, not OpenAI. Long chats and chats with photos cost the most, because the whole conversation is sent with every message. Typical personal use is a few dollars a month; the usage page on the OpenAI dashboard shows the real figure.
+GPT-6 Luna costs $0.10 per million input tokens ($0.01 cached) and $0.50 per million output tokens, with reasoning tokens billed as output. Each web search is also billed as a tool call, so the number of searches per message drives the cost. Long chats and chats with photos cost the most, because the whole conversation is sent with every message. Typical personal use is a few dollars a month; the usage page on the OpenAI dashboard shows the real figure.
 
 ### How it gets into the app
 
-`Config/AppConfig-Info.plist` maps the `ASSISTANT_*` and `SEARCH_*` build settings into the app's Info.plist. They're empty in `project.yml`, and CI fills them from the secret and variables through a temporary xcconfig file outside the repo, never via the command line. Xcode's `INFOPLIST_KEY_*` settings only cover keys Apple recognises, which is why the extra plist file is needed.
+`Config/AppConfig-Info.plist` maps the `ASSISTANT_*` build settings into the app's Info.plist. They're empty in `project.yml`, and CI fills them from the secret and variables through a temporary xcconfig file outside the repo, never via the command line. Xcode's `INFOPLIST_KEY_*` settings only cover keys Apple recognises, which is why the extra plist file is needed.
 
 ### Risks to be aware of
 
 - **The key isn't secret once it's in the app.** Anyone with the IPA can read it by unzipping the file. On a public repo, **any signed-in GitHub user can download Actions artifacts**. This is a paid key, so someone who takes it could run up charges: **set a budget limit**, keep the repo private if you can, and revoke the key if it leaks.
-- **What is sent to OpenAI:** your profile basics, today's targets and food log, a 14-day trend summary, the chat, and any photo you attach. Never your date of birth, body-fat percentage or target weight. **What is sent to Google:** only the text of a search, such as a product name or a place for food nearby.
+- **What is sent to OpenAI:** your profile basics, today's targets and food log, a 14-day trend summary, the chat, and any photo you attach. Never your date of birth, body-fat percentage or target weight.
 - **Rate limits:** when OpenAI rate-limits the key, the assistant says so and asks you to try again shortly.
 
 The only real fix for the key exposure is a small proxy server that holds the key, so the app never contains it.

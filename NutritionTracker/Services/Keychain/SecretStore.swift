@@ -23,12 +23,6 @@ enum BundledAPIKey {
 
     static var hasAssistantKey: Bool { assistant != nil }
 
-    /// Web search runs on Gemini with its own key. Optional: without it the
-    /// assistant still chats, and a search reports that it isn't available.
-    static var search: String? { value(for: "SearchAPIKey") }
-    static var searchModel: String? { value(for: "SearchModel") }
-    static var hasSearchKey: Bool { search != nil }
-
     private static func value(for key: String) -> String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: key) as? String else {
             return nil
