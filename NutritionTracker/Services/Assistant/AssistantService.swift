@@ -110,7 +110,7 @@ struct UnconfiguredAssistantService: AssistantServing {
 }
 
 
-/// OpenAI Responses API client, with function tools and web search.
+/// OpenAI Responses API client, with function tools.
 ///
 /// The Responses API rather than Chat Completions because GPT-6 Luna only
 /// allows function calling in Chat Completions with reasoning turned off; the
@@ -132,6 +132,8 @@ struct OpenAIAssistantService: AssistantServing {
     private let session: URLSession
     private let baseURL: String
     private let model: String
+    /// Searches go to Gemini, not OpenAI; the chat stays here.
+    private let search: GeminiSearchService
 
     init(session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -142,10 +144,12 @@ struct OpenAIAssistantService: AssistantServing {
         return URLSession(configuration: configuration)
     }(),
          baseURL: String = BundledAPIKey.assistantBaseURL ?? Self.defaultBaseURL,
-         model: String = BundledAPIKey.assistantModel ?? Self.defaultModel) {
+         model: String = BundledAPIKey.assistantModel ?? Self.defaultModel,
+         search: GeminiSearchService = GeminiSearchService()) {
         self.session = session
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         self.model = model
+        self.search = search
     }
 
     var isConfigured: Bool {
@@ -164,12 +168,10 @@ struct OpenAIAssistantService: AssistantServing {
 
     // MARK: Web search
 
-    /// One request with OpenAI's built-in web search tool. Separate from the
-    /// chat request, so the chat keeps only its function tools and the
-    /// answer comes back as a summary with the pages it cited.
+    /// Answered by Gemini (see `GeminiSearchService`), with its own key and no
+    /// fallback to OpenAI, so the chat key is never spent on searching.
     func searchWeb(_ question: String) async throws -> WebSearchResult {
-        let data = try await post(Self.makeSearchBody(model: model, question: question))
-        return try Self.decodeSearch(data: data)
+        try await search.searchWeb(question)
     }
 
     // MARK: Transport
@@ -298,15 +300,6 @@ struct OpenAIAssistantService: AssistantServing {
         ]
     }
 
-    static func makeSearchBody(model: String, question: String) -> [String: Any] {
-        [
-            "model": model,
-            "input": question,
-            "tools": [["type": "web_search"]],
-            "reasoning": ["effort": reasoningEffort],
-            "store": false
-        ]
-    }
 
     /// One app turn becomes one or more Responses input items: a message for
     /// any text or photos, a `function_call` per tool call, and a
@@ -395,19 +388,13 @@ struct OpenAIAssistantService: AssistantServing {
 
     // MARK: Response
 
-    /// The parts of a Responses API reply the app reads. Reasoning and web
-    /// search items are skipped.
+    /// The parts of a Responses API reply the app reads. Reasoning items are
+    /// skipped.
     private struct ResponseBody: Decodable {
         struct Item: Decodable {
             struct Content: Decodable {
-                struct Annotation: Decodable {
-                    let type: String?
-                    let url: String?
-                    let title: String?
-                }
                 let type: String?
                 let text: String?
-                let annotations: [Annotation]?
             }
             let type: String
             let content: [Content]?
@@ -470,24 +457,5 @@ struct OpenAIAssistantService: AssistantServing {
             throw AssistantServiceError.malformedResponse(detail: "no reply")
         }
         return AssistantResponse(text: text.isEmpty ? nil : text, toolCalls: calls)
-    }
-
-    static func decodeSearch(data: Data) throws -> WebSearchResult {
-        let body = try decodeBody(data)
-        let summary = outputText(body)
-        guard !summary.isEmpty else {
-            throw AssistantServiceError.malformedResponse(detail: "empty search result")
-        }
-        var seen = Set<String>()
-        let sources = body.output
-            .flatMap { $0.content ?? [] }
-            .flatMap { $0.annotations ?? [] }
-            .compactMap { annotation -> WebSearchResult.Source? in
-                guard annotation.type == "url_citation", let url = annotation.url,
-                      seen.insert(url).inserted else { return nil }
-                let title = annotation.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return .init(title: (title?.isEmpty == false) ? title! : url, url: url)
-            }
-        return WebSearchResult(summary: summary, sources: Array(sources.prefix(6)))
     }
 }
