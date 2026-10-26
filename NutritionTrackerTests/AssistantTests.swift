@@ -282,6 +282,23 @@ final class AssistantRequestEncodingTests: XCTestCase {
         XCTAssertTrue(arguments.contains("Teh Tarik"))
     }
 
+    func testACountSentAsGramsIsRejected() throws {
+        // "1 cup" of gelato sent with grams 1 logged 3 kcal.
+        let count: JSONValue = .array([.object([
+            "name": .string("Vegan tofu gelato (1 cup)"), "grams": .number(1),
+            "kcalPer100g": .number(150)])])
+        XCTAssertThrowsError(try AssistantArgumentParser.checkItems(count, tool: .addFoodEntry))
+
+        let weight: JSONValue = .array([.object([
+            "name": .string("Vegan tofu gelato (1 cup)"), "grams": .number(90),
+            "kcalPer100g": .number(150)])])
+        XCTAssertNoThrow(try AssistantArgumentParser.checkItems(weight, tool: .addFoodEntry))
+
+        // A pinch of salt really is a gram or two.
+        let salt: JSONValue = .array([.object(["name": .string("Salt"), "grams": .number(1)])])
+        XCTAssertNoThrow(try AssistantArgumentParser.checkItems(salt, tool: .addFoodEntry))
+    }
+
     func testPDFBecomesInputFileAndTextFileBecomesInputText() throws {
         let turn = AssistantTurn(role: .user, blocks: [
             .file(name: "checkup.pdf", data: Data([1, 2, 3])),
