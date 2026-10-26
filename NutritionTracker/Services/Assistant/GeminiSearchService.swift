@@ -10,7 +10,7 @@ import Foundation
 struct GeminiSearchService: Sendable {
 
     static let defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
-    static let defaultModel = "gemini-2.5-flash"
+    static let defaultModel = "gemini-3.5-flash-lite"
 
     private let session: URLSession
     private let model: String
