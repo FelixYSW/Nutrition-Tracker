@@ -250,7 +250,21 @@ struct AssistantView: View {
     }
 
     /// A new chat: greeting and suggestions for this time of day.
+    ///
+    /// Scrolls, and shrinks to what the composer leaves, so a tall composer
+    /// (photos plus several lines of text) with the keyboard up is never
+    /// pushed down behind the keyboard by this screen's minimum height.
     private func emptyChat(viewModel: AssistantViewModel) -> some View {
+        GeometryReader { geometry in
+            ScrollView {
+                emptyChatContent(viewModel: viewModel)
+                    .frame(minHeight: geometry.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private func emptyChatContent(viewModel: AssistantViewModel) -> some View {
         EmptyChatView(
             onAsk: { question in
                 viewModel.composerText = question
