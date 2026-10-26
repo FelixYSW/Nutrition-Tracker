@@ -10,10 +10,15 @@ import Foundation
 struct GeminiSearchService: Sendable {
 
     static let defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
-    /// Gemini 2.5 models, in the order tried. Only Gemini 2.x has free Search
+    /// Gemini models, in the order tried. Only Gemini 2.x has free Search
     /// grounding quota, and which names the API still serves can change, so a
     /// 404 moves on to the next one. `SEARCH_MODEL`, when set, is used alone.
-    static let defaultModels = ["gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-2.5-flash"]
+    static let defaultModels = [
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        // The family name on its own, in case the API accepts it, and the
+        // always-current aliases, which only count if the names above are gone.
+        "gemini-2.5", "gemini-pro-latest", "gemini-flash-latest"
+    ]
     /// The model that last answered, tried first next time.
     private static let workingModelKey = "geminiSearch.workingModel"
 

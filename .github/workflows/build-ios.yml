@@ -58,7 +58,7 @@ jobs:
         #   SEARCH_API_KEY     secret, optional; a Gemini key used only for web search
         #                      (brand nutrition, food nearby, products). The chat
         #                      always uses ASSISTANT_API_KEY; there is no fallback.
-        #   SEARCH_MODEL       variable, optional; app default tries gemini-2.5-pro, flash-lite, flash in turn
+        #   SEARCH_MODEL       variable, optional; app default tries several Gemini 2.5 names in turn
         # They go into a temporary xcconfig outside the repo rather than onto the
         # xcodebuild command line, which xcodebuild would echo into the log.
         # Without the key the app still builds; the assistant says "not available".
