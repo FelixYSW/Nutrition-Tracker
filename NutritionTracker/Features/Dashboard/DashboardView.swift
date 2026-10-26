@@ -17,6 +17,11 @@ struct DashboardView: View {
     @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var allEntries: [FoodEntry]
 
     @State private var isShowingSettings = false
+    @State private var isShowingWeightCheckIn = false
+    /// "Later" on the check-in card hides it for a few days.
+    @AppStorage("weightCheckIn.snoozedUntil") private var checkInSnoozedUntil = 0.0
+    @AppStorage(UserProfile.checkInIntervalKey)
+    private var checkInIntervalDays = UserProfile.defaultCheckInIntervalDays
     @State private var editingDraft: FoodEntryDraft?
     @State private var entryPendingDeletion: FoodEntry?
 
@@ -57,6 +62,13 @@ struct DashboardView: View {
                     CalorieHeroCard(consumed: consumed.calories, range: ranges.calories,
                                     isDayOver: !isShowingToday)
                     ringsCard
+                    if isShowingToday, let profile = profiles.first,
+                       profile.isCheckInDue(intervalDays: checkInIntervalDays),
+                       Date.now.timeIntervalSinceReferenceDate >= checkInSnoozedUntil {
+                        WeightCheckInCard(profile: profile,
+                                          onUpdate: { isShowingWeightCheckIn = true },
+                                          onLater: { snoozeCheckIn() })
+                    }
                     entriesSection
                 }
                 .appPageContent()
@@ -69,6 +81,9 @@ struct DashboardView: View {
                 dayObserver.refresh()
             }
             .sheet(isPresented: $isShowingSettings) { SettingsView() }
+            .sheet(isPresented: $isShowingWeightCheckIn) {
+                if let profile = profiles.first { WeightCheckInSheet(profile: profile) }
+            }
             .sheet(item: $editingDraft) { draft in
                 EditEntrySheet(draft: draft)
             }
@@ -141,6 +156,13 @@ struct DashboardView: View {
             .disabled(isShowingToday)
             .opacity(isShowingToday ? 0.35 : 1)
             .accessibilityLabel("Back to today")
+        }
+    }
+
+    private func snoozeCheckIn() {
+        let threeDays: TimeInterval = 3 * 24 * 60 * 60
+        withAnimation(.snappy) {
+            checkInSnoozedUntil = Date.now.addingTimeInterval(threeDays).timeIntervalSinceReferenceDate
         }
     }
 
