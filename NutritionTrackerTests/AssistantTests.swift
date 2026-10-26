@@ -963,25 +963,32 @@ final class AssistantViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.messages.last?.kind, .assistant("Try the chicken rice at Stall A (RM12)."))
     }
 
-    func testFailedSearchIsReportedToTheModelNotTheUser() async throws {
+    func testFailedSearchIsReportedToTheModelAndShownToTheUser() async throws {
         let service = ScriptedAssistantService([
-            AssistantResponse(text: nil, toolCalls: [AssistantToolCall(
-                id: "s", tool: .findFoodNearby, arguments: ["place": .string("Pavilion")])]),
+            AssistantResponse(text: nil, toolCalls: [
+                AssistantToolCall(id: "s", tool: .findFoodNearby,
+                                  arguments: ["place": .string("Pavilion")]),
+                AssistantToolCall(id: "t", tool: .findFoodNearby,
+                                  arguments: ["place": .string("KLCC")])]),
             AssistantResponse(text: "I couldn't search just now.", toolCalls: [])
         ])
         let (viewModel, _) = makeViewModel(service)
         viewModel.composerText = "what's good at Pavilion?"
         await viewModel.send()
 
+        // The model is told, so it can explain or carry on without the search.
         let sent = try XCTUnwrap(service.receivedTurns.last).flatMap(\.blocks)
         XCTAssertTrue(sent.contains {
             if case .toolResult("s", _, true) = $0 { return true }
             return false
         })
-        XCTAssertFalse(viewModel.messages.contains {
-            if case .error = $0.kind { return true }
-            return false
-        })
+        // The user sees why, once, however many searches in that reply failed.
+        let notes = viewModel.messages.compactMap { message -> String? in
+            if case .error(let text) = message.kind { return text }
+            return nil
+        }
+        XCTAssertEqual(notes.count, 1)
+        XCTAssertTrue(notes.first?.hasPrefix("Search failed:") == true)
     }
 
     func testRevealStopsAtWordEnds() {
