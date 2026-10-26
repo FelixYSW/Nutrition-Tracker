@@ -181,7 +181,7 @@ Without the secret, the app still builds, and the assistant says it isn't availa
 
 1. Create a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Restrict it to the Generative Language API and set a daily quota in Google Cloud.
 2. Under **Settings → Secrets and variables → Actions → Secrets**, add **`SEARCH_API_KEY`** with that key.
-3. Optional, under **Variables**: **`SEARCH_MODEL`** (default `gemini-3.5-flash-lite`).
+3. Optional, under **Variables**: **`SEARCH_MODEL`** (default `gemini-2.5-flash`).
 
 Without `SEARCH_API_KEY` the app builds and chats as normal, but brand lookups and food-nearby searches report that search isn't available.
 
@@ -193,7 +193,7 @@ Add these under **Settings → Secrets and variables → Actions → Variables**
 |---|---|
 | `ASSISTANT_MODEL` | `gpt-6-luna` |
 | `ASSISTANT_BASE_URL` | `https://api.openai.com/v1` |
-| `SEARCH_MODEL` | `gemini-3.5-flash-lite` |
+| `SEARCH_MODEL` | `gemini-2.5-flash` |
 
 The endpoint must speak OpenAI's Responses API, and the model must support function tools. The search model must support Google Search grounding.
 
