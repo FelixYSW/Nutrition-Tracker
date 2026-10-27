@@ -58,8 +58,13 @@ struct DashboardView: View {
     /// row: the figure saved with that day's ranges, or the profile's for
     /// records saved before it was kept.
     private var maintenance: Double? {
-        targets.effective(on: shownDay)?.maintenanceCalories
-            ?? profiles.first.map { NutritionTargetCalculator.calculate(profile: $0).tdee }
+        guard let target = targets.effective(on: shownDay) else { return nil }
+        if let saved = target.maintenanceCalories { return saved }
+        // Saved before maintenance was kept. The profile still matches that
+        // record only while it is the newest; after a later change the profile
+        // would give today's figure for a past day, so nothing is shown.
+        guard target === targets.max(by: { $0.createdAt < $1.createdAt }) else { return nil }
+        return profiles.first.map { NutritionTargetCalculator.calculate(profile: $0).tdee }
     }
 
     /// An earlier day was measured against ranges that have since changed.

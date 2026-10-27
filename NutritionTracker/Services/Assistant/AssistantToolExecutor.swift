@@ -770,13 +770,14 @@ final class AssistantToolExecutor {
                 throw AssistantToolError.malformedArguments(
                     tool: AssistantTool.updateProfile.rawValue, detail: "there is no profile")
             }
+            let maintenanceBefore = NutritionTargetCalculator.calculate(profile: profile).tdee
             if let weight = update.weightKg { profile.weightKg = weight }
             if let height = update.heightCm { profile.heightCm = height }
             if let target = update.targetWeightKg { profile.targetWeightKg = target }
             if let goal = update.goal { profile.goal = goal }
             if let activity = update.activity { profile.activity = activity }
             // Recalculates the ranges, keeping any set by hand, and saves.
-            TargetUpdater.update(for: profile, in: context)
+            TargetUpdater.update(for: profile, in: context, previousMaintenance: maintenanceBefore)
             return try encode(["status": "updated",
                                "detail": "Profile updated: " + update.lines.joined(separator: "; ")
                                    + ". Daily ranges recalculated; the new ranges are in the "

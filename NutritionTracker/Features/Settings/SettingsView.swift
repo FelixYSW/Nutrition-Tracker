@@ -568,7 +568,8 @@ struct ProfileEditorView: View {
         // Runs however the sheet closes - Done or a swipe down.
         .onDisappear {
             if let originalInputs, originalInputs != TargetInputs(profile) {
-                TargetUpdater.update(for: profile, in: context)
+                TargetUpdater.update(for: profile, in: context,
+                                     previousMaintenance: originalInputs.maintenance)
             } else {
                 try? context.save()
             }
@@ -588,6 +589,15 @@ struct TargetInputs: Equatable {
     /// Sets protein and the fat floor at a BMI of 30 or more.
     let targetWeightKg: Double?
 
+    /// Estimated daily burn for these inputs.
+    var maintenance: Double {
+        let years = Calendar.autoupdatingCurrent
+            .dateComponents([.year], from: dateOfBirth, to: .now).year ?? 0
+        return NutritionTargetCalculator.calculate(
+            weightKg: weightKg, heightCm: heightCm, age: max(1, years), sex: sex,
+            goal: goal, activity: activity, targetWeightKg: targetWeightKg).tdee
+    }
+
     init(_ profile: UserProfile) {
         dateOfBirth = profile.dateOfBirth
         sex = profile.sex
@@ -604,7 +614,15 @@ struct TargetInputs: Equatable {
 enum TargetUpdater {
     /// Recalculates and saves the targets. Any bound the user edited by hand
     /// is kept, so an automatic update never undoes a deliberate choice.
-    static func update(for profile: UserProfile, in context: ModelContext) {
+    /// `previousMaintenance` is what the profile gave *before* it was changed.
+    /// A record saved before maintenance was kept has none, and the new record
+    /// would otherwise leave that period without one, so it is filled in.
+    static func update(for profile: UserProfile, in context: ModelContext,
+                       previousMaintenance: Double? = nil) {
+        if let previousMaintenance, let current = context.loadNutritionTarget(),
+           current.maintenanceCalories == nil {
+            current.maintenanceCalories = previousMaintenance
+        }
         let breakdown = NutritionTargetCalculator.calculate(profile: profile)
         let ranges = breakdown.ranges
         if let target = context.loadNutritionTarget() {

@@ -268,9 +268,6 @@ struct CalorieHeroCard: View {
                         BalanceStat(label: "Maintenance",
                                     value: AppFormatters.amount(balance.maintenance.rounded()))
                         Divider().frame(height: 30)
-                        BalanceStat(label: "Eaten",
-                                    value: AppFormatters.amount(consumed.rounded()))
-                        Divider().frame(height: 30)
                         BalanceStat(label: gapLabel(balance.gap),
                                     value: "\u{2248} " + AppFormatters.amount(abs(balance.gap).rounded()))
                     }

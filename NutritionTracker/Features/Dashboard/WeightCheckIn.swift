@@ -86,9 +86,10 @@ struct WeightCheckInSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
+                        let before = NutritionTargetCalculator.calculate(profile: profile).tdee
                         profile.weightKg = weightKg
                         profile.activity = activity
-                        TargetUpdater.update(for: profile, in: context)
+                        TargetUpdater.update(for: profile, in: context, previousMaintenance: before)
                         Haptics.success()
                         dismiss()
                     }
