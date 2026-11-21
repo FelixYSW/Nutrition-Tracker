@@ -371,10 +371,10 @@ final class AssistantToolExecutorTests: XCTestCase {
                                   "kcalPer100g": .number(10)])])
     ]
 
-    /// The reported bug: a ~300 kcal konjac, tomato and egg plate logged at
-    /// 1,000 kcal. Even with a wildly wrong guess for the konjac, the
-    /// database values replace it and the total comes out realistic.
-    func testKonjacTomatoEggPlateUsesDatabaseNotGuess() throws {
+    /// With no food table, the model's per-100 g figures are what the card
+    /// uses - after the macro check, which still catches a calorie figure that
+    /// doesn't match its protein, carbs and fat.
+    func testEstimatesAreUsedAfterTheMacroCheck() throws {
         let context = TestSupport.makeContext()
         let executor = AssistantToolExecutor(context: context)
         let outcome = executor.execute(AssistantToolCall(
@@ -382,24 +382,35 @@ final class AssistantToolExecutorTests: XCTestCase {
             arguments: [
                 "name": .string("Tomato egg with konjac"),
                 "items": .array([
+                    // 400 kcal claimed, but its macros only add up to ~13.
                     .object(["name": .string("konjac knots"), "grams": .number(150),
-                             "kcalPer100g": .number(400)]),   // badly wrong guess
-                    .object(["name": .string("eggs"), "grams": .number(100)]),
-                    .object(["name": .string("tomatoes"), "grams": .number(120)]),
-                    .object(["name": .string("cooking oil"), "grams": .number(10)])
+                             "kcalPer100g": .number(400), "proteinPer100g": .number(0.2),
+                             "carbsPer100g": .number(3), "fatPer100g": .number(0.1)]),
+                    .object(["name": .string("eggs"), "grams": .number(100),
+                             "kcalPer100g": .number(155), "proteinPer100g": .number(12.6),
+                             "carbsPer100g": .number(1.1), "fatPer100g": .number(10.6)])
                 ])
             ]))
         guard case .awaitingConfirmation(let write) = outcome,
               case .add(let draft) = write.action else {
             return XCTFail("expected an add proposal")
         }
-        XCTAssertLessThan(draft.total.calories, 400, "was ~1,000 before the fix")
-        XCTAssertGreaterThan(draft.total.calories, 150)
         let konjac = try XCTUnwrap(draft.ingredients.first { $0.name == "konjac knots" })
-        XCTAssertEqual(konjac.provenance, .genericDatabase, "database replaced the guess")
-        XCTAssertEqual(konjac.canonicalID, "gen.konjac")
-        XCTAssertTrue(draft.ingredients.allSatisfy { !$0.provenance.isEstimate },
-                      "plurals and oil all matched the database")
+        XCTAssertLessThan(konjac.nutritionPerServing.calories, 20, "corrected from the macros")
+        XCTAssertEqual(konjac.provenance, .modelEstimate)
+        XCTAssertLessThan(draft.total.calories, 200)
+    }
+
+    func testItemsWithoutFiguresAreSentBack() {
+        let executor = AssistantToolExecutor(context: TestSupport.makeContext())
+        let outcome = executor.execute(AssistantToolCall(
+            id: "n", tool: .addFoodEntry,
+            arguments: ["name": .string("Eggs"),
+                        "items": .array([.object(["name": .string("eggs"), "grams": .number(100)])])]))
+        guard case .failure(let message) = outcome else {
+            return XCTFail("expected the model to be asked for figures")
+        }
+        XCTAssertTrue(message.contains("eggs"))
     }
 
     private func count(_ context: ModelContext) -> Int {
@@ -491,8 +502,12 @@ final class AssistantToolExecutorTests: XCTestCase {
             id: "a", tool: .addFoodEntry, arguments: [
                 "name": .string("Konjac with tomato"),
                 "items": .array([
-                    .object(["name": .string("konjac knots"), "grams": .number(150)]),
-                    .object(["name": .string("tomatoes"), "grams": .number(120)])
+                    .object(["name": .string("konjac knots"), "grams": .number(150),
+                             "kcalPer100g": .number(9), "proteinPer100g": .number(0.2),
+                             "carbsPer100g": .number(3), "fatPer100g": .number(0.1)]),
+                    .object(["name": .string("tomatoes"), "grams": .number(120),
+                             "kcalPer100g": .number(18), "proteinPer100g": .number(0.9),
+                             "carbsPer100g": .number(3.9), "fatPer100g": .number(0.2)])
                 ])])) else { return XCTFail("expected an add proposal") }
         try executor.commit(add)
         let entry = try XCTUnwrap(try context.fetch(FetchDescriptor<FoodEntry>()).first)
@@ -504,9 +519,15 @@ final class AssistantToolExecutorTests: XCTestCase {
                 "id": .string(entry.id.uuidString),
                 "name": .string("Konjac with tomato and egg"),
                 "items": .array([
-                    .object(["name": .string("konjac knots"), "grams": .number(150)]),
-                    .object(["name": .string("tomatoes"), "grams": .number(120)]),
-                    .object(["name": .string("egg"), "grams": .number(50)])
+                    .object(["name": .string("konjac knots"), "grams": .number(150),
+                             "kcalPer100g": .number(9), "proteinPer100g": .number(0.2),
+                             "carbsPer100g": .number(3), "fatPer100g": .number(0.1)]),
+                    .object(["name": .string("tomatoes"), "grams": .number(120),
+                             "kcalPer100g": .number(18), "proteinPer100g": .number(0.9),
+                             "carbsPer100g": .number(3.9), "fatPer100g": .number(0.2)]),
+                    .object(["name": .string("egg"), "grams": .number(50),
+                             "kcalPer100g": .number(155), "proteinPer100g": .number(12.6),
+                             "carbsPer100g": .number(1.1), "fatPer100g": .number(10.6)])
                 ])])) else { return XCTFail("expected an edit proposal") }
         guard case .edit(_, let draft, _) = edit.action else { return XCTFail() }
         XCTAssertEqual(draft.ingredients.count, 3, "the card shows the egg before saving")
@@ -521,8 +542,8 @@ final class AssistantToolExecutorTests: XCTestCase {
     }
 
     /// Figures from a nutrition label (typed, photographed or the brand's own)
-    /// win over the app's database, which would otherwise replace them.
-    func testLabelFiguresBeatTheDatabase() throws {
+    /// are used exactly as given.
+    func testLabelFiguresAreKeptAsGiven() throws {
         let executor = AssistantToolExecutor(context: TestSupport.makeContext())
         guard case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(
             id: "l", tool: .addFoodEntry, arguments: [
@@ -541,7 +562,7 @@ final class AssistantToolExecutorTests: XCTestCase {
 
         let konjac = try XCTUnwrap(draft.ingredients.first)
         XCTAssertEqual(konjac.provenance, .nutritionLabel)
-        XCTAssertEqual(konjac.nutritionPerServing.calories, 9, "kept, not replaced by gen.konjac")
+        XCTAssertEqual(konjac.nutritionPerServing.calories, 9, "kept as given")
         XCTAssertNil(konjac.canonicalID)
         let milk = try XCTUnwrap(draft.ingredients.last)
         XCTAssertEqual(milk.provenance, .brandPublished)
@@ -572,8 +593,12 @@ final class AssistantToolExecutorTests: XCTestCase {
             id: "a", tool: .addFoodEntry, arguments: [
                 "name": .string("Nasi lemak"),
                 "items": .array([
-                    .object(["name": .string("rice"), "grams": .number(200)]),
-                    .object(["name": .string("egg"), "grams": .number(50)])
+                    .object(["name": .string("rice"), "grams": .number(200),
+                             "kcalPer100g": .number(130), "proteinPer100g": .number(2.7),
+                             "carbsPer100g": .number(28.2), "fatPer100g": .number(0.3)]),
+                    .object(["name": .string("egg"), "grams": .number(50),
+                             "kcalPer100g": .number(155), "proteinPer100g": .number(12.6),
+                             "carbsPer100g": .number(1.1), "fatPer100g": .number(10.6)])
                 ])])) else { return XCTFail() }
         try executor.commit(add)
         let entry = try XCTUnwrap(try context.fetch(FetchDescriptor<FoodEntry>()).first)
@@ -1527,7 +1552,7 @@ final class AssistantSafeguardTests: XCTestCase {
         XCTAssertNil(JSONValue.string("one cup").doubleValue)
     }
 
-    /// No database match and no figures would log 0 kcal; the model is asked again.
+    /// No figures would log 0 kcal; the model is asked again.
     func testItemsWithNoNutritionAreSentBack() {
         let executor = AssistantToolExecutor(context: TestSupport.makeContext())
         let outcome = executor.execute(AssistantToolCall(id: "a", tool: .addFoodEntry, arguments: [
@@ -1689,8 +1714,12 @@ final class AssistantReachTests: XCTestCase {
         let executor = AssistantToolExecutor(context: TestSupport.makeContext())
         let food: [String: JSONValue] = [
             "name": .string("Egg fried rice"),
-            "items": .array([.object(["name": .string("rice"), "grams": .number(200)]),
-                             .object(["name": .string("egg"), "grams": .number(50)])])]
+            "items": .array([.object(["name": .string("rice"), "grams": .number(200),
+                             "kcalPer100g": .number(130), "proteinPer100g": .number(2.7),
+                             "carbsPer100g": .number(28.2), "fatPer100g": .number(0.3)]),
+                             .object(["name": .string("egg"), "grams": .number(50),
+                             "kcalPer100g": .number(155), "proteinPer100g": .number(12.6),
+                             "carbsPer100g": .number(1.1), "fatPer100g": .number(10.6)])])]
         guard case .result(let json) = executor.execute(AssistantToolCall(
             id: "c", tool: .calculateNutrition, arguments: ["foods": .array([.object(food)])])),
               case .awaitingConfirmation(let write) = executor.execute(AssistantToolCall(

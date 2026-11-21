@@ -1,13 +1,15 @@
 import SwiftUI
 import SwiftData
 
-/// Calendar tab: a per-date food log, plus the Trends view (spec section 15).
+/// Calendar tab: a per-date food log, plus Trends (spec section 15), the weight
+/// graph and the database of foods eaten before.
 ///
-/// Trends lives here rather than in a fifth tab, which the four-tab constraint
+/// These live here rather than in a fifth tab, which the four-tab constraint
 /// in section 4 rules out.
 struct CalendarView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppRouter.self) private var router
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query(sort: \NutritionTarget.updatedAt, order: .reverse) private var targets: [NutritionTarget]
 
@@ -43,12 +45,22 @@ struct CalendarView: View {
     @State private var entryPendingDeletion: FoodEntry?
 
     enum Section: String, CaseIterable, Identifiable {
-        case day, trends
+        case day, trends, weight, foods
         var id: String { rawValue }
         var displayName: String {
             switch self {
             case .day: "Days"
             case .trends: "Trends"
+            case .weight: "Weight"
+            case .foods: "Foods"
+            }
+        }
+        var symbolName: String {
+            switch self {
+            case .day: "calendar"
+            case .trends: "chart.bar.fill"
+            case .weight: "scalemass"
+            case .foods: "fork.knife"
             }
         }
     }
@@ -63,16 +75,15 @@ struct CalendarView: View {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
                     PageHeader(title: "Calendar")
 
-                    Picker("View", selection: sectionBinding) {
-                        ForEach(Section.allCases) { Text($0.displayName).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
+                    sectionPicker
 
                     switch section {
                     case .day: daySection
                     case .trends: TrendsView(onSelect: { selection in
                         open(selection)
                     })
+                    case .weight: WeightView()
+                    case .foods: FoodDatabaseView()
                     }
                 }
                 .appPageContent()
@@ -98,6 +109,27 @@ struct CalendarView: View {
             }
             .onAppear(perform: applyRequestedDate)
             .onChange(of: router.calendarRequestedDate) { _, _ in applyRequestedDate() }
+        }
+    }
+
+    /// Four segments: at the accessibility text sizes they no longer fit
+    /// side by side, so the choice becomes a menu with full-size labels.
+    @ViewBuilder
+    private var sectionPicker: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Picker("View", selection: sectionBinding) {
+                ForEach(Section.allCases) { section in
+                    Label(section.displayName, systemImage: section.symbolName).tag(section)
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity, minHeight: AppTheme.minimumTapTarget, alignment: .leading)
+            .appCard()
+        } else {
+            Picker("View", selection: sectionBinding) {
+                ForEach(Section.allCases) { Text($0.displayName).tag($0) }
+            }
+            .pickerStyle(.segmented)
         }
     }
 

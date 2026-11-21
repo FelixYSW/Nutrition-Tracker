@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 struct AssistantView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(AppRouter.self) private var router
     /// The message box, so a suggestion like "Log my lunch" can open the
     /// keyboard with the sentence started.
     @FocusState private var isComposerFocused: Bool
@@ -46,7 +47,19 @@ struct AssistantView: View {
             .alert("Camera unavailable", isPresented: Binding(
                 get: { cameraProblem != nil },
                 set: { if !$0 { cameraProblem = nil } })) {
-                Button("OK", role: .cancel) { cameraProblem = nil }
+                // Denied is fixable: take them straight to this app's
+                // settings rather than leave them to find it.
+                if CameraPermission.current() == .denied {
+                    Button("Open Settings") {
+                        cameraProblem = nil
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Button("Not Now", role: .cancel) { cameraProblem = nil }
+                } else {
+                    Button("OK", role: .cancel) { cameraProblem = nil }
+                }
             } message: {
                 Text(cameraProblem ?? "")
             }
@@ -67,10 +80,25 @@ struct AssistantView: View {
             if viewModel == nil {
                 viewModel = AssistantViewModel.make(context: context)
             }
+            handleRequest()
         }
+        .onChange(of: router.assistantRequest) { _, _ in handleRequest() }
         // Leaving the app mid-chat still keeps it in history.
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { viewModel?.persist() }
+        }
+    }
+
+    /// Add Meal's Photo and Describe buttons land here.
+    private func handleRequest() {
+        guard let request = router.assistantRequest, let viewModel else { return }
+        router.assistantRequest = nil
+        switch request {
+        case .photo:
+            openCamera()
+        case .describe:
+            if viewModel.composerText.isEmpty { viewModel.composerText = "I had " }
+            isComposerFocused = true
         }
     }
 
@@ -158,6 +186,7 @@ struct AssistantView: View {
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 38, height: 38)
                         .appGlass(in: Circle(), interactive: true)
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -434,6 +463,14 @@ struct AssistantView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if !viewModel.attachments.isEmpty {
                         attachmentStrip(viewModel: viewModel)
+                        if viewModel.attachments.contains(where: { $0.fileName == nil }) {
+                            // A photo from straight above can't show how tall
+                            // the food is; an angled one with the fist can.
+                            Label("Best portions: shoot at an angle, fist beside the plate",
+                                  systemImage: "hand.raised.fingers.spread")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     TextField(placeholder(for: viewModel),
@@ -459,7 +496,9 @@ struct AssistantView: View {
                         Task { await viewModel.send() }
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 34))
+                            .font(.largeTitle)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .padding(.bottom, 2)
                     .accessibilityLabel("Send")
@@ -545,9 +584,12 @@ struct AssistantView: View {
                                 .font(.system(size: 20))
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(AppTheme.onAccent, AppTheme.accentFill)
+                                // 44 pt to tap; the glyph stays where it was.
+                                .padding(12)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .offset(x: 7, y: -7)
+                        .offset(x: 19, y: -19)
                         .accessibilityLabel(attachment.fileName == nil ? "Remove photo" : "Remove file")
                     }
                     .transition(.scale.combined(with: .opacity))

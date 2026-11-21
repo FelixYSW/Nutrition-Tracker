@@ -223,7 +223,7 @@ struct CalorieHeroCard: View {
                 .foregroundStyle(AppTheme.textColor(for: .calories))
 
                 Text(AppFormatters.amount(consumed))
-                    .font(.system(size: 38, weight: .heavy, design: .rounded))
+                    .scaledHeavyNumber(38, relativeTo: .largeTitle)
                     .monospacedDigit()
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
@@ -267,9 +267,6 @@ struct CalorieHeroCard: View {
                     HStack(spacing: 0) {
                         BalanceStat(label: "Maintenance",
                                     value: AppFormatters.amount(balance.maintenance.rounded()))
-                        Divider().frame(height: 30)
-                        BalanceStat(label: "Eaten",
-                                    value: AppFormatters.amount(consumed.rounded()))
                         Divider().frame(height: 30)
                         BalanceStat(label: gapLabel(balance.gap),
                                     value: "\u{2248} " + AppFormatters.amount(abs(balance.gap).rounded()))

@@ -6,6 +6,7 @@ struct RootView: View {
     @Environment(AppRouter.self) private var router
 
     @AppStorage("appearance") private var appearance = AppAppearance.light.rawValue
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Query private var profiles: [UserProfile]
     @Query private var targets: [NutritionTarget]
@@ -33,11 +34,18 @@ struct RootView: View {
         // only (the suggestion chips still scroll sideways: they are wider).
         .verticalScrollingOnly()
         .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
+        // Reduce Motion: changes happen in place instead of springing,
+        // sliding or scaling. Covers every withAnimation in the app.
+        .transaction { transaction in
+            if reduceMotion { transaction.animation = nil }
+        }
         // Soft ink instead of pure black/white for all text that doesn't set
-        // its own colour. `.secondary` and `.tertiary` derive from this.
-        .foregroundStyle(AppTheme.ink)
+        // its own colour, with `.secondary` and `.tertiary` given explicitly
+        // so grey captions keep readable contrast.
+        .foregroundStyle(AppTheme.ink, AppTheme.inkSecondary, AppTheme.inkTertiary)
         .onAppear {
             _ = context.loadAppSettings()
+            context.seedWeightHistoryIfNeeded()
             refreshTargetsIfFormulaChanged()
         }
         #if canImport(UIKit)

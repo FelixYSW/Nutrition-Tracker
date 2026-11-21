@@ -12,17 +12,6 @@ enum ReferenceFixtures {
         .init(canonicalID: "gen.egg.fried", displayName: "Fried Egg",
               aliases: ["fried egg", "telur goreng"], sources: ["mf150"], isMalaysian: false)
     ])
-
-    static let table = LocalNutritionReference(rows: [
-        .init(canonicalID: "gen.rice.white_cooked", displayName: "White Rice",
-              calories: 130, protein: 2.7, carbs: 28.2, fat: 0.3, fibre: 0.4,
-              source: "generic"),
-        .init(canonicalID: "my.rice.coconut", displayName: "Coconut Rice",
-              calories: 180, protein: 3, carbs: 28, fat: 6,
-              source: "myfcd", sourceCode: "TEST-001"),
-        .init(canonicalID: "gen.egg.fried", displayName: "Fried Egg",
-              calories: 196, protein: 13.6, carbs: 0.8, fat: 15.3, source: "generic")
-    ])
 }
 
 final class FoodOntologyTests: XCTestCase {
@@ -61,56 +50,19 @@ final class FoodOntologyTests: XCTestCase {
                        "no prefix match: alphabetical")
     }
 
-    /// The bundled files must parse and stay consistent with each other.
-    func testBundledReferenceDataIsConsistent() {
-        let ontology = FoodOntology.loadBundled()
-        let table = LocalNutritionReference.loadBundled()
-        XCTAssertFalse(ontology.isEmpty, "ontology.json missing from the app bundle")
-        XCTAssertFalse(table.isEmpty, "myfcd_reference.json missing from the app bundle")
-        for row in table.allRows {
-            XCTAssertNotNil(ontology.entry(canonicalID: row.canonicalID),
-                            "\(row.canonicalID) has no ontology entry")
-            XCTAssertTrue(row.nutritionPer100g.isValid)
-        }
+    /// The photo model's label map must ship with the app.
+    func testBundledOntologyLoads() {
+        XCTAssertFalse(FoodOntology.loadBundled().isEmpty, "ontology.json missing from the app bundle")
     }
 }
 
-final class LocalNutritionReferenceTests: XCTestCase {
-
-    func testMyFCDRowLookupByCanonicalID() throws {
-        let row = try XCTUnwrap(ReferenceFixtures.table.row(canonicalID: "my.rice.coconut"))
-        XCTAssertEqual(row.provenance, .myFCD)
-        XCTAssertEqual(row.sourceCode, "TEST-001")
-        XCTAssertEqual(row.nutritionPer100g.calories, 180)
-        XCTAssertEqual(row.nutritionPer100g.fat, 6)
-    }
-
-    func testGenericRowProvenance() {
-        XCTAssertEqual(ReferenceFixtures.table.row(canonicalID: "gen.egg.fried")?.provenance,
-                       .genericDatabase)
-    }
-
-    func testMissingOptionalNutrientsDefaultToZero() {
-        XCTAssertEqual(ReferenceFixtures.table.row(canonicalID: "gen.egg.fried")?.nutritionPer100g.fibre, 0)
-    }
-
-    func testDecodesFileFormat() {
-        let json = """
-        {"version": 1, "rows": [{"canonicalID": "x", "displayName": "X",
-          "calories": 100, "protein": 1, "carbs": 2, "fat": 3, "source": "myfcd"}]}
-        """
-        XCTAssertEqual(LocalNutritionReference.load(data: Data(json.utf8)).count, 1)
-        XCTAssertTrue(LocalNutritionReference.load(data: Data("nope".utf8)).isEmpty)
-    }
-}
-
+/// With no food table, a photo's nutrition comes from the portion model's
+/// whole-plate estimate, split across the foods by mass.
 @MainActor
 final class NutritionResolutionTests: XCTestCase {
 
     private func repository() -> NutritionRepository {
-        NutritionRepository(context: TestSupport.makeContext(),
-                            localTable: ReferenceFixtures.table,
-                            ontology: ReferenceFixtures.ontology)
+        NutritionRepository(context: TestSupport.makeContext())
     }
 
     private func detection(_ name: String, canonical: String?, confidence: Double = 0.9) -> DetectedIngredient {
@@ -118,51 +70,24 @@ final class NutritionResolutionTests: XCTestCase {
                            confidence: confidence)
     }
 
-    func testCanonicalMatchUsesReferenceTableNotModelPrediction() {
-        let rice = detection("Coconut Rice", canonical: "my.rice.coconut")
-        let resolved = repository().resolve(
-            detections: [rice],
-            portions: [PortionEstimate(detectionID: rice.id, estimatedGrams: 200, confidence: 0.8)],
-            // A wildly different whole-plate prediction must be ignored here.
-            wholePlateNutrition: Nutrition(calories: 5000))
-
-        XCTAssertEqual(resolved.count, 1)
-        XCTAssertEqual(resolved[0].provenance, .myFCD)
-        XCTAssertEqual(resolved[0].total.calories, 360, accuracy: 0.001, "180 kcal/100g * 200 g")
-    }
-
-    func testNameFallsBackThroughOntology() {
-        let typed = detection("telur goreng", canonical: nil)
-        let resolved = repository().resolve(detections: [typed],
-                                            portions: [PortionEstimate(detectionID: typed.id,
-                                                                       estimatedGrams: 50,
-                                                                       confidence: 0.9)],
-                                            wholePlateNutrition: nil)
-        XCTAssertEqual(resolved[0].canonicalID, "gen.egg.fried")
-        XCTAssertEqual(resolved[0].total.calories, 98, accuracy: 0.001)
-    }
-
-    /// Tier 5: an unmatched item gets only the part of the plate prediction not
-    /// already explained by matched items, so nothing is double-counted.
-    func testUnmatchedItemsShareResidualOfPlatePrediction() {
+    func testPlateEstimateIsSplitByMass() {
         let rice = detection("White Rice", canonical: "gen.rice.white_cooked")
-        let mystery = detection("Mystery Curry", canonical: nil, confidence: 0.4)
+        let curry = detection("Curry", canonical: nil, confidence: 0.4)
         let resolved = repository().resolve(
-            detections: [rice, mystery],
+            detections: [rice, curry],
             portions: [
                 PortionEstimate(detectionID: rice.id, estimatedGrams: 200, confidence: 0.9),
-                PortionEstimate(detectionID: mystery.id, estimatedGrams: 150, confidence: 0.4)
+                PortionEstimate(detectionID: curry.id, estimatedGrams: 100, confidence: 0.4)
             ],
-            wholePlateNutrition: Nutrition(calories: 700, protein: 25, carbs: 80, fat: 25))
+            wholePlateNutrition: Nutrition(calories: 600, protein: 30, carbs: 60, fat: 21))
 
-        let riceRow = resolved[0], curryRow = resolved[1]
-        XCTAssertEqual(riceRow.total.calories, 260, accuracy: 0.001)
-        XCTAssertEqual(curryRow.provenance, .modelEstimate)
-        XCTAssertEqual(curryRow.total.calories, 700 - 260, accuracy: 0.01)
-        XCTAssertEqual(riceRow.total.calories + curryRow.total.calories, 700, accuracy: 0.01)
+        XCTAssertEqual(resolved[0].total.calories, 400, accuracy: 0.01, "two thirds of the mass")
+        XCTAssertEqual(resolved[1].total.calories, 200, accuracy: 0.01)
+        XCTAssertTrue(resolved.allSatisfy { $0.provenance == .modelEstimate })
+        XCTAssertEqual(resolved[0].canonicalID, "gen.rice.white_cooked", "label mapping kept")
     }
 
-    func testUnmatchedWithoutPlatePredictionIsZeroForUserToFill() {
+    func testWithoutPlateEstimateEverythingIsZeroForTheUserToFill() {
         let mystery = detection("Mystery", canonical: nil)
         let resolved = repository().resolve(detections: [mystery], portions: [],
                                             wholePlateNutrition: nil)
@@ -170,19 +95,13 @@ final class NutritionResolutionTests: XCTestCase {
         XCTAssertEqual(resolved[0].provenance, .modelEstimate)
     }
 
-    /// Tier 1: a user-entered product outranks the reference table.
-    func testUserVerifiedFoodWinsOverReferenceTable() {
-        let context = TestSupport.makeContext()
-        context.insert(BarcodeProductCache(barcode: "1", name: "White Rice", servingSize: 100,
-                                           unit: .gram,
-                                           nutritionPerServing: Nutrition(calories: 111),
-                                           isUserEntered: true))
-        try? context.save()
-        let repo = NutritionRepository(context: context, localTable: ReferenceFixtures.table,
-                                       ontology: ReferenceFixtures.ontology)
-        let hit = repo.lookup(canonicalID: "gen.rice.white_cooked", name: "White Rice")
-        XCTAssertEqual(hit?.provenance, .localVerified)
-        XCTAssertEqual(hit?.nutritionPer100g.calories, 111)
+    func testNoMassesSplitEvenly() {
+        let a = detection("A", canonical: nil), b = detection("B", canonical: nil)
+        let resolved = repository().resolve(detections: [a, b], portions: [],
+                                            wholePlateNutrition: Nutrition(calories: 300))
+        // No grams to scale by: per-100 g stays zero rather than dividing by 0.
+        XCTAssertEqual(resolved.count, 2)
+        XCTAssertTrue(resolved.allSatisfy { $0.nutritionPer100g.calories.isFinite })
     }
 }
 

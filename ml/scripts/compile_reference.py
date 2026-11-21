@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Compile the bundled nutrition reference table and ontology for the iOS app.
+"""Check the reference CSVs against the ontology and copy the ontology into the app.
+
+The app no longer ships a nutrition table: the per-100 g CSVs are kept for the
+ML pipeline only, and nothing from them is bundled.
 
 Inputs (all under ml/config/):
   generic_reference.csv  typical per-100 g figures for common ingredients
   myfcd_reference.csv    rows copied by hand from MyFCD (myfcd.moh.gov.my)
   ontology.json          canonical food IDs and dataset label aliases
 
-Outputs (under NutritionTracker/Resources/):
-  myfcd_reference.json   merged table read by LocalNutritionReference
-  ontology.json          copy of the ontology read by FoodOntology
+Output (under NutritionTracker/Resources/):
+  ontology.json          copy of the ontology read by FoodOntology (photo labels)
 
 MyFCD has no bulk download or public API, so its rows are compiled here
 offline and nothing is fetched at runtime. A MyFCD row overrides a generic row
@@ -105,14 +107,11 @@ def main() -> int:
         return 1
 
     args.out.mkdir(parents=True, exist_ok=True)
-    table = {"version": 1, "rows": sorted(merged.values(), key=lambda r: r["canonicalID"])}
-    (args.out / "myfcd_reference.json").write_text(
-        json.dumps(table, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (args.out / "ontology.json").write_text(
         json.dumps(ontology, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    print(f"Wrote {len(merged)} rows ({len(myfcd)} MyFCD, "
-          f"{len(merged) - len(myfcd)} generic) and {len(known_ids)} ontology entries.")
+    print(f"Checked {len(merged)} reference rows ({len(myfcd)} MyFCD, "
+          f"{len(merged) - len(myfcd)} generic); wrote {len(known_ids)} ontology entries.")
     if myfcd_skipped:
         print(f"MyFCD placeholders still blank ({len(myfcd_skipped)}): "
               + ", ".join(myfcd_skipped))

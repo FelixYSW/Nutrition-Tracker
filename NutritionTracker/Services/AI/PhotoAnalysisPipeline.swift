@@ -10,7 +10,7 @@ import UIKit
 ///     -> prepare image once
 ///     -> Model A (recognition / segmentation) -> classes + confidence
 ///     -> Model B (portion mass, plus a whole-plate nutrition signal)
-///     -> canonical nutrition lookup (MyFCD / generic / local)
+///     -> Model B's plate estimate split across the foods by mass
 ///     -> per-ingredient nutrition, summed in Swift
 ///     -> Add Meal review (mandatory)
 ///
@@ -108,7 +108,7 @@ final class PhotoAnalysisPipeline {
 
         try Task.checkCancellation()
 
-        // --- Canonical nutrition join, then Swift arithmetic.
+        // --- Split the plate estimate across the foods, then Swift arithmetic.
         stage = .calculatingNutrition
         let resolved = repository.resolve(detections: recognitionOutput.detections,
                                           portions: portionOutput.portions,

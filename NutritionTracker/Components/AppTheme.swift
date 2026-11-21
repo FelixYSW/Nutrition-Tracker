@@ -20,6 +20,12 @@ enum AppTheme {
     static var ink: Color { .adaptive(light: inkLight, dark: inkDark) }
     static let inkLight: UInt32 = 0x2A2926
     static let inkDark: UInt32 = 0xE7E4DE
+    /// `.secondary` text: at least 4.5:1 on the page, cards and tinted
+    /// fills in both modes. Set explicitly rather than left to SwiftUI's
+    /// derived opacity, which came out near 3.9:1 on the light page.
+    static var inkSecondary: Color { .adaptive(light: 0x66635C, dark: 0x9E9A92) }
+    /// `.tertiary`: chevrons and other decoration; at least 3:1.
+    static var inkTertiary: Color { .adaptive(light: 0x7F7B73, dark: 0x807C74) }
 
     /// Main colour for links, icons, the selected tab and primary buttons.
     static var accent: Color { ink }
@@ -557,5 +563,28 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         #else
         return .light
         #endif
+    }
+}
+
+// MARK: - Scaling numbers
+
+/// The big rounded figures (calories, the ring's centre) at a design size
+/// that still follows the reader's Dynamic Type setting. A plain
+/// `.font(.system(size:))` stays the same size however large their text is set.
+private struct ScaledHeavyNumber: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+
+    init(size: CGFloat, relativeTo style: Font.TextStyle) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: style)
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: .heavy, design: .rounded))
+    }
+}
+
+extension View {
+    func scaledHeavyNumber(_ size: CGFloat, relativeTo style: Font.TextStyle) -> some View {
+        modifier(ScaledHeavyNumber(size: size, relativeTo: style))
     }
 }

@@ -9,16 +9,8 @@ import SwiftData
 /// plan rather than a wipe.
 enum AppModelContainer {
 
-    /// Every persisted type. Keep in sync with `AppSchemaV1`.
-    static let models: [any PersistentModel.Type] = [
-        UserProfile.self,
-        NutritionTarget.self,
-        FoodEntry.self,
-        IngredientItem.self,
-        BarcodeProductCache.self,
-        CorrectionRecord.self,
-        AppSettings.self
-    ]
+    /// Every persisted type: the models of the newest schema version.
+    static var models: [any PersistentModel.Type] { AppSchemaV2.models }
 
     static func makeContainer() -> ModelContainer {
         // The store lives in Application Support, which does not exist yet on a
@@ -57,25 +49,42 @@ enum AppModelContainer {
 
 // MARK: - Migration
 
-/// Versioned schema. V1 is the shipping schema; adding a V2 means appending a
-/// `VersionedSchema` and a migration stage here, never resetting the store.
+/// Versioned schemas. A new version is appended with a migration stage here,
+/// never by resetting the store. Each version lists its own models, so an
+/// old version keeps describing the store as it was shipped.
+///
+/// V1: the first shipping schema. Frozen: do not edit this list.
 enum AppSchemaV1: VersionedSchema {
     static var versionIdentifier = Schema.Version(1, 0, 0)
 
     static var models: [any PersistentModel.Type] {
-        AppModelContainer.models
+        [UserProfile.self,
+         NutritionTarget.self,
+         FoodEntry.self,
+         IngredientItem.self,
+         BarcodeProductCache.self,
+         CorrectionRecord.self,
+         AppSettings.self]
+    }
+}
+
+/// V2: adds `WeightEntry`, the history behind the weight graph.
+enum AppSchemaV2: VersionedSchema {
+    static var versionIdentifier = Schema.Version(2, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        AppSchemaV1.models + [WeightEntry.self]
     }
 }
 
 enum AppMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [AppSchemaV1.self]
+        [AppSchemaV1.self, AppSchemaV2.self]
     }
 
     static var stages: [MigrationStage] {
-        // No stages yet. When the schema changes, add a lightweight or custom
-        // stage from AppSchemaV1 to AppSchemaV2 here.
-        []
+        // A new table and nothing else: SwiftData migrates it automatically.
+        [.lightweight(fromVersion: AppSchemaV1.self, toVersion: AppSchemaV2.self)]
     }
 }
 

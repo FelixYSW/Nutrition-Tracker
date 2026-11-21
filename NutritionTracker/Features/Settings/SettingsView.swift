@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var isConfirmingDeleteAll = false
     @State private var isConfirmingImport: BackupFile?
     @State private var healthNotes: [HealthNote] = []
+    @State private var isShowingFistSize = false
+    @State private var handReference: HandReference?
     @AppStorage(UserProfile.checkInIntervalKey)
     private var checkInIntervalDays = UserProfile.defaultCheckInIntervalDays
 
@@ -61,7 +63,14 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear { healthNotes = HealthNotesStore.shared.notes }
+            .onAppear {
+                healthNotes = HealthNotesStore.shared.notes
+                handReference = HandReferenceStore.shared.reference
+            }
+            .sheet(isPresented: $isShowingFistSize,
+                   onDismiss: { handReference = HandReferenceStore.shared.reference }) {
+                FistSizeView()
+            }
             .sheet(isPresented: $isShowingProfileEditor) {
                 if let profile { ProfileEditorView(profile: profile) }
             }
@@ -174,6 +183,13 @@ struct SettingsView: View {
             }
             .disabled(target == nil)
 
+            SettingsRow(title: "Fist size", systemImage: "hand.raised",
+                        detail: handReference.map { String(format: "%.1f cm \u{00B7} used for photo portions",
+                                                           $0.fistWidthCm) }
+                            ?? "Not measured \u{00B7} helps the assistant judge portions") {
+                isShowingFistSize = true
+            }
+
             Picker(selection: $checkInIntervalDays) {
                 Text("Every week").tag(7)
                 Text("Every 2 weeks").tag(14)
@@ -186,7 +202,8 @@ struct SettingsView: View {
         } footer: {
             Text("Your daily ranges update automatically when you change your profile. "
                  + "Any value you edited by hand is kept. Today reminds you to update your "
-                 + "weight as often as you choose above.")
+                 + "weight as often as you choose above. Your fist size stays on this iPhone "
+                 + "and is sent to the assistant only as a number.")
         }
     }
 
@@ -412,6 +429,7 @@ struct SettingsView: View {
         LegacySecretCleanup.deleteStoredKeys()
         ChatHistoryStore.shared.deleteAll()
         HealthNotesStore.shared.deleteAll()
+        HandReferenceStore.shared.reference = nil
         let settings = context.loadAppSettings()
         settings.hasCompletedOnboarding = false
         save()
@@ -568,7 +586,8 @@ struct ProfileEditorView: View {
         // Runs however the sheet closes - Done or a swipe down.
         .onDisappear {
             if let originalInputs, originalInputs != TargetInputs(profile) {
-                TargetUpdater.update(for: profile, in: context)
+                TargetUpdater.update(for: profile, in: context,
+                                     previousMaintenance: originalInputs.maintenance)
             } else {
                 try? context.save()
             }
@@ -588,6 +607,15 @@ struct TargetInputs: Equatable {
     /// Sets protein and the fat floor at a BMI of 30 or more.
     let targetWeightKg: Double?
 
+    /// Estimated daily burn for these inputs.
+    var maintenance: Double {
+        let years = Calendar.autoupdatingCurrent
+            .dateComponents([.year], from: dateOfBirth, to: .now).year ?? 0
+        return NutritionTargetCalculator.calculate(
+            weightKg: weightKg, heightCm: heightCm, age: max(1, years), sex: sex,
+            goal: goal, activity: activity, targetWeightKg: targetWeightKg).tdee
+    }
+
     init(_ profile: UserProfile) {
         dateOfBirth = profile.dateOfBirth
         sex = profile.sex
@@ -604,7 +632,15 @@ struct TargetInputs: Equatable {
 enum TargetUpdater {
     /// Recalculates and saves the targets. Any bound the user edited by hand
     /// is kept, so an automatic update never undoes a deliberate choice.
-    static func update(for profile: UserProfile, in context: ModelContext) {
+    /// `previousMaintenance` is what the profile gave *before* it was changed.
+    /// A record saved before maintenance was kept has none, and the new record
+    /// would otherwise leave that period without one, so it is filled in.
+    static func update(for profile: UserProfile, in context: ModelContext,
+                       previousMaintenance: Double? = nil) {
+        if let previousMaintenance, let current = context.loadNutritionTarget(),
+           current.maintenanceCalories == nil {
+            current.maintenanceCalories = previousMaintenance
+        }
         let breakdown = NutritionTargetCalculator.calculate(profile: profile)
         let ranges = breakdown.ranges
         if let target = context.loadNutritionTarget() {
@@ -617,6 +653,8 @@ enum TargetUpdater {
             context.insert(created)
         }
         profile.markTargetsCalculated()
+        // Whatever changed the weight, the graph gets the new point.
+        context.recordProfileWeight(profile)
         try? context.save()
     }
 }
