@@ -714,9 +714,15 @@ struct AssistantConfirmationCard: View {
 
             if isActive {
                 VStack(spacing: 4) {
-                    Button(write.confirmButtonTitle, action: onConfirm)
-                        .buttonStyle(PrimaryButtonStyle(
-                            fill: write.isDestructive ? AppTheme.destructiveText : AppTheme.accentFill))
+                    if write.isDestructive {
+                        Button(role: .destructive, action: onConfirm) {
+                            Label(write.confirmButtonTitle, systemImage: "trash")
+                        }
+                        .buttonStyle(.appDestructive)
+                    } else {
+                        Button(write.confirmButtonTitle, action: onConfirm)
+                            .buttonStyle(.appPrimary)
+                    }
                     Button(action: onDecline) {
                         Text("Cancel")
                             .font(.system(.body, design: .rounded).weight(.semibold))

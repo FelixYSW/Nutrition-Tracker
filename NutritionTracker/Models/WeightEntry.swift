@@ -121,13 +121,25 @@ enum WeightStats {
 
     /// Trailing average over `windowDays`, which irons out the day-to-day
     /// swings of water weight so the direction of travel shows.
+    /// One pass over points sorted by date: a window that slides forward,
+    /// instead of comparing every weigh-in with every other.
     static func smoothed(_ points: [WeightPoint], windowDays: Int = 7) -> [WeightPoint] {
         let window = TimeInterval(windowDays) * 86_400
-        return points.map { point in
-            let inWindow = points.filter { $0.date <= point.date && point.date.timeIntervalSince($0.date) < window }
-            let mean = inWindow.reduce(0) { $0 + $1.kg } / Double(max(1, inWindow.count))
-            return WeightPoint(id: point.id, date: point.date, kg: mean)
+        let sorted = points.sorted { $0.date < $1.date }
+        var result: [WeightPoint] = []
+        result.reserveCapacity(sorted.count)
+        var start = 0
+        var sum = 0.0
+        for (index, point) in sorted.enumerated() {
+            sum += point.kg
+            while point.date.timeIntervalSince(sorted[start].date) >= window {
+                sum -= sorted[start].kg
+                start += 1
+            }
+            let mean = sum / Double(index - start + 1)
+            result.append(WeightPoint(id: point.id, date: point.date, kg: mean))
         }
+        return result
     }
 
     /// Last minus first: negative means weight went down.

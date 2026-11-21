@@ -40,6 +40,16 @@ enum FoodLibrarySort: String, CaseIterable, Identifiable {
 
 enum FoodLibrary {
 
+    /// Changes whenever an entry is added, removed or edited, without the
+    /// cost of rebuilding the records: lists rebuild only when it changes.
+    static func signature(of entries: [FoodEntry]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(entries.count)
+        hasher.combine(entries.lazy.map(\.updatedAt).max())
+        hasher.combine(entries.lazy.map(\.createdAt).max())
+        return hasher.finalize()
+    }
+
     /// "  Nasi  Lemak " and "nasi lemak" are the same food.
     static func key(for name: String) -> String {
         name.split(whereSeparator: \.isWhitespace).joined(separator: " ")

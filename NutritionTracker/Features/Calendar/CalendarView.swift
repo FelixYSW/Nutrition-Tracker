@@ -1,11 +1,8 @@
 import SwiftUI
 import SwiftData
 
-/// Calendar tab: a per-date food log, plus Trends (spec section 15), the weight
-/// graph and the database of foods eaten before.
-///
-/// These live here rather than in a fifth tab, which the four-tab constraint
-/// in section 4 rules out.
+/// Calendar tab: a per-date food log, plus Trends (spec section 15) and the
+/// weight graph. Foods eaten before have their own tab.
 struct CalendarView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppRouter.self) private var router
@@ -45,14 +42,13 @@ struct CalendarView: View {
     @State private var entryPendingDeletion: FoodEntry?
 
     enum Section: String, CaseIterable, Identifiable {
-        case day, trends, weight, foods
+        case day, trends, weight
         var id: String { rawValue }
         var displayName: String {
             switch self {
             case .day: "Days"
             case .trends: "Trends"
             case .weight: "Weight"
-            case .foods: "Foods"
             }
         }
         var symbolName: String {
@@ -60,7 +56,6 @@ struct CalendarView: View {
             case .day: "calendar"
             case .trends: "chart.bar.fill"
             case .weight: "scalemass"
-            case .foods: "fork.knife"
             }
         }
     }
@@ -83,7 +78,6 @@ struct CalendarView: View {
                         open(selection)
                     })
                     case .weight: WeightView()
-                    case .foods: FoodDatabaseView()
                     }
                 }
                 .appPageContent()
@@ -431,9 +425,18 @@ struct CalendarMonthGrid: View {
         return calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
     }
 
-    /// Calories per local day, built once per render rather than per cell.
+    /// Calories per local day of the month on screen, built once per render
+    /// rather than per cell. Only that month's entries are totalled: totalling
+    /// every food ever logged (and opening each dish's ingredients) on each
+    /// redraw made sheets on this page stall as they closed.
     private var caloriesByDay: [Date: Double] {
-        Dictionary(grouping: entries) { calendar.startOfDay(for: $0.consumedAt) }
+        let start = month
+        let end = calendar.date(byAdding: .month, value: 1, to: start) ?? start
+        // A week either side, for the days of the neighbouring months shown.
+        let from = calendar.date(byAdding: .day, value: -7, to: start) ?? start
+        let to = calendar.date(byAdding: .day, value: 7, to: end) ?? end
+        let shown = entries.filter { $0.consumedAt >= from && $0.consumedAt < to }
+        return Dictionary(grouping: shown) { calendar.startOfDay(for: $0.consumedAt) }
             .mapValues { LocalDay.total($0).calories }
     }
 

@@ -172,7 +172,7 @@ final class AssistantViewModel {
     private static let maxToolRoundTrips = 5
     /// Web searches are billed one by one: at most this many per message
     /// the user sends. Repeats answered from the chat's cache don't count.
-    static let maxSearchesPerMessage = 2
+    nonisolated static let maxSearchesPerMessage = 2
 
     /// Sent to the model when the user attaches a file without typing anything.
     static let fileOnlyPrompt = "[The user sent only this file, with no message. Read it; "
@@ -514,7 +514,7 @@ final class AssistantViewModel {
     /// The search question for a web tool, and the activity line shown in the chat.
     /// The area the user named for food nearby, or nil to use where they are.
     /// "Near me" and the like count as not naming one.
-    static func namedPlace(in arguments: [String: JSONValue]) -> String? {
+    nonisolated static func namedPlace(in arguments: [String: JSONValue]) -> String? {
         guard let place = arguments["place"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines), !place.isEmpty else { return nil }
         let meaningHere = ["near me", "nearby", "here", "around me", "current location",
@@ -523,13 +523,13 @@ final class AssistantViewModel {
     }
 
     /// Questions that differ only in case or spacing are the same search.
-    static func searchCacheKey(_ question: String) -> String {
+    nonisolated static func searchCacheKey(_ question: String) -> String {
         question.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// The text of the user's latest message: the last text block of the most
     /// recent user turn that has one (tool results carry none).
-    static func latestUserText(in turns: [AssistantTurn]) -> String? {
+    nonisolated static func latestUserText(in turns: [AssistantTurn]) -> String? {
         for turn in turns.reversed() where turn.role == .user {
             let texts = turn.blocks.compactMap { block -> String? in
                 if case .text(let text) = block { return text }
@@ -542,7 +542,7 @@ final class AssistantViewModel {
 
     /// `resolvedPlace` is the area to search, already worked out from the call
     /// and the user's message (see `AssistantPlaceResolver`).
-    static func webQuestion(for call: AssistantToolCall,
+    nonisolated static func webQuestion(for call: AssistantToolCall,
                             currentPlace: CurrentPlace? = nil,
                             resolvedPlace: String? = nil) -> (question: String, activity: String) {
         let arguments = call.arguments
@@ -574,7 +574,7 @@ final class AssistantViewModel {
                 "Searched for food at \(place)")
     }
 
-    static func productSearchQuestion(query: String, country: String?, goal: String?) -> String {
+    nonisolated static func productSearchQuestion(query: String, country: String?, goal: String?) -> String {
         var lines = [
             "Find real products currently sold\(country.map { " in \($0)" } ?? ""): \(query).",
             "List up to 6, each with the exact brand and product name as on the pack, and "
@@ -588,7 +588,7 @@ final class AssistantViewModel {
         return lines.joined(separator: "\n")
     }
 
-    static func productNutritionQuestion(product: String, country: String?) -> String {
+    nonisolated static func productNutritionQuestion(product: String, country: String?) -> String {
         var lines = [
             "Find the official nutrition facts for \(product). If more than one product is "
                 + "named, answer for each one separately under its own name.",
@@ -632,7 +632,7 @@ final class AssistantViewModel {
 
     /// Whether a nutrition lookup's answer has real published figures: it
     /// doesn't open with NOT FOUND, and it gives at least one calorie number.
-    static func foundPublishedFigures(in summary: String) -> Bool {
+    nonisolated static func foundPublishedFigures(in summary: String) -> Bool {
         let text = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.uppercased().hasPrefix("NOT FOUND") { return false }
         let calorieNumber = #"\d[\d.,]*\s*(kcal|calories|cal\b)"#
@@ -641,9 +641,9 @@ final class AssistantViewModel {
 
     /// Added to a named place, so a mall that shares its name with one in
     /// another country isn't picked. The app is for people living in Malaysia.
-    static let regionHint = "Malaysia"
+    nonisolated static let regionHint = "Malaysia"
 
-    static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?,
+    nonisolated static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?,
                                    isCurrentLocation: Bool = false) -> String {
         let whereText = isCurrentLocation
             ? "within about 1.5 km (a short walk or drive) of the user's current location: "

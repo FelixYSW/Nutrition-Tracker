@@ -32,7 +32,14 @@ struct AddMealView: View {
     /// How many foods "Recent" shows before the search is the better tool.
     private static let recentCount = 10
 
-    private var records: [FoodRecord] { FoodLibrary.records(from: entries) }
+    /// Rebuilt only when the log changes (see FoodLibrary.signature).
+    @State private var cachedRecords: [FoodRecord] = []
+    @State private var cachedRecordsLog: Int?
+    private var records: [FoodRecord] {
+        // Until the cache is filled (the first frame), build them directly.
+        cachedRecordsLog == FoodLibrary.signature(of: entries)
+            ? cachedRecords : FoodLibrary.records(from: entries)
+    }
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var mealTotal: Nutrition { meal.reduce(.zero) { $0 + $1.total } }
     private var canSave: Bool { !meal.isEmpty && meal.allSatisfy(\.isSaveable) }
@@ -82,6 +89,10 @@ struct AddMealView: View {
             } message: {
                 Text(saveError ?? "")
             }
+        }
+        .onChange(of: FoodLibrary.signature(of: entries), initial: true) { _, log in
+            cachedRecords = FoodLibrary.records(from: entries)
+            cachedRecordsLog = log
         }
         .onAppear(perform: collectPendingDrafts)
         .onChange(of: router.pendingDrafts.count) { _, _ in collectPendingDrafts() }
@@ -299,31 +310,23 @@ struct AddMealView: View {
                 NutritionSummaryView(nutrition: mealTotal)
                     .padding(.top, 8)
             }
+            Divider().padding(.vertical, 6)
+            // Now unless a time is picked - for logging a meal from earlier.
+            EatenAtRow(time: $chosenTime)
         }
         .appSkyCard()
     }
 
-    /// One time for the whole meal, and one button. Side by side, or stacked
-    /// when large text no longer fits them on one line.
+    /// One button, in thumb reach. The time is set in "This meal".
     private var saveBar: some View {
-        let time = DatePicker("Eaten", selection: Binding(get: { mealTime },
-                                                          set: { chosenTime = $0 }),
-                              in: ...Date.now.addingTimeInterval(60 * 60),
-                              displayedComponents: [.date, .hourAndMinute])
-            .labelsHidden()
-            .accessibilityLabel("When you ate it")
-        let log = Button {
+        Button {
             save()
         } label: {
-            Text("Log \(meal.count == 1 ? "food" : "\(meal.count) foods")")
+            Text("Log \(meal.count == 1 ? "food" : "\(meal.count) foods") \u{00B7} "
+                 + "\(AppFormatters.amount(mealTotal.calories)) kcal")
         }
         .buttonStyle(.appPrimary)
         .disabled(!canSave)
-
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) { time; log }
-            VStack(spacing: 10) { time; log }
-        }
         .padding(.horizontal, AppTheme.cardPadding + 4)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
@@ -417,12 +420,15 @@ struct AddMealView: View {
                                                 photoPath: draft.photoPath))
             }
         }
+        let loggedFor = mealTime
         do {
             try context.save()
             meal = []
             chosenTime = nil
             notice = nil
             Haptics.success()
+            // Today opens on the day it was logged for, so a past meal shows.
+            router.todayPickedDay = LocalDay.isToday(loggedFor) ? nil : LocalDay.start(of: loggedFor)
             router.selectedTab = .dashboard
         } catch {
             Haptics.error()
@@ -448,8 +454,15 @@ struct HowMuchSheet: View {
     let onAdd: (Double) -> Void
 
     @State private var servings: Double = 1
-    private static let presets: [(label: String, value: Double)] =
-        [("\u{00BD}\u{00D7}", 0.5), ("1\u{00D7}", 1), ("1\u{00BD}\u{00D7}", 1.5), ("2\u{00D7}", 2)]
+    private struct Preset: Identifiable {
+        let label: String
+        let value: Double
+        var id: Double { value }
+    }
+    private static let presets = [Preset(label: "\u{00BD}\u{00D7}", value: 0.5),
+                                  Preset(label: "1\u{00D7}", value: 1),
+                                  Preset(label: "1\u{00BD}\u{00D7}", value: 1.5),
+                                  Preset(label: "2\u{00D7}", value: 2)]
 
     var body: some View {
         NavigationStack {
@@ -465,7 +478,7 @@ struct HowMuchSheet: View {
                     }
 
                     HStack(spacing: 8) {
-                        ForEach(Self.presets, id: \.value) { preset in
+                        ForEach(Self.presets) { preset in
                             Button {
                                 servings = preset.value
                                 Haptics.selection()
@@ -527,21 +540,11 @@ struct MealItemEditor: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: AppTheme.pageSpacing) {
-                    FoodDraftCard(draft: $draft,
-                                  onDelete: onRemove.map { remove -> () -> Void in
-                                      { remove(); dismiss() }
-                                  })
-                    if !draft.isSaveable {
-                        Text("Give it a name and its nutrition to add it.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .appPageContent()
-            }
-            .appPageSurface()
+            FoodEditor(draft: $draft,
+                       removeTitle: onRemove == nil ? nil : "Remove from meal",
+                       onRemove: onRemove.map { remove -> () -> Void in
+                           { remove(); dismiss() }
+                       })
             .keyboardDismissControls()
             .navigationTitle(isNew ? "New food" : "Edit food")
             .navigationBarTitleDisplayMode(.inline)

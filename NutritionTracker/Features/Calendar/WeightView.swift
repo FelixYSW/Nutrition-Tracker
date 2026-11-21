@@ -4,7 +4,7 @@ import Charts
 
 /// The weight graph: every weigh-in as a dot, a 7-day average line through
 /// them, and the goal weight as a dashed line. Lives in the Calendar tab next
-/// to Trends, which keeps the app to four tabs.
+/// to Trends.
 struct WeightView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date, order: .forward) private var entries: [WeightEntry]
@@ -16,7 +16,6 @@ struct WeightView: View {
     private var profile: UserProfile? { profiles.first }
     private var allPoints: [WeightPoint] { WeightStats.points(entries) }
     private var points: [WeightPoint] { WeightStats.filter(allPoints, range: range) }
-    private var average: [WeightPoint] { WeightStats.smoothed(points) }
     private var goal: Double? { profile?.targetWeightKg }
 
     var body: some View {
@@ -116,7 +115,10 @@ struct WeightView: View {
     // MARK: Chart
 
     private var chartCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Worked out once per redraw; the chart reads them many times.
+        let points = self.points
+        let average = WeightStats.smoothed(points)
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Weight \u{00B7} 7-day average")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)

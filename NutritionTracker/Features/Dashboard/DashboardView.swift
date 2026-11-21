@@ -211,9 +211,12 @@ struct DashboardView: View {
     }
 
     private var ringsCard: some View {
+        // Worked out once, not once per ring: each read filters the whole log.
+        let consumed = self.consumed
+        let ranges = self.ranges
         // Four small rings in one row: protein, carbs, fat and fibre. Calories
         // get the hero card above.
-        HStack(alignment: .top, spacing: 4) {
+        return HStack(alignment: .top, spacing: 4) {
             ForEach([Nutrient.protein, .carbs, .fat, .fibre]) { nutrient in
                 CompactMacroRing(nutrient: nutrient,
                                  consumed: consumed[nutrient],
@@ -231,7 +234,8 @@ struct DashboardView: View {
     }
 
     private var entriesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let entries = self.entries
+        return VStack(alignment: .leading, spacing: 12) {
             AppSectionHeading(title: isShowingToday ? "Today's food" : "Food log",
                               trailing: entries.isEmpty ? nil : "\(entries.count)")
 
@@ -309,8 +313,8 @@ struct RangeBar: View {
     }
 }
 
-/// Sheet for editing an already-saved entry, reusing the Add Meal draft editor
-/// so there is one editing implementation.
+/// Sheet for editing an already-saved entry, with the same editor as Add
+/// food so there is one editing implementation. Delete is at the bottom.
 struct EditEntrySheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -319,13 +323,8 @@ struct EditEntrySheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: AppTheme.pageSpacing) {
-                    FoodDraftCard(draft: $draft, onDelete: nil, showsTimePicker: true)
-                }
-                .appPageContent()
-            }
-            .appPageSurface()
+            FoodEditor(draft: $draft, showsTime: true,
+                       removeTitle: "Delete food", onRemove: delete)
             .navigationTitle("Edit food")
             .keyboardDismissControls()
             .navigationBarTitleDisplayMode(.inline)
@@ -339,6 +338,17 @@ struct EditEntrySheet: View {
                 }
             }
         }
+    }
+
+    /// Deleting from the sheet, after the editor's confirmation.
+    private func delete() {
+        if let entry = context.fetchEntry(id: draft.id) {
+            if let photoPath = entry.photoPath { ImageStore.delete(relativePath: photoPath) }
+            context.delete(entry)
+            try? context.save()
+            Haptics.success()
+        }
+        dismiss()
     }
 
     private func save() {

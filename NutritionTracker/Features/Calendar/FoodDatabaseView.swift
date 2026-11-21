@@ -1,6 +1,25 @@
 import SwiftUI
 import SwiftData
 
+/// The Foods tab: the page around the list of foods eaten before.
+struct FoodsView: View {
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
+                    PageHeader(title: "Foods")
+                    FoodDatabaseView()
+                }
+                .appPageContent()
+            }
+            .appPageSurface()
+            // The title is drawn in the page, like every tab.
+            .toolbar(.hidden, for: .navigationBar)
+            .keyboardDismissControls()
+        }
+    }
+}
+
 /// Every food the user has logged before, searchable, with its figures and
 /// history, and a one-tap way to log it again. Built from the food log; there
 /// is no second copy to keep in step.
@@ -10,12 +29,35 @@ struct FoodDatabaseView: View {
     @State private var ownQuery = ""
     @State private var order: FoodLibrarySort = .recent
     @State private var selected: FoodRecord?
+    /// The list on screen, built only when the log, the search or the sort
+    /// changes - not on every redraw: grouping and sorting every food ever
+    /// logged was slow enough to stall sheets closing on this page.
+    private struct ListKey: Equatable {
+        let log: Int
+        let query: String
+        let order: FoodLibrarySort
+    }
+    @State private var cachedList: [FoodRecord] = []
+    @State private var cachedKey: ListKey?
+    @State private var allRecords: [FoodRecord] = []
+    @State private var allRecordsLog: Int?
 
     private var query: String { ownQuery }
 
+    private var listKey: ListKey {
+        ListKey(log: FoodLibrary.signature(of: entries), query: query, order: order)
+    }
+
     private var records: [FoodRecord] {
-        FoodLibrary.sorted(FoodLibrary.filter(FoodLibrary.records(from: entries), query: query),
-                           by: order)
+        let key = listKey
+        if key == cachedKey { return cachedList }
+        return build(for: key)
+    }
+
+    /// Groups the log (only when it changed), then filters and sorts.
+    private func build(for key: ListKey) -> [FoodRecord] {
+        let grouped = key.log == allRecordsLog ? allRecords : FoodLibrary.records(from: entries)
+        return FoodLibrary.sorted(FoodLibrary.filter(grouped, query: key.query), by: key.order)
     }
 
     var body: some View {
@@ -41,13 +83,25 @@ struct FoodDatabaseView: View {
                     .appCard()
             } else {
                 AppSectionHeading(title: "Your foods", trailing: "\(found.count)")
-                ForEach(found) { record in
-                    Button {
-                        selected = record
-                    } label: { row(record) }
-                        .buttonStyle(.plain)
+                // Only the rows on screen are built.
+                LazyVStack(spacing: AppTheme.pageSpacing) {
+                    ForEach(found) { record in
+                        Button {
+                            selected = record
+                        } label: { row(record) }
+                            .buttonStyle(.plain)
+                    }
                 }
             }
+        }
+        .onChange(of: listKey, initial: true) { _, key in
+            if key.log != allRecordsLog {
+                allRecords = FoodLibrary.records(from: entries)
+                allRecordsLog = key.log
+            }
+            cachedList = FoodLibrary.sorted(FoodLibrary.filter(allRecords, query: key.query),
+                                            by: key.order)
+            cachedKey = key
         }
         .sheet(item: $selected) { record in
             FoodRecordSheet(record: record)
@@ -113,6 +167,9 @@ struct FoodRecordSheet: View {
     let record: FoodRecord
     @State private var servings: Double = 1
     @State private var justLogged = false
+    /// Picked only for a past meal; otherwise it's logged at the moment of
+    /// tapping Log.
+    @State private var eatenAt: Date?
 
     private var entry: FoodEntry { record.latest }
 
@@ -148,6 +205,8 @@ struct FoodRecordSheet: View {
                 .appPageContent()
             }
             .appPageSurface()
+            .onChange(of: eatenAt) { _, _ in justLogged = false }
+            .onChange(of: servings) { _, _ in justLogged = false }
             .navigationTitle("Food details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -208,10 +267,11 @@ struct FoodRecordSheet: View {
                 Text("Portion: \(servings == servings.rounded() ? String(Int(servings)) : String(servings))\u{00D7} last time")
                     .font(.subheadline.weight(.semibold))
             }
+            EatenAtRow(time: $eatenAt)
             Button {
                 logAgain()
             } label: {
-                Label(justLogged ? "Logged" : "Log again now",
+                Label(justLogged ? "Logged" : "Log again",
                       systemImage: justLogged ? "checkmark" : "plus")
             }
             .buttonStyle(.appPrimary)
@@ -223,12 +283,38 @@ struct FoodRecordSheet: View {
     /// A copy of the entry at the current time, scaled by the chosen portion.
     /// The ingredients and figures are copied exactly as they were saved.
     private func logAgain() {
-        var draft = FoodEntryDraft(entry: entry).repeated(at: .now, servings: servings)
+        var draft = FoodEntryDraft(entry: entry).repeated(at: eatenAt ?? .now, servings: servings)
         // A copy of a food, not something the assistant did.
         draft.source = entry.source
         context.insert(draft.makeEntry())
         try? context.save()
         Haptics.success()
         justLogged = true
+    }
+}
+
+/// "Eaten: Now" until a time is picked; then the picked date and time, with a
+/// Now button to go back. Used wherever a food can be logged for the past.
+struct EatenAtRow: View {
+    @Binding var time: Date?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            DatePicker("Eaten", selection: Binding(get: { time ?? .now }, set: { time = $0 }),
+                       in: ...Date.now.addingTimeInterval(60 * 60),
+                       displayedComponents: [.date, .hourAndMinute])
+                .font(.subheadline.weight(.semibold))
+            if time != nil {
+                Button("Now") {
+                    time = nil
+                    Haptics.selection()
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.accent)
+                .frame(minWidth: AppTheme.minimumTapTarget, minHeight: AppTheme.minimumTapTarget)
+                .accessibilityHint("Logs it at the current time instead")
+            }
+        }
     }
 }

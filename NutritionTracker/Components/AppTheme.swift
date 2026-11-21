@@ -76,16 +76,21 @@ enum AppTheme {
     /// that keeps 4.5:1 contrast, instead of the system's bright red.
     static var destructiveText: Color { .adaptive(light: 0xA8351C, dark: 0xF08A70) }
 
+    /// Background of every delete button the app draws, with white text:
+    /// 4.8:1 contrast in both modes. A deeper red than protein's #EF4444, so a
+    /// delete never looks like a protein figure.
+    static let destructiveFill = Color(hex: 0xDC2626)
+
     /// Per-nutrient ring colours. Distinct in hue *and* order so they remain
     /// distinguishable for the common forms of colour vision deficiency; the
     /// rings are also always labelled, never colour-only.
     static func color(for nutrient: Nutrient) -> Color {
         switch nutrient {
         case .calories: flame
-        case .protein: Color(hex: 0x0F8B8D)
+        case .protein: Color(hex: 0xEF4444)
         case .carbs: Color(hex: 0xC28A0A)
         case .fat: Color(hex: 0x7A4FD0)
-        case .fibre: Color(hex: 0xC2255C)
+        case .fibre: Color(hex: 0x10B981)
         }
     }
 
@@ -108,10 +113,11 @@ enum AppTheme {
     static func textColor(for nutrient: Nutrient) -> Color {
         switch nutrient {
         case .calories: .adaptive(light: 0xB0441A, dark: 0xF2956A)
-        case .protein: .adaptive(light: 0x0B6B6D, dark: 0x5CC8CA)
+        // Protein and fibre use their exact brand colours in text too.
+        case .protein: Color(hex: 0xEF4444)
         case .carbs: .adaptive(light: 0x855F06, dark: 0xE2B850)
         case .fat: .adaptive(light: 0x6A40C0, dark: 0xB9A0F2)
-        case .fibre: .adaptive(light: 0xA81E50, dark: 0xF07FA6)
+        case .fibre: Color(hex: 0x10B981)
         }
     }
 
@@ -355,6 +361,30 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
+/// Full-width delete buttons: a white bin and white text, side by side, on a
+/// solid red capsule. Give it a `Label(title, systemImage: "trash")`.
+struct DestructiveButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            // Icon on the left, the word on its right, both white.
+            .labelStyle(.titleAndIcon)
+            .font(.system(.body, design: .rounded).weight(.heavy))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .padding(.horizontal, 20)
+            .background(AppTheme.destructiveFill.opacity(isEnabled ? 1 : 0.4), in: Capsule())
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
+            .contentShape(Capsule())
+    }
+}
+
+extension ButtonStyle where Self == DestructiveButtonStyle {
+    static var appDestructive: DestructiveButtonStyle { DestructiveButtonStyle() }
+}
+
 extension ButtonStyle where Self == PrimaryButtonStyle {
     static var appPrimary: PrimaryButtonStyle { PrimaryButtonStyle() }
 }
@@ -468,9 +498,8 @@ struct EstimateDisclaimer: View {
 // MARK: - Nutrient symbols
 
 extension Nutrient {
-    /// SF Symbol used wherever a nutrient needs an icon (rings, summary
-    /// tiles). System symbols, so they follow Dynamic Type and the user's
-    /// weight settings.
+    /// SF Symbol for a nutrient. The app shows the Lucide icons instead (see
+    /// `NutrientIcon`); kept for anything that can only take a symbol name.
     var symbolName: String {
         switch self {
         case .calories: "flame.fill"

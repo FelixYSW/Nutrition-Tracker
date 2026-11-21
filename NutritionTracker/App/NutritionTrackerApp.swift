@@ -35,7 +35,7 @@ struct NutritionTrackerApp: App {
 @Observable
 final class AppRouter {
     enum Tab: Hashable {
-        case dashboard, addMeal, assistant, calendar
+        case dashboard, addMeal, foods, assistant, calendar
     }
 
     var selectedTab: Tab = .dashboard

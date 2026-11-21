@@ -35,16 +35,15 @@ struct ChatHistoryView: View {
                             // The open chat is highlighted with a tinted
                             // row instead of a small label.
                             .listRowBackground(rowBackground(isOpen: conversation.id == currentID))
-                            .swipeActions {
-                                if conversation.id != currentID {
-                                    Button("Delete", systemImage: "trash", role: .destructive) {
-                                        delete(conversation)
-                                    }
-                                    // Red like the health notes' swipe to delete: the
-                                    // app's dark tint would otherwise colour it.
-                                    .tint(.red)
-                                }
-                            }
+                            // The chat on screen can't be deleted from here.
+                            .deleteDisabled(conversation.id == currentID)
+                        }
+                        // iOS's own swipe to delete - a red circle with a
+                        // white bin, the same as health notes and weigh-ins.
+                        // A custom swipe button picked up the app's dark ink
+                        // for its icon.
+                        .onDelete { offsets in
+                            for index in offsets { delete(group.items[index]) }
                         }
                         }
                         }
