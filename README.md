@@ -1,6 +1,6 @@
 # Nutrition Tracker
 
-A native iPhone app for tracking calories and macros. It sets daily targets as ranges, logs food by hand, from a photo, or from a barcode, and shows trends over time. Data stays on the phone. The one exception is the optional AI assistant, which needs the internet.
+A native iPhone app for tracking calories and macros. It sets daily targets as ranges, logs food from your past foods, by hand, or through the assistant (photo or description), and shows trends over time. Data stays on the phone. The one exception is the optional AI assistant, which needs the internet.
 
 > Targets and photo-based nutrition are **estimates**, not medical advice.
 
@@ -28,7 +28,7 @@ A native iPhone app for tracking calories and macros. It sets daily targets as r
   
   The ring shades the target band so you can see where "in range" is at a glance.
 - **Add Meal** is a list of draft foods. Each can be a simple food or a composite food made of ingredients, with minus/plus quantity controls. You can backdate a meal.
-- **Scan** has three actions: Take Photo, Choose Photo, Scan Barcode. Photos go through two on-device models. Barcodes are looked up in a local cache, then Open Food Facts.
+- **Add food** searches the foods you've logged before (tap for "how much?", + for the same as last time), with Photo and Describe buttons that hand over to the assistant, and New food for typing in a label. Everything added is saved together as one meal.
 - **Calendar** shows any day's food log. A **Trends** view charts daily, weekly and monthly calories and macros against your target band.
 - **Assistant** (optional, from the Dashboard nav bar) suggests what to eat with the room you have left. It can also log, edit and delete food, or summarise your trends. **Every change it proposes waits for you to confirm it.**
 - **Settings** (gear icon on the Dashboard) covers profile, ranges, backup and restore, and data deletion. Neither the AI assistant nor the photo models have settings.
@@ -48,14 +48,13 @@ NutritionTracker/
     Nutrition/  NutritionTargetCalculator, NutritionRepository, FoodOntology
     AI/         Model A/B protocols, Core ML adapters, pipeline
     Assistant/  provider-agnostic service, context builder, tools, executor
-    Barcode/    Open Food Facts client, cache-first lookup
     Backup/     versioned JSON export/import
     Keychain/   built-in assistant key reader, legacy key cleanup
     Images/     photo storage and preparation
   Features/     Onboarding, Dashboard, Scan, AddMeal, Calendar, Settings, Assistant
   Components/   rings, steppers, cards, shared views, theme
   Utilities/    local-day logic, midnight observer, trend aggregation
-  Resources/    ontology.json, myfcd_reference.json (+ .mlpackage models when added)
+  Resources/    ontology.json (photo label map) (+ .mlpackage models when added)
 NutritionTrackerTests/
 ml/             training, evaluation, Core ML export (see ml/README.md)
 docs/           ARCHITECTURE.md
@@ -63,7 +62,7 @@ docs/           ARCHITECTURE.md
 
 Key decisions:
 
-- **Every save path goes through a draft.** Manual entry, photo analysis, barcodes and the assistant all produce a `FoodEntryDraft` that you review. Nothing AI-generated is saved without you seeing it.
+- **Every save path goes through a draft.** Manual entry, past foods and the assistant all produce a `FoodEntryDraft` that you review. Nothing AI-generated is saved without you seeing it.
 - **No stored daily totals.** Today's figures, the Calendar and Trends all filter `FoodEntry.consumedAt` when they're shown. At local midnight the day changes and the totals start from zero; nothing is deleted. The app listens for `NSCalendarDayChanged`, time zone changes and returning to the foreground.
 - **Totals are calculated, not stored.** A composite food's nutrition comes from its ingredients, and the parent quantity scales all of them.
 - **Targets are ranges.** All the calculation constants live in `NutritionConstants`. Recalculating keeps any range end you edited by hand.
@@ -96,7 +95,7 @@ The bundle identifier is `com.felix.NutritionTracker`. Don't change it: Sideload
 
 ## On-device models
 
-The app **builds and runs without any model files**. Model status isn't shown anywhere. If the recognition model is missing, tapping Take Photo or Choose Photo says "Model not available"; if only the portion model is missing, photos still work but Add Meal says the amounts are rough defaults. Barcode scanning and manual entry always work.
+The app **builds and runs without any model files**. Model status isn't shown anywhere. If the recognition model is missing, tapping Take Photo or Choose Photo says "Model not available"; if only the portion model is missing, photos still work but Add Meal says the amounts are rough defaults. Manual entry always works.
 
 | Model | Expected file in the app bundle | Produces |
 |---|---|---|
@@ -133,7 +132,7 @@ Note: on a public repo, any signed-in GitHub user can download Actions artifacts
 1. Prepare the image once, at 640 px on the longest edge.
 2. Model A identifies the foods and how much of the plate each covers.
 3. Model B estimates the mass of each.
-4. Nutrition comes from the reference table wherever a food matches. Model B's own nutrition estimate is used only as the last resort.
+4. Model B's whole-plate nutrition estimate is split across the foods by their share of the mass.
 5. Swift adds everything up.
 6. The result opens in Add Meal for you to review.
 
@@ -141,23 +140,11 @@ Any detection below 60% confidence is flagged.
 
 ## Nutrition data
 
-The app looks up nutrition in this order, using the first match:
+The app has no built-in food table. Figures come from:
 
-1. **Your own saved foods.** Barcode products you entered by hand count as verified.
-2. **Open Food Facts**, for barcodes. Results are cached locally for 90 days, and an out-of-date cache entry is still used when you're offline.
-3. **MyFCD**, the Malaysian Food Composition Database (Ministry of Health), for local dishes.
-4. A **generic reference** table for other foods.
-5. **Model B's estimate**, as the last resort.
-
-MyFCD has no API, so its values are copied in by hand and bundled with the app. Nothing is scraped at runtime.
-
-```bash
-# 1. Fill in per-100 g values from myfcd.moh.gov.my in ml/config/myfcd_reference.csv
-# 2. Compile into the app bundle:
-python ml/scripts/compile_reference.py
-```
-
-> **Current state:** the 14 MyFCD rows are **blank placeholders** waiting for real values. The 19 generic rows are typical reference figures entered by hand; spot-check them. Until MyFCD is filled in, Malaysian dishes rely on manual entry or Model B.
+1. **You**: a label you type in, or a food you logged before (copied exactly).
+2. **The assistant**: published brand figures it looks up, or its own per-100 g estimates. Estimates are checked against their protein, carbs and fat (4/4/9 kcal per gram), and the prompt carries reference figures for common foods so they stay consistent.
+3. **Photo analysis**: Model B's whole-plate estimate, split by mass.
 
 ## AI assistant (OpenAI GPT-6 Luna)
 
@@ -246,8 +233,6 @@ The IPA is deliberately unsigned; Sideloadly signs it.
 
 The app credits its data sources in Settings → About → Data sources:
 
-- MyFCD
-- Open Food Facts (ODbL)
 - FoodSeg103
 - Nutrition5k
 - Malaysia Food-11
@@ -262,4 +247,4 @@ This repository was written on Windows, **without macOS, Xcode, a GPU or a Pytho
 
 - The Swift code has **not been compiled**, and the XCTest suite has **not been run**. The first GitHub Actions run (or `xcodebuild` on a Mac) is the first real compile. Expect to fix some compiler errors.
 - The Python training code has **not been run**, not even syntax-checked. Neither model has been trained, and no `.mlpackage` exists yet.
-- `NutritionTracker/Resources/myfcd_reference.json` and `ontology.json` **were** generated by running a Node port of `compile_reference.py`.
+- `NutritionTracker/Resources/ontology.json` **was** generated by running a Node port of `compile_reference.py`.

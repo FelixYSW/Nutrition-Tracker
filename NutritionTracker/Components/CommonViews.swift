@@ -15,7 +15,7 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: systemImage)
-                .font(.system(size: 34, weight: .light))
+                .font(.largeTitle.weight(.light))
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text(title)
@@ -51,7 +51,7 @@ struct ErrorStateView: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 30, weight: .light))
+                .font(.largeTitle.weight(.light))
                 .foregroundStyle(AppTheme.over)
                 .accessibilityHidden(true)
             Text(title)

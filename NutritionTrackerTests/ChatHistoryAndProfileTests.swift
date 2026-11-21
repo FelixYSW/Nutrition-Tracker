@@ -98,6 +98,28 @@ final class TargetUpdaterTests: XCTestCase {
         XCTAssertEqual(all.effective(on: changed)?.ranges, light)
     }
 
+    func testMaintenanceBeforeAChangeIsKeptOnAnOldRecordWithNone() throws {
+        let context = TestSupport.makeContext()
+        let profile = makeProfile(weight: 80)
+        context.insert(profile)
+        TargetUpdater.update(for: profile, in: context)
+        // A record from before maintenance was saved, made some days ago.
+        let old = try XCTUnwrap(context.loadNutritionTarget())
+        old.maintenanceCalories = nil
+        old.createdAt = Date.now.addingTimeInterval(-3 * 86_400)
+        old.updatedAt = old.createdAt
+
+        let before = NutritionTargetCalculator.calculate(profile: profile).tdee
+        profile.weightKg = 70
+        TargetUpdater.update(for: profile, in: context, previousMaintenance: before)
+
+        let all = try context.fetch(FetchDescriptor<NutritionTarget>())
+        XCTAssertEqual(all.count, 2)
+        XCTAssertEqual(old.maintenanceCalories, before, "the old record keeps what applied then")
+        let latest = try XCTUnwrap(context.loadNutritionTarget())
+        XCTAssertLessThan(try XCTUnwrap(latest.maintenanceCalories), before)
+    }
+
     func testChangingWeightRecalculatesTargets() throws {
         let context = TestSupport.makeContext()
         let profile = makeProfile()

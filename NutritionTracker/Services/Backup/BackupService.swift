@@ -17,6 +17,8 @@ struct BackupFile: Codable, Equatable {
     var target: TargetDTO?
     var foodEntries: [FoodEntryDTO]
     var barcodeCache: [BarcodeCacheDTO]
+    /// Added after the first release: absent in older backups, which still load.
+    var weightEntries: [WeightDTO]?
 
     init(schemaVersion: Int = BackupFile.currentSchemaVersion,
          exportDate: Date = .now,
@@ -24,7 +26,8 @@ struct BackupFile: Codable, Equatable {
          profile: ProfileDTO? = nil,
          target: TargetDTO? = nil,
          foodEntries: [FoodEntryDTO] = [],
-         barcodeCache: [BarcodeCacheDTO] = []) {
+         barcodeCache: [BarcodeCacheDTO] = [],
+         weightEntries: [WeightDTO]? = nil) {
         self.schemaVersion = schemaVersion
         self.exportDate = exportDate
         self.appVersion = appVersion
@@ -32,7 +35,14 @@ struct BackupFile: Codable, Equatable {
         self.target = target
         self.foodEntries = foodEntries
         self.barcodeCache = barcodeCache
+        self.weightEntries = weightEntries
     }
+}
+
+struct WeightDTO: Codable, Equatable {
+    var id: UUID
+    var date: Date
+    var weightKg: Double
 }
 
 struct ProfileDTO: Codable, Equatable {
@@ -212,6 +222,9 @@ struct BackupService {
                                 nutritionPerServing: $0.nutritionPerServing,
                                 isUserEntered: $0.isUserEntered,
                                 fetchedAt: $0.fetchedAt)
+            },
+            weightEntries: context.fetchWeightEntries().map {
+                WeightDTO(id: $0.id, date: $0.date, weightKg: $0.weightKg)
             })
     }
 
@@ -449,6 +462,14 @@ struct BackupService {
             summary.productsImported += 1
         }
 
+        // Weight history. Merging keeps the weigh-in already on a day.
+        for dto in file.weightEntries ?? [] where dto.weightKg > 0 {
+            if strategy == .merge, !context.fetchWeightEntries().filter({
+                LocalDay.calendar().isDate($0.date, inSameDayAs: dto.date)
+            }).isEmpty { continue }
+            context.insert(WeightEntry(id: dto.id, date: dto.date, weightKg: dto.weightKg))
+        }
+
         do {
             try context.save()
         } catch {
@@ -469,6 +490,7 @@ struct BackupService {
         try? context.delete(model: CorrectionRecord.self)
         try? context.delete(model: UserProfile.self)
         try? context.delete(model: NutritionTarget.self)
+        try? context.delete(model: WeightEntry.self)
         if includingImages {
             ImageStore.deleteAll()
         }

@@ -54,6 +54,9 @@ final class ChatSession {
     var deferredResults: [AssistantTurn.Block] = []
     var cardOutcomes: [String: [String]] = [:]
     var lookedUpProducts: [String] = []
+    /// Search answers already paid for in this chat, by question. Asking the
+    /// same thing again reuses the answer instead of searching again.
+    var searchCache: [String: String] = [:]
 
     init(id: UUID = UUID(), createdAt: Date = .now) {
         self.id = id
@@ -167,6 +170,9 @@ final class AssistantViewModel {
 
     /// Guards against an unbounded tool loop if the model keeps calling tools.
     private static let maxToolRoundTrips = 5
+    /// Web searches are billed one by one: at most this many per message
+    /// the user sends. Repeats answered from the chat's cache don't count.
+    static let maxSearchesPerMessage = 2
 
     /// Sent to the model when the user attaches a file without typing anything.
     static let fileOnlyPrompt = "[The user sent only this file, with no message. Read it; "
@@ -302,6 +308,7 @@ final class AssistantViewModel {
     private func runLoop(in chat: ChatSession) async {
         chat.isSending = true
         defer { chat.isSending = false }
+        var searchesRun = 0
 
         for _ in 0..<Self.maxToolRoundTrips {
             let contextJSON: String
@@ -365,7 +372,13 @@ final class AssistantViewModel {
                     // Food nearby with no place named searches around the
                     // user's current location instead of guessing a place.
                     var here: CurrentPlace?
-                    if call.tool == .findFoodNearby, Self.namedPlace(in: call.arguments) == nil {
+                    // An area the user named - in the call, or failing that in
+                    // their own message - always beats their GPS location.
+                    let named = call.tool == .findFoodNearby
+                        ? AssistantPlaceResolver.place(arguments: call.arguments,
+                                                       userText: Self.latestUserText(in: chat.turns))
+                        : nil
+                    if call.tool == .findFoodNearby, named == nil {
                         do {
                             guard let locator else { throw CurrentLocationError.unavailable }
                             here = try await locator.currentPlace()
@@ -379,9 +392,28 @@ final class AssistantViewModel {
                             continue
                         }
                     }
-                    let (question, activity) = Self.webQuestion(for: call, currentPlace: here)
+                    let (question, activity) = Self.webQuestion(for: call, currentPlace: here,
+                                                                resolvedPlace: named)
+                    let cacheKey = Self.searchCacheKey(question)
+                    if let cached = chat.searchCache[cacheKey] {
+                        // Same question earlier in this chat: no new search.
+                        resultBlocks.append(.toolResult(id: call.id, content: cached, isError: false))
+                        continue
+                    }
+                    guard searchesRun < Self.maxSearchesPerMessage else {
+                        resultBlocks.append(.toolResult(
+                            id: call.id,
+                            content: "{\"status\":\"error\",\"detail\":\"Search limit for this "
+                                + "message reached (\(Self.maxSearchesPerMessage)). Answer with what "
+                                + "you already have, or estimate; do not search again.\"}",
+                            isError: true))
+                        continue
+                    }
+                    searchesRun += 1
                     append(.toolActivity(activity), to: chat)
-                    let (content, failed, summary, failure) = await searchWeb(question)
+                    let (content, failed, summary, failure) = await searchWeb(
+                        question, place: named ?? here?.name)
+                    if !failed { chat.searchCache[cacheKey] = content }
                     // The model only says "the lookup failed"; the reason (wrong
                     // model name, no quota) is for the user to see.
                     if let failure, !shownSearchFailure {
@@ -490,8 +522,29 @@ final class AssistantViewModel {
         return meaningHere.contains(place.lowercased()) ? nil : place
     }
 
+    /// Questions that differ only in case or spacing are the same search.
+    static func searchCacheKey(_ question: String) -> String {
+        question.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The text of the user's latest message: the last text block of the most
+    /// recent user turn that has one (tool results carry none).
+    static func latestUserText(in turns: [AssistantTurn]) -> String? {
+        for turn in turns.reversed() where turn.role == .user {
+            let texts = turn.blocks.compactMap { block -> String? in
+                if case .text(let text) = block { return text }
+                return nil
+            }
+            if let last = texts.last { return last }
+        }
+        return nil
+    }
+
+    /// `resolvedPlace` is the area to search, already worked out from the call
+    /// and the user's message (see `AssistantPlaceResolver`).
     static func webQuestion(for call: AssistantToolCall,
-                            currentPlace: CurrentPlace? = nil) -> (question: String, activity: String) {
+                            currentPlace: CurrentPlace? = nil,
+                            resolvedPlace: String? = nil) -> (question: String, activity: String) {
         let arguments = call.arguments
         if call.tool == .findProducts {
             let query = arguments["query"]?.stringValue ?? ""
@@ -510,14 +563,15 @@ final class AssistantViewModel {
         // model to fit to the user's ranges and budget.
         let budget = arguments["budget"]?.stringValue
         let preferences = arguments["preferences"]?.stringValue
-        if let currentPlace, namedPlace(in: arguments) == nil {
+        let named = resolvedPlace ?? namedPlace(in: arguments)
+        if let currentPlace, named == nil {
             return (nearbyFoodQuestion(place: currentPlace.searchDescription, budget: budget,
                                        preferences: preferences, isCurrentLocation: true),
                     "Searched for food near you" + (currentPlace.name.map { " (\($0))" } ?? ""))
         }
-        let place = namedPlace(in: arguments) ?? ""
+        let place = named ?? ""
         return (nearbyFoodQuestion(place: place, budget: budget, preferences: preferences),
-                "Searched for food near \(place)")
+                "Searched for food at \(place)")
     }
 
     static func productSearchQuestion(query: String, country: String?, goal: String?) -> String {
@@ -555,15 +609,20 @@ final class AssistantViewModel {
 
     /// The tool result, whether it failed, the answer text when it didn't, and
     /// the reason when it did.
-    private func searchWeb(_ question: String) async -> (String, Bool, String?, String?) {
+    private func searchWeb(_ question: String,
+                           place: String? = nil) async -> (String, Bool, String?, String?) {
         do {
             let result = try await service.searchWeb(question)
             struct Payload: Encodable {
                 let status = "ok"
+                /// Where the search was for, so the reply can say so.
+                let searchedPlace: String?
                 let summary: String
                 let sources: [WebSearchResult.Source]
             }
-            let data = try JSONEncoder().encode(Payload(summary: result.summary, sources: result.sources))
+            let data = try JSONEncoder().encode(Payload(searchedPlace: place,
+                                                        summary: result.summary,
+                                                        sources: result.sources))
             return (String(decoding: data, as: UTF8.self), false, result.summary, nil)
         } catch {
             return ("{\"status\":\"error\",\"detail\":\"\(Self.escape(error.localizedDescription))\"}",
@@ -580,12 +639,18 @@ final class AssistantViewModel {
         return text.range(of: calorieNumber, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
+    /// Added to a named place, so a mall that shares its name with one in
+    /// another country isn't picked. The app is for people living in Malaysia.
+    static let regionHint = "Malaysia"
+
     static func nearbyFoodQuestion(place: String, budget: String?, preferences: String?,
                                    isCurrentLocation: Bool = false) -> String {
         let whereText = isCurrentLocation
             ? "within about 1.5 km (a short walk or drive) of the user's current location: "
                 + "\(place). Nearest first"
-            : "at or right next to \(place)"
+            : "inside or right next to \"\(place)\" in \(regionHint). Search only this place: "
+                + "never substitute a different mall or area. If several places share the name, "
+                + "use the best-known one and say which"
         var lines = [
             "Find restaurants, food court stalls, cafes and kiosks that are open and operating "
                 + "\(whereText). List up to 8 that suit the request.",

@@ -43,7 +43,7 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # Portrait-only on purpose; full screen tells iOS that is intended.
         INFOPLIST_KEY_UIRequiresFullScreen: YES
-        INFOPLIST_KEY_NSCameraUsageDescription: Used to photograph food for nutrition analysis and to scan product barcodes.
+        INFOPLIST_KEY_NSCameraUsageDescription: Used to photograph food for nutrition analysis and to measure your fist size.
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Used to pick food photos to analyse.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Used only when you ask the assistant for places to eat nearby, to search around where you are.
         ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES

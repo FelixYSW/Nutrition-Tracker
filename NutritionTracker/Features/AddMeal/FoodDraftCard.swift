@@ -111,18 +111,16 @@ struct FoodDraftCard: View {
                 }
             }
 
-            optionsMenu
+            // Only what the card doesn't already show as a button.
+            if !draft.isComposite || onDelete != nil {
+                optionsMenu
+            }
         }
     }
 
     private var optionsMenu: some View {
         Menu {
-            if draft.isComposite {
-                Button("Add ingredient", systemImage: "plus") { addIngredient() }
-            } else {
-                Button("Edit nutrition", systemImage: "slider.horizontal.3") {
-                    isEditingNutrition = true
-                }
+            if !draft.isComposite {
                 Button("Break into ingredients", systemImage: "list.bullet.indent") {
                     addIngredient()
                 }

@@ -48,9 +48,9 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 + "replacesCard. "
                 + "List every component separately with the grams actually eaten - "
                 + "including cooking oil, sauces and drinks - and never give a total for "
-                + "the whole dish: the app works out the totals itself from its nutrition "
-                + "database. For each component also give your best per-100 g estimate; "
-                + "it is only used when the database has no match. Not for something the "
+                + "the whole dish: the app works out the totals itself from grams x per-100 g. "
+                + "Give every component its per-100 g figures (kcal, protein, carbs, fat) - "
+                + "they are used as given. Not for something the "
                 + "user forgot from a meal already logged - edit that entry instead."
         case .repeatFoodEntry:
             "Propose logging a food from the user's log again, exactly as it was - every "
@@ -100,8 +100,8 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 + "(e.g. \"At most 1 banana a day\", \"Limit prawns, organ meat and anchovies "
                 + "- high purine\"). Shown as a confirmation card."
         case .calculateNutrition:
-            "Work out kcal, protein, carbs and fat for foods with the app's own nutrition "
-                + "data - exactly what a card would show - without logging anything. Call it "
+            "Work out kcal, protein, carbs and fat for foods from their grams and per-100 g "
+                + "figures - exactly what a card would show - without logging anything. Call it "
                 + "before quoting figures for specific foods, and quote its numbers. Read-only."
         case .lookUpProductNutrition:
             "Search the web for a branded or packaged product's published nutrition "
@@ -129,7 +129,7 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                                       + "Omit for a new card.")
         let item = Self.object([
             "name": Self.field("string", "One component, e.g. \"konjac knots\", \"egg\", "
-                               + "\"cooking oil\". Plain food names match the database best."),
+                               + "\"cooking oil\"."),
             "grams": Self.field("number", "Grams of this component actually eaten. "
                                 + "Convert pieces to grams (e.g. 2 eggs = 100)."),
             "kcalPer100g": Self.field("number", "Per 100 g (or 100 ml) of this component: "
@@ -143,11 +143,10 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 "string",
                 "Where the per-100 g figures come from. \"label\": a nutrition table the user "
                     + "typed or photographed. \"brand\": the brand's published values found with "
-                    + "lookUpProductNutrition. Both are used exactly as given, ahead of the app's "
-                    + "database. \"saved\": copied from an entry already in the user's log "
-                    + "(queryEntries lists each ingredient's figures), used exactly as given. "
-                    + "\"estimate\" (default): your guess, replaced by the database "
-                    + "when it knows the food.",
+                    + "lookUpProductNutrition. \"saved\": copied from an entry already in the "
+                    + "user's log (queryEntries lists each ingredient's figures). \"estimate\" "
+                    + "(default): your own figures. All are used as given; estimates are only "
+                    + "checked for calories that don't match their protein, carbs and fat.",
                 allowed: ["label", "brand", "saved", "estimate"])
         ], required: ["name", "grams"])
 
@@ -217,9 +216,11 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         case .findFoodNearby:
             return Self.object([
-                "place": Self.field("string", "Only when the user names an area, street, mall "
-                                    + "or city in this message - exactly as they said it. "
-                                    + "Omit it to search around their current location."),
+                "place": Self.field("string", "The mall, area, street or city the user named in "
+                                    + "this message, exactly as they said it (\"Sunway Pyramid\", "
+                                    + "\"Mid Valley\", \"Bangsar\") - always put it here, never in "
+                                    + "preferences. Omit it ONLY when they named no place and "
+                                    + "want food around where they are."),
                 "budget": Self.field("string", "The user's budget if they gave one, e.g. "
                                      + "\"RM15 per person\"."),
                 "preferences": Self.field("string", "What to look for, e.g. \"high protein, "
@@ -542,9 +543,8 @@ enum AssistantArgumentParser {
     ///
     /// Every component becomes a gram-based ingredient whose values are per
     /// 100 g, so they scale correctly when the user changes the amount. The
-    /// model's per-100 g figures are only provisional: `AssistantToolExecutor`
-    /// replaces them with the app's nutrition database wherever it has a match.
-    /// Whole-dish totals from the model are never used - they were the source of
+    /// model's per-100 g figures are used as given, after a plausibility check
+    /// (`plausiblePer100g`). Whole-dish totals from the model are never used - they were the source of
     /// wildly wrong entries (e.g. a ~300 kcal plate logged as 1,000).
     static func parseAdd(arguments: [String: JSONValue],
                          resolve: (IngredientDraft) -> IngredientDraft = { $0 }) throws -> FoodEntryDraft {

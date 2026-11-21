@@ -1,94 +1,60 @@
 import SwiftUI
 import SwiftData
 
-/// Add Meal holds one or more draft food cards before saving (spec section 12).
+/// Add food (spec section 12), built around the quickest way to log:
 ///
-/// It always shows at least one card: the page opens with a blank one ready to
-/// fill in, and the last card can't be removed. It is also the mandatory review
-/// step for the photo pipeline, barcode scanning and the assistant, all of which
-/// hand over drafts rather than writing to the database.
+/// 1. Search what you've eaten before and add it in a tap, choosing how much.
+/// 2. Or hand it to the assistant: a photo (it uses your fist for scale) or
+///    a description.
+/// 3. Or type a new food's figures from its label.
+///
+/// Everything added collects in "This meal" and is saved together at one
+/// time. It is still the review step for drafts handed over by the
+/// assistant, which never write to the database themselves.
 struct AddMealView: View {
     @Environment(\.modelContext) private var context
     @Environment(AppRouter.self) private var router
+    @Query(sort: \FoodEntry.consumedAt, order: .reverse) private var entries: [FoodEntry]
 
-    @State private var drafts: [FoodEntryDraft] = [FoodEntryDraft()]
+    @State private var meal: [FoodEntryDraft] = []
+    /// Set only when the user picks a time; otherwise the meal is "now" at
+    /// the moment it's logged, however long the tab has been open.
+    @State private var chosenTime: Date?
+    private var mealTime: Date { chosenTime ?? .now }
+    @State private var query = ""
+    @FocusState private var isSearchFocused: Bool
+    @State private var choosingAmount: FoodRecord?
+    @State private var editing: MealItemTarget?
     @State private var saveError: String?
-    /// Explanation handed over with scanned or photographed drafts.
+    /// Explanation handed over with drafts from elsewhere in the app.
     @State private var notice: String?
 
-    /// Default is now; changing it relabels the save button.
-    private var isBackdated: Bool {
-        guard let first = drafts.first else { return false }
-        return !LocalDay.isToday(first.consumedAt)
-    }
+    /// How many foods "Recent" shows before the search is the better tool.
+    private static let recentCount = 10
 
-    private var combinedTotal: Nutrition {
-        drafts.reduce(.zero) { $0 + $1.total }
-    }
-
-    private var canSave: Bool {
-        drafts.allSatisfy(\.isSaveable)
-    }
-
-    /// One time for the whole meal, applied to every food on the page.
-    private var mealTime: Binding<Date> {
-        Binding(
-            get: { drafts.first?.consumedAt ?? .now },
-            set: { time in
-                for index in drafts.indices { drafts[index].consumedAt = time }
-            })
-    }
+    private var records: [FoodRecord] { FoodLibrary.records(from: entries) }
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var mealTotal: Nutrition { meal.reduce(.zero) { $0 + $1.total } }
+    private var canSave: Bool { !meal.isEmpty && meal.allSatisfy(\.isSaveable) }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppTheme.pageSpacing) {
-                    PageHeader(title: "Add meal")
+                    PageHeader(title: "Add food")
 
-                    if let notice {
-                        noticeCard(notice)
-                    } else if drafts.contains(where: { $0.source == .photoAI }) {
-                        // The hand-over notice already says this, so only one shows.
-                        EstimateDisclaimer().appCard()
+                    if let notice { noticeCard(notice) }
+
+                    searchField
+
+                    if !meal.isEmpty { mealSection }
+
+                    if trimmedQuery.isEmpty {
+                        quickActions
+                        recentSection
+                    } else {
+                        resultsSection
                     }
-
-                    ForEach($drafts) { $draft in
-                        FoodDraftCard(draft: $draft,
-                                      onDelete: deleteAction(for: draft.id))
-                    }
-
-                    DashedAddButton(title: "Add another food") { addCard() }
-
-                    DatePicker("Eaten at", selection: mealTime,
-                               in: ...Date.now.addingTimeInterval(60 * 60),
-                               displayedComponents: [.date, .hourAndMinute])
-                        .font(.subheadline.weight(.semibold))
-                        .appCard()
-
-                    // The whole meal's calories, always; the macro tiles join
-                    // them once there is more than one food to add up.
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Meal total")
-                                .font(.subheadline.weight(.heavy))
-                            if drafts.count > 1 {
-                                Text("\(drafts.count) foods")
-                                    .font(.caption)
-                                    .foregroundStyle(AppTheme.skyCardText)
-                            }
-                            Spacer()
-                            Text(AppFormatters.amount(combinedTotal.calories))
-                                .font(.system(.title3, design: .rounded).weight(.heavy))
-                                .monospacedDigit()
-                            Text("kcal")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(AppTheme.skyCardText)
-                        }
-                        if drafts.count > 1 {
-                            NutritionSummaryView(nutrition: combinedTotal)
-                        }
-                    }
-                    .appSkyCard()
                 }
                 .appPageContent()
             }
@@ -96,7 +62,19 @@ struct AddMealView: View {
             // The title is drawn in the page, like every tab.
             .toolbar(.hidden, for: .navigationBar)
             .keyboardDismissControls()
-            .safeAreaInset(edge: .bottom) { saveBar }
+            .safeAreaInset(edge: .bottom) {
+                if !meal.isEmpty { saveBar }
+            }
+            .sheet(item: $choosingAmount) { record in
+                HowMuchSheet(record: record) { servings in
+                    add(record, servings: servings)
+                }
+            }
+            .sheet(item: $editing) { target in
+                MealItemEditor(draft: target.draft, isNew: target.isNew,
+                               onDone: { draft in commit(draft, for: target) },
+                               onRemove: target.isNew ? nil : { remove(id: target.draft.id) })
+            }
             .alert("Could not save",
                    isPresented: Binding(get: { saveError != nil },
                                         set: { if !$0 { saveError = nil } })) {
@@ -109,7 +87,249 @@ struct AddMealView: View {
         .onChange(of: router.pendingDrafts.count) { _, _ in collectPendingDrafts() }
     }
 
-    // MARK: Pieces
+    // MARK: Search
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("What did you eat?", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($isSearchFocused)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: AppTheme.minimumTapTarget, height: AppTheme.minimumTapTarget)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.leading, 14)
+        .frame(minHeight: 50)
+        .background(AppTheme.cardBackground, in: Capsule())
+        .overlay(Capsule().stroke(AppTheme.cardBorder, lineWidth: 1))
+    }
+
+    // MARK: Ways to add
+
+    private var quickActions: some View {
+        HStack(spacing: 10) {
+            actionTile("Photo", systemImage: "camera",
+                       hint: "Opens the assistant's camera") {
+                router.openAssistant(.photo)
+            }
+            actionTile("Describe", systemImage: "text.bubble",
+                       hint: "Tell the assistant what you ate") {
+                router.openAssistant(.describe)
+            }
+            actionTile("New food", systemImage: "square.and.pencil",
+                       hint: "Type in a food's figures from its label") {
+                editing = MealItemTarget(draft: FoodEntryDraft(consumedAt: mealTime), isNew: true)
+            }
+        }
+    }
+
+    private func actionTile(_ title: String, systemImage: String, hint: String,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(AppTheme.ink)
+            .frame(maxWidth: .infinity, minHeight: 72)
+            .background(AppTheme.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(AppTheme.cardBorder, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(hint)
+    }
+
+    // MARK: Lists of foods
+
+    private var recentSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            let recent = Array(FoodLibrary.sorted(records, by: .recent).prefix(Self.recentCount))
+            if recent.isEmpty {
+                EmptyStateView(title: "Nothing logged yet",
+                               message: "Use Photo or Describe and the assistant works it out, "
+                                   + "or New food to type in a label. Foods you log show up "
+                                   + "here to add again in one tap.",
+                               systemImage: "fork.knife")
+                    .appCard()
+            } else {
+                AppSectionHeading(title: "Recent")
+                ForEach(recent) { record in foodRow(record) }
+            }
+        }
+    }
+
+    private var resultsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            let found = Array(FoodLibrary.sorted(FoodLibrary.filter(records, query: trimmedQuery),
+                                                 by: .mostLogged).prefix(20))
+            if !found.isEmpty {
+                AppSectionHeading(title: "Your foods", trailing: "\(found.count)")
+                ForEach(found) { record in foodRow(record) }
+            }
+            // Always offered, so a food never seen before is one tap away.
+            Button {
+                var draft = FoodEntryDraft(consumedAt: mealTime)
+                draft.name = trimmedQuery.prefix(1).uppercased() + trimmedQuery.dropFirst()
+                editing = MealItemTarget(draft: draft, isNew: true)
+            } label: {
+                Label("New food \u{201C}\(trimmedQuery)\u{201D}", systemImage: "plus.circle.fill")
+                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: AppTheme.minimumTapTarget, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .appCard()
+
+            if found.isEmpty {
+                Text("Not something you've logged before. Type its figures in, or let the "
+                     + "assistant work it out with Photo or Describe.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Tap for "how much?"; + adds the same as last time straight away.
+    private func foodRow(_ record: FoodRecord) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                choosingAmount = record
+            } label: {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(record.name)
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                            .multilineTextAlignment(.leading)
+                        Text(Self.amountText(record.latest) + " \u{00B7} "
+                             + AppFormatters.amount(record.latestTotal.calories) + " kcal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                }
+                .frame(minHeight: AppTheme.minimumTapTarget)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Choose how much, then add it to this meal")
+
+            Button {
+                add(record, servings: 1)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.body.weight(.bold))
+                    .foregroundStyle(AppTheme.onAccent)
+                    .frame(width: 36, height: 36)
+                    .background(AppTheme.accentFill, in: Circle())
+                    .frame(width: AppTheme.minimumTapTarget, height: AppTheme.minimumTapTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add \(record.name), same as last time")
+        }
+        .appCard()
+    }
+
+    // MARK: This meal
+
+    private var mealSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            AppSectionHeading(title: "This meal",
+                              trailing: "\(AppFormatters.amount(mealTotal.calories)) kcal")
+                .padding(.bottom, 6)
+            ForEach(meal) { draft in
+                HStack(spacing: 8) {
+                    Button {
+                        editing = MealItemTarget(draft: draft, isNew: false)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(draft.name.isEmpty ? "Unnamed food" : draft.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .multilineTextAlignment(.leading)
+                                Text("\(AppFormatters.quantity(draft.quantity, unit: draft.unit)) "
+                                     + draft.unit.shortLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 4)
+                            Text("\(AppFormatters.amount(draft.total.calories)) kcal")
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                        }
+                        .frame(minHeight: AppTheme.minimumTapTarget)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Edit this food")
+
+                    Button {
+                        remove(id: draft.id)
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .frame(width: AppTheme.minimumTapTarget, height: AppTheme.minimumTapTarget)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Remove \(draft.name) from this meal")
+                }
+                if draft.id != meal.last?.id { Divider() }
+            }
+            if meal.count > 1 {
+                NutritionSummaryView(nutrition: mealTotal)
+                    .padding(.top, 8)
+            }
+        }
+        .appSkyCard()
+    }
+
+    /// One time for the whole meal, and one button. Side by side, or stacked
+    /// when large text no longer fits them on one line.
+    private var saveBar: some View {
+        let time = DatePicker("Eaten", selection: Binding(get: { mealTime },
+                                                          set: { chosenTime = $0 }),
+                              in: ...Date.now.addingTimeInterval(60 * 60),
+                              displayedComponents: [.date, .hourAndMinute])
+            .labelsHidden()
+            .accessibilityLabel("When you ate it")
+        let log = Button {
+            save()
+        } label: {
+            Text("Log \(meal.count == 1 ? "food" : "\(meal.count) foods")")
+        }
+        .buttonStyle(.appPrimary)
+        .disabled(!canSave)
+
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) { time; log }
+            VStack(spacing: 10) { time; log }
+        }
+        .padding(.horizontal, AppTheme.cardPadding + 4)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.background)
+        .overlay(alignment: .top) { Divider() }
+    }
 
     private func noticeCard(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
@@ -126,7 +346,8 @@ struct AddMealView: View {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
@@ -134,97 +355,58 @@ struct AddMealView: View {
         .appCard()
     }
 
-    private var saveBar: some View {
-        VStack(spacing: 8) {
-            Button {
-                save()
-            } label: {
-                Text(isBackdated ? "Save to selected date" : "Save to today")
-            }
-            .buttonStyle(.appPrimary)
-            .disabled(!canSave)
-
-            Text(canSave
-                 ? "Nutrition and portions are estimates. Review before saving."
-                 : "Give every food a name and some nutrition to save.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, AppTheme.cardPadding + 4)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        // A solid bar, so cards scrolling underneath never show through the
-        // button. A thin line marks where the page ends.
-        .frame(maxWidth: .infinity)
-        .background(AppTheme.background)
-        .overlay(alignment: .top) { Divider() }
+    static func amountText(_ entry: FoodEntry) -> String {
+        "\(AppFormatters.quantity(entry.quantity, unit: entry.unit)) \(entry.unit.shortLabel)"
     }
 
     // MARK: Actions
 
-    /// Picks up drafts handed over by Scan or the assistant.
-    private func collectPendingDrafts() {
-        let pending = router.consumePendingDrafts()
-        guard !pending.drafts.isEmpty else { return }
-
-        if drafts.allSatisfy(\.isBlank) {
-            // Replace the empty starter card rather than stacking above it.
-            drafts = pending.drafts
-        } else {
-            // Join the meal already being built, at its time, newest first so
-            // the card that was just filled in is at the top of the screen.
-            let time = mealTime.wrappedValue
-            drafts.insert(contentsOf: pending.drafts.map { draft in
-                var draft = draft
-                draft.consumedAt = time
-                return draft
-            }, at: 0)
-        }
-        notice = pending.notice
-    }
-
-    private func addCard() {
-        // A new card joins the meal at the time already set.
-        withAnimation(.snappy) {
-            drafts.append(FoodEntryDraft(consumedAt: mealTime.wrappedValue))
-        }
+    /// A copy of the food as it was last logged, scaled by `servings`.
+    private func add(_ record: FoodRecord, servings: Double) {
+        var draft = FoodEntryDraft(entry: record.latest).repeated(at: mealTime, servings: servings)
+        draft.source = record.latest.source
+        withAnimation(.snappy) { meal.append(draft) }
+        query = ""
+        isSearchFocused = false
         Haptics.selection()
     }
 
-    /// Nil hides "Remove food" when this is the only card left.
-    private func deleteAction(for id: UUID) -> (() -> Void)? {
-        guard drafts.count > 1 else { return nil }
-        return { remove(id: id) }
+    private func commit(_ draft: FoodEntryDraft, for target: MealItemTarget) {
+        withAnimation(.snappy) {
+            if let index = meal.firstIndex(where: { $0.id == target.draft.id }) {
+                meal[index] = draft
+            } else {
+                meal.append(draft)
+            }
+        }
+        query = ""
     }
 
     private func remove(id: UUID) {
-        // The page always keeps one card.
-        guard drafts.count > 1 else { return }
-        withAnimation(.snappy) { drafts.removeAll { $0.id == id } }
+        withAnimation(.snappy) { meal.removeAll { $0.id == id } }
+        if meal.isEmpty { chosenTime = nil }
         Haptics.selection()
+    }
+
+    /// Drafts handed over from elsewhere join this meal.
+    private func collectPendingDrafts() {
+        let pending = router.consumePendingDrafts()
+        guard !pending.drafts.isEmpty else { return }
+        if meal.isEmpty, let first = pending.drafts.first,
+           abs(first.consumedAt.timeIntervalSinceNow) > 5 * 60 {
+            chosenTime = first.consumedAt
+        }
+        withAnimation(.snappy) { meal.append(contentsOf: pending.drafts) }
+        notice = pending.notice
     }
 
     private func save() {
         guard canSave else { return }
         let keepCorrections = context.loadAppSettings().storeCorrectionsForTraining
         let encoder = JSONEncoder()
-        for draft in drafts {
+        for var draft in meal {
+            draft.consumedAt = mealTime
             context.insert(draft.makeEntry())
-
-            // A barcode the database did not know about is cached with what the
-            // user typed, so the next scan resolves locally (spec section 27).
-            if draft.source == .barcode, let barcode = draft.barcode, !draft.isComposite,
-               context.fetchCachedProduct(barcode: barcode) == nil {
-                BarcodeLookupService(context: context).cache(
-                    product: BarcodeProduct(barcode: barcode,
-                                            name: draft.name,
-                                            brand: nil,
-                                            servingSize: draft.servingSize,
-                                            unit: draft.unit,
-                                            nutritionPerServing: draft.nutritionPerServing),
-                    isUserEntered: true)
-            }
-
             // Pair what the models predicted with what the user confirmed, if
             // they opted in. Stays on-device (spec section 24).
             if keepCorrections,
@@ -237,7 +419,8 @@ struct AddMealView: View {
         }
         do {
             try context.save()
-            drafts = [FoodEntryDraft()]
+            meal = []
+            chosenTime = nil
             notice = nil
             Haptics.success()
             router.selectedTab = .dashboard
@@ -248,3 +431,132 @@ struct AddMealView: View {
     }
 }
 
+/// A food in, or about to join, the meal being edited in a sheet.
+struct MealItemTarget: Identifiable {
+    var id: UUID { draft.id }
+    var draft: FoodEntryDraft
+    let isNew: Bool
+}
+
+// MARK: - How much?
+
+/// After picking a food: how much of it, against what was eaten last time.
+struct HowMuchSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let record: FoodRecord
+    let onAdd: (Double) -> Void
+
+    @State private var servings: Double = 1
+    private static let presets: [(label: String, value: Double)] =
+        [("\u{00BD}\u{00D7}", 0.5), ("1\u{00D7}", 1), ("1\u{00BD}\u{00D7}", 1.5), ("2\u{00D7}", 2)]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(record.name)
+                            .font(.system(.title3, design: .rounded).weight(.bold))
+                        Text("Last time: \(AddMealView.amountText(record.latest)) \u{00B7} "
+                             + "\(AppFormatters.amount(record.latestTotal.calories)) kcal")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 8) {
+                        ForEach(Self.presets, id: \.value) { preset in
+                            Button {
+                                servings = preset.value
+                                Haptics.selection()
+                            } label: {
+                                Text(preset.label)
+                                    .font(.system(.body, design: .rounded).weight(.bold))
+                                    .foregroundStyle(servings == preset.value ? AppTheme.onAccent : AppTheme.ink)
+                                    .frame(maxWidth: .infinity, minHeight: AppTheme.minimumTapTarget)
+                                    .background(servings == preset.value ? AppTheme.accentFill : AppTheme.subtleFill,
+                                                in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(preset.value.formatted()) times last time")
+                            .accessibilityAddTraits(servings == preset.value ? .isSelected : [])
+                        }
+                    }
+
+                    Stepper(value: $servings, in: 0.25...10, step: 0.25) {
+                        Text("\(servings.formatted()) \u{00D7} last time")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                    }
+
+                    NutritionSummaryView(nutrition: record.latestTotal * servings)
+
+                    Button("Add to meal") {
+                        onAdd(servings)
+                        dismiss()
+                    }
+                    .buttonStyle(.appPrimary)
+                }
+                .padding(AppTheme.cardPadding + 4)
+            }
+            .background(AppTheme.background.ignoresSafeArea())
+            .navigationTitle("How much?")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+// MARK: - Edit or create one food
+
+/// The full editor for one food in the meal: a new food typed from its
+/// label, or one already added that needs a change.
+struct MealItemEditor: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @State var draft: FoodEntryDraft
+    let isNew: Bool
+    let onDone: (FoodEntryDraft) -> Void
+    let onRemove: (() -> Void)?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: AppTheme.pageSpacing) {
+                    FoodDraftCard(draft: $draft,
+                                  onDelete: onRemove.map { remove -> () -> Void in
+                                      { remove(); dismiss() }
+                                  })
+                    if !draft.isSaveable {
+                        Text("Give it a name and its nutrition to add it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .appPageContent()
+            }
+            .appPageSurface()
+            .keyboardDismissControls()
+            .navigationTitle(isNew ? "New food" : "Edit food")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isNew ? "Add" : "Done") {
+                        onDone(draft)
+                        dismiss()
+                    }
+                    .disabled(!draft.isSaveable)
+                }
+            }
+        }
+    }
+}

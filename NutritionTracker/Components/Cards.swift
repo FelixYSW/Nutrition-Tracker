@@ -169,7 +169,7 @@ struct DaySummaryCard: View {
                     // to wrap the range text and make the card taller on some
                     // days, nudging everything below it.
                     Text(AppFormatters.amount(nutrition.calories))
-                        .font(.system(size: 26, weight: .heavy, design: .rounded))
+                        .scaledHeavyNumber(26, relativeTo: .title2)
                         .monospacedDigit()
                         .minimumScaleFactor(0.7)
                         .lineLimit(1)

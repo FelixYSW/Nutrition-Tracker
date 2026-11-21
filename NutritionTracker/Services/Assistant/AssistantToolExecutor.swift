@@ -375,16 +375,11 @@ final class AssistantToolExecutor {
     }
 
     private func proposeDraft(_ arguments: [String: JSONValue]) throws -> FoodEntryDraft {
-        let repository = NutritionRepository(context: context)
         try AssistantArgumentParser.checkItems(arguments["items"], tool: .addFoodEntry)
         try Self.checkLabelFigures(arguments["items"], tool: .addFoodEntry)
-        let items = AssistantArgumentParser.parseItems(arguments["items"]) {
-            Self.resolve($0, with: repository)
-        } ?? []
+        let items = AssistantArgumentParser.parseItems(arguments["items"]) ?? []
         try Self.requireNutrition(items, tool: .addFoodEntry)
-        return try AssistantArgumentParser.parseAdd(arguments: arguments) { item in
-            Self.resolve(item, with: repository)
-        }
+        return try AssistantArgumentParser.parseAdd(arguments: arguments)
     }
 
     // MARK: Sanity checks on the model's figures
@@ -396,8 +391,8 @@ final class AssistantToolExecutor {
         "ice", "unsweetened", "sugarless"
     ]
 
-    /// Items left with no energy at all - no database match and no figures from
-    /// the model - would log as 0 kcal. The model is asked to supply them.
+    /// Items with no energy at all - no figures from the model - would log as
+    /// 0 kcal. The model is asked to supply them.
     static func requireNutrition(_ items: [IngredientDraft], tool: AssistantTool) throws {
         let missing = items.filter { item in
             let value = item.nutritionPerServing
@@ -451,24 +446,6 @@ final class AssistantToolExecutor {
     /// Fibre, sugar alcohols and rounding make real labels differ from 4/4/9
     /// a little, but rarely by this much.
     static let labelEnergyTolerance = 0.3
-
-    /// Swaps the model's per-100 g guess for the app's own figures wherever the
-    /// nutrition data layer knows the food: the user's saved products first,
-    /// then MyFCD, then the generic table (spec section 23). Unknown foods keep
-    /// the - already sanity-checked - estimate, marked as an estimate.
-    static func resolve(_ item: IngredientDraft, with repository: NutritionRepository) -> IngredientDraft {
-        // A nutrition label - typed, photographed or the brand's own - beats
-        // any database row, so those figures are never replaced.
-        guard !item.provenance.isDeclared else { return item }
-        // Copied from an entry already in the log: repeat it exactly.
-        guard item.provenance != .localVerified else { return item }
-        guard let hit = repository.lookup(canonicalID: nil, name: item.name) else { return item }
-        var resolved = item
-        resolved.nutritionPerServing = hit.nutritionPer100g
-        resolved.canonicalID = hit.canonicalID
-        resolved.provenance = hit.provenance
-        return resolved
-    }
 
     // MARK: Profile, ranges and health notes
 
@@ -637,12 +614,9 @@ final class AssistantToolExecutor {
             draft.consumedAt = consumedAt
         }
 
-        let repository = NutritionRepository(context: context)
         try AssistantArgumentParser.checkItems(arguments["items"], tool: .editFoodEntry)
         try Self.checkLabelFigures(arguments["items"], tool: .editFoodEntry)
-        if let items = AssistantArgumentParser.parseItems(arguments["items"], resolve: {
-            Self.resolve($0, with: repository)
-        }) {
+        if let items = AssistantArgumentParser.parseItems(arguments["items"]) {
             try Self.requireNutrition(items, tool: .editFoodEntry)
             // A new component list - e.g. with an ingredient the user forgot -
             // replaces what's in the food, and the totals follow from it.
@@ -659,7 +633,7 @@ final class AssistantToolExecutor {
 
     /// Components that were already in the entry keep their identity and
     /// figures - which may have been corrected by hand - and take only the new
-    /// amount. Everything else comes from the nutrition database as usual.
+    /// amount. Everything else uses the figures the model sent.
     static func keepingKnownFigures(_ items: [IngredientDraft],
                                     from draft: FoodEntryDraft) -> [IngredientDraft] {
         var existing = draft.ingredients.filter { $0.unit == .gram }
@@ -770,13 +744,14 @@ final class AssistantToolExecutor {
                 throw AssistantToolError.malformedArguments(
                     tool: AssistantTool.updateProfile.rawValue, detail: "there is no profile")
             }
+            let maintenanceBefore = NutritionTargetCalculator.calculate(profile: profile).tdee
             if let weight = update.weightKg { profile.weightKg = weight }
             if let height = update.heightCm { profile.heightCm = height }
             if let target = update.targetWeightKg { profile.targetWeightKg = target }
             if let goal = update.goal { profile.goal = goal }
             if let activity = update.activity { profile.activity = activity }
             // Recalculates the ranges, keeping any set by hand, and saves.
-            TargetUpdater.update(for: profile, in: context)
+            TargetUpdater.update(for: profile, in: context, previousMaintenance: maintenanceBefore)
             return try encode(["status": "updated",
                                "detail": "Profile updated: " + update.lines.joined(separator: "; ")
                                    + ". Daily ranges recalculated; the new ranges are in the "

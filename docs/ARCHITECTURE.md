@@ -12,7 +12,11 @@ NutritionTarget      1 row. Five NutrientRange values, each holding min, max and
 FoodEntry            One per logged food. Has a consumedAt timestamp and no meal type.
   └─ IngredientItem  Zero or more (cascade delete). Has an explicit `position`,
                      because SwiftData does not keep to-many order.
-BarcodeProductCache  Keyed by barcode. `isUserEntered` rows rank first and
+WeightEntry          One weigh-in per local day. Added in schema V2 (lightweight
+                     migration). Feeds the weight graph; the profile still holds
+                     the current weight the targets are calculated from.
+BarcodeProductCache  Kept for old data only: barcode scanning was removed. Keyed by
+                     barcode. `isUserEntered` rows rank first and
                      never expire.
 CorrectionRecord     Prediction JSON and confirmed-draft JSON (opt-in, on-device only).
 AppSettings          1 row. Photo retention and correction toggles. Never
@@ -32,7 +36,7 @@ entry.total      = (composite ? Σ ingredient.total : nutritionPerServing)
 ```
 Manual     ─┐
 Photo AI   ─┤
-Barcode    ─┼─► FoodEntryDraft ─► Add Meal review ─► FoodEntry (SwiftData)
+Past food  ─┼─► FoodEntryDraft ─► Add Meal review ─► FoodEntry (SwiftData)
 Assistant  ─┘        (assistant: confirmation card instead of Add Meal)
 ```
 
@@ -55,8 +59,7 @@ UIImage
       ↳ unavailable or failed: split an assumed total mass by detected area,
         and Add Meal says the amounts are rough defaults
   → NutritionRepository.resolve
-        local verified → MyFCD / generic table (by canonical ID, then by name via ontology)
-        → leftover share of Model B's plate estimate for anything unmatched
+        no food table: Model B's whole-plate estimate split by mass
   → PhotoAnalysisResult → makeDraft() → Add Meal
 ```
 
@@ -108,3 +111,16 @@ The context sent with each request holds:
 - a 14-day tally
 
 It is rebuilt for every request and never stored with the provider.
+
+## Weight history and the food database
+
+Both live in the Calendar tab as extra segments (Days, Trends, Weight, Foods), which keeps the app to four tabs.
+
+- **Weight.** `TargetUpdater.update` calls `recordProfileWeight`, so any change to the profile weight (settings, the assistant, a check-in) adds a point if it differs from the latest one. The check-in sheet always records today's weight. `WeightStats` holds the graph maths (range filter, 7-day average, y-axis fit).
+- **Foods.** `FoodLibrary` groups `FoodEntry` rows by normalised name. Nothing is stored. "Log again" copies the latest entry with `FoodEntryDraft.repeated`.
+
+## Web search
+
+The chat model has no search of its own. `findFoodNearby`, `lookUpProductNutrition` and `findProducts` are function tools; the view model runs each as a separate Responses API call with the `web_search` tool and returns `{summary, sources}`.
+
+For `findFoodNearby`, `AssistantPlaceResolver` decides where to search: the `place` the model sent, else a place named in the user's own message, else the GPS location. A named place is searched with its country (`regionHint`), and the result carries `searchedPlace` so the reply can say where it looked.

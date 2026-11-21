@@ -7,6 +7,8 @@ struct WeightCheckInCard: View {
     let profile: UserProfile
     let onUpdate: () -> Void
     let onLater: () -> Void
+    /// Opens the weight graph in Calendar.
+    var onShowGraph: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -27,6 +29,16 @@ struct WeightCheckInCard: View {
                     .buttonStyle(.appPrimary)
                 Button("Later", action: onLater)
                     .buttonStyle(.appSecondary)
+            }
+            if let onShowGraph {
+                Button(action: onShowGraph) {
+                    Label("See your weight graph", systemImage: "chart.line.uptrend.xyaxis")
+                        .font(.footnote.weight(.semibold))
+                        .frame(minHeight: AppTheme.minimumTapTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.accent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -86,9 +98,13 @@ struct WeightCheckInSheet: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") {
+                        let before = NutritionTargetCalculator.calculate(profile: profile).tdee
                         profile.weightKg = weightKg
                         profile.activity = activity
-                        TargetUpdater.update(for: profile, in: context)
+                        // Always a point for today, even when the weight is
+                        // the same as last time.
+                        context.recordWeight(weightKg)
+                        TargetUpdater.update(for: profile, in: context, previousMaintenance: before)
                         Haptics.success()
                         dismiss()
                     }
@@ -99,5 +115,8 @@ struct WeightCheckInSheet: View {
                 activity = profile.activity
             }
         }
+        // Two fields: half height, so the page behind stays in view.
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }

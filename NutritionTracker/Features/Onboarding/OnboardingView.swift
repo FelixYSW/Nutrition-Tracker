@@ -66,6 +66,20 @@ struct OnboardingView: View {
             .appPageSurface()
             .navigationTitle(step.title)
             .navigationBarTitleDisplayMode(.large)
+            // Back where iOS puts it: top left. The next step stays at the
+            // bottom, in thumb reach.
+            .toolbar {
+                if step != .welcome {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            goBack()
+                        } label: {
+                            Label("Back", systemImage: "chevron.left")
+                                .labelStyle(.titleAndIcon)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -292,18 +306,11 @@ struct OnboardingView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack(spacing: 12) {
-                if step != .welcome {
-                    Button("Back") { goBack() }
-                        .buttonStyle(.appSecondary)
-                }
-
-                Button(primaryTitle) {
-                    advance()
-                }
-                .buttonStyle(.appPrimary)
-                .disabled(validationMessage != nil)
+            Button(primaryTitle) {
+                advance()
             }
+            .buttonStyle(.appPrimary)
+            .disabled(validationMessage != nil)
         }
         .padding(.horizontal, AppTheme.cardPadding + 4)
         .padding(.vertical, 12)

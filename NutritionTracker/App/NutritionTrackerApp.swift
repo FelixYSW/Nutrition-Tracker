@@ -28,9 +28,9 @@ struct NutritionTrackerApp: App {
     }
 }
 
-/// Cross-tab navigation. The photo and barcode flows both end in Add Meal with a
-/// prefilled draft, so the selected tab and the pending draft have to live above
-/// the individual tab views (spec sections 28 and 33).
+/// Cross-tab navigation: drafts handed to Add Meal, and Add Meal's Photo and
+/// Describe buttons opening the assistant, so the selected tab and what's
+/// being handed over live above the individual tab views (spec sections 28, 33).
 @MainActor
 @Observable
 final class AppRouter {
@@ -40,7 +40,23 @@ final class AppRouter {
 
     var selectedTab: Tab = .dashboard
 
-    /// Draft handed over from Scan (photo or barcode) or the assistant. Add Meal
+    /// What Add Meal asked the assistant to start with.
+    enum AssistantRequest: Equatable {
+        /// Open the camera for a food photo.
+        case photo
+        /// Open the keyboard to describe what was eaten.
+        case describe
+    }
+
+    /// Picked up and cleared by the Assistant tab.
+    var assistantRequest: AssistantRequest?
+
+    func openAssistant(_ request: AssistantRequest) {
+        assistantRequest = request
+        selectedTab = .assistant
+    }
+
+    /// Draft handed over from elsewhere in the app. Add Meal
     /// picks this up, shows it for review, and clears it.
     var pendingDrafts: [FoodEntryDraft] = []
 
