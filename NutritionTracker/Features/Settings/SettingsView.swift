@@ -336,7 +336,8 @@ struct SettingsView: View {
             Text("About")
         } footer: {
             Text("Daily ranges and AI nutrition figures are estimates for information "
-                 + "only, not medical advice.")
+                 + "only, not medical advice. Nutrient icons from Lucide (lucide.dev), "
+                 + "ISC licence.")
         }
     }
 
@@ -345,18 +346,13 @@ struct SettingsView: View {
     /// On its own at the bottom, away from everyday options.
     private var deleteSection: some View {
         Section {
-            // An outlined capsule on the page rather than a list row.
+            // A red capsule on the page rather than a list row.
             Button(role: .destructive) {
                 isConfirmingDeleteAll = true
             } label: {
-                Text("Delete all data")
-                    .font(.system(.body, design: .rounded).weight(.bold))
-                    .foregroundStyle(AppTheme.destructiveText)
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .overlay(Capsule().stroke(AppTheme.destructiveText.opacity(0.3), lineWidth: 1))
-                    .contentShape(Capsule())
+                Label("Delete all data", systemImage: "trash")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.appDestructive)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
         }

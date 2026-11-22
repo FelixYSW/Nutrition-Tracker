@@ -330,6 +330,25 @@ struct TapToDismissKeyboard: UIViewRepresentable {
     final class InstallerView: UIView, UIGestureRecognizerDelegate {
         private weak var installedWindow: UIWindow?
         private var recogniser: UITapGestureRecognizer?
+        /// The recogniser only takes part in touches while a keyboard is up.
+        /// Otherwise it sat in on every touch in the app - including the
+        /// swipe that closes a sheet - for nothing.
+        private var isKeyboardShown = false
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            // Selector observers are removed by iOS when the view goes away.
+            let center = NotificationCenter.default
+            center.addObserver(self, selector: #selector(keyboardWillShow),
+                               name: UIResponder.keyboardWillShowNotification, object: nil)
+            center.addObserver(self, selector: #selector(keyboardWillHide),
+                               name: UIResponder.keyboardWillHideNotification, object: nil)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        @objc private func keyboardWillShow() { isKeyboardShown = true }
+        @objc private func keyboardWillHide() { isKeyboardShown = false }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -338,6 +357,9 @@ struct TapToDismissKeyboard: UIViewRepresentable {
 
             let tap = UITapGestureRecognizer(target: self, action: #selector(closeKeyboard))
             tap.cancelsTouchesInView = false
+            // Never hold back the end of a touch while deciding if it was a
+            // tap: the view under the finger gets it at once.
+            tap.delaysTouchesEnded = false
             tap.delegate = self
             window.addGestureRecognizer(tap)
             recogniser = tap
@@ -359,6 +381,7 @@ struct TapToDismissKeyboard: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldReceive touch: UITouch) -> Bool {
+            guard isKeyboardShown else { return false }
             var view = touch.view
             while let current = view {
                 if current is UITextField || current is UITextView { return false }

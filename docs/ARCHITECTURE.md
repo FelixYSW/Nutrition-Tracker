@@ -114,7 +114,7 @@ It is rebuilt for every request and never stored with the provider.
 
 ## Weight history and the food database
 
-Both live in the Calendar tab as extra segments (Days, Trends, Weight, Foods), which keeps the app to four tabs.
+Weight is a segment of the Calendar tab (Days, Trends, Weight). Foods is its own tab.
 
 - **Weight.** `TargetUpdater.update` calls `recordProfileWeight`, so any change to the profile weight (settings, the assistant, a check-in) adds a point if it differs from the latest one. The check-in sheet always records today's weight. `WeightStats` holds the graph maths (range filter, 7-day average, y-axis fit).
 - **Foods.** `FoodLibrary` groups `FoodEntry` rows by normalised name. Nothing is stored. "Log again" copies the latest entry with `FoodEntryDraft.repeated`.

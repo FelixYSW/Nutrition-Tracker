@@ -126,9 +126,9 @@ struct CompactMacroRing: View {
                           lineWidth: 6)
                     .frame(width: 56, height: 56)
 
-                Image(systemName: nutrient.symbolName)
-                    .font(.system(size: 18, weight: .semibold))
+                NutrientIcon(nutrient: nutrient, size: 18)
                     .foregroundStyle(AppTheme.color(for: nutrient))
+                    .accessibilityHidden(true)
             }
 
             Text(nutrient.displayName)

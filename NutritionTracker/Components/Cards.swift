@@ -46,8 +46,7 @@ struct NutritionSummaryView: View {
             // A fixed slot: the symbols differ in height (the flame and fork
             // are taller than the drop), which put each number at a
             // different height.
-            Image(systemName: nutrient.symbolName)
-                .font(.system(size: 14, weight: .semibold))
+            NutrientIcon(nutrient: nutrient, size: 14)
                 .foregroundStyle(tint)
                 .frame(height: 18)
                 .accessibilityHidden(true)
@@ -200,8 +199,7 @@ struct DaySummaryCard: View {
     private func tile(for nutrient: Nutrient) -> some View {
         let tint = AppTheme.color(for: nutrient)
         return VStack(spacing: 3) {
-            Image(systemName: nutrient.symbolName)
-                .font(.system(size: 16, weight: .semibold))
+            NutrientIcon(nutrient: nutrient, size: 16)
                 .foregroundStyle(tint)
                 .frame(height: 20)   // the same slot for every symbol
                 .accessibilityHidden(true)
@@ -230,8 +228,12 @@ struct DaySummaryCard: View {
     }
 }
 
-/// A saved food on the Dashboard or in the Calendar. Composite foods expand to
-/// reveal their ingredients (spec section 13).
+/// A saved food on Today or in the Calendar.
+///
+/// Compact, so a day's list reads at a glance: the name and calories on
+/// top, then the time, amount and macros on one line. The whole card opens
+/// the food for editing (with delete inside); a long press offers the same.
+/// A dish made of ingredients can show them without leaving the list.
 struct FoodEntryCard: View {
     let entry: FoodEntry
     var onEdit: (() -> Void)?
@@ -240,95 +242,51 @@ struct FoodEntryCard: View {
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                Image(systemName: entry.source.symbolName)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(AppTheme.ink)
-                    .frame(width: 40, height: 40)
-                    .background(AppTheme.skyCard,
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
-                        .font(.system(.body, design: .rounded).weight(.bold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 6) {
-                        Text(AppFormatters.time.string(from: entry.consumedAt))
-                        Text("\u{00B7}")
-                        Text("\(AppFormatters.quantity(entry.quantity, unit: entry.unit)) \(entry.unit.shortLabel)")
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 8)
-
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text(AppFormatters.amount(entry.total.calories))
-                        .font(.system(.body, design: .rounded).weight(.heavy))
-                        .monospacedDigit()
-                    Text("kcal")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            // The macros always show; calories are in the header above.
-            NutritionSummaryView(nutrition: entry.total, showsFibre: true, showsCalories: false)
-
-            // Only a composite food's ingredients fold away.
-            if entry.isComposite {
-                Button {
-                    withAnimation(.snappy) { isExpanded.toggle() }
-                } label: {
-                    // Chevrons sit before their text, everywhere in the app.
-                    HStack(spacing: 6) {
-                        DisclosureChevron(isExpanded: isExpanded)
-                            .font(.caption.weight(.bold))
-                        Text(isExpanded ? "Hide ingredients"
-                                        : "\(entry.ingredients.count) ingredients")
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .frame(minHeight: AppTheme.minimumTapTarget)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-
-                if isExpanded {
-                    // A grid, so every portion and every kcal figure lines up
-                    // in its own right-aligned column whatever the name length.
-                    Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                        ForEach(entry.orderedIngredients) { ingredient in
-                            GridRow(alignment: .firstTextBaseline) {
-                                Text(ingredient.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.ink)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Text("\(AppFormatters.quantity(ingredient.quantity, unit: ingredient.unit))\(ingredient.unit.shortLabel)")
-                                    .foregroundStyle(.secondary)
-                                    .gridColumnAlignment(.trailing)
-                                Text("\(AppFormatters.amount(ingredient.total.calories)) kcal")
-                                    .fontWeight(.semibold)
-                                    .gridColumnAlignment(.trailing)
-                            }
-                            .font(.footnote)
-                            .monospacedDigit()
-                            .accessibilityElement(children: .combine)
+        let total = entry.total
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                onEdit?()
+            } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(entry.name)
+                            .font(.system(.body, design: .rounded).weight(.semibold))
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(AppFormatters.amount(total.calories))
+                                .font(.system(.body, design: .rounded).weight(.heavy))
+                                .monospacedDigit()
+                            Text("kcal")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        if onEdit != nil {
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
                         }
                     }
-                    .padding(.top, 10)
-                    .overlay(alignment: .top) {
-                        Rectangle().fill(AppTheme.cardBorder).frame(height: 1)
+
+                    // Time and amount, then the macros: wraps onto a second
+                    // line at large text sizes instead of squeezing.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { detailLine; Spacer(minLength: 0); MacroLine(nutrition: total) }
+                        VStack(alignment: .leading, spacing: 6) { detailLine; MacroLine(nutrition: total) }
                     }
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .disabled(onEdit == nil)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilitySummary(total))
+            .accessibilityHint(onEdit == nil ? "" : "Opens the food to change or delete it")
+
+            if entry.isComposite { ingredients }
         }
         .appCard()
-        // Standard iOS affordances: swipe to delete, long-press for a menu.
         .contextMenu {
             if let onEdit {
                 Button("Edit", systemImage: "pencil", action: onEdit)
@@ -337,8 +295,106 @@ struct FoodEntryCard: View {
                 Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(entry.name), \(AppFormatters.amount(entry.total.calories)) calories")
+    }
+
+    private var detailLine: some View {
+        HStack(spacing: 5) {
+            // Where it came from, only when it wasn't typed in.
+            if entry.source != .manual {
+                Image(systemName: entry.source.symbolName)
+                    .accessibilityLabel(entry.source.displayName)
+            }
+            Text(AppFormatters.time.string(from: entry.consumedAt))
+            Text("\u{00B7}")
+                .accessibilityHidden(true)
+            Text("\(AppFormatters.quantity(entry.quantity, unit: entry.unit)) \(entry.unit.shortLabel)")
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+
+    private var ingredients: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    DisclosureChevron(isExpanded: isExpanded)
+                        .font(.caption.weight(.bold))
+                    Text(isExpanded ? "Hide ingredients" : "\(entry.ingredients.count) ingredients")
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, minHeight: AppTheme.minimumTapTarget, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(isExpanded ? "Hides the ingredients" : "Shows the ingredients")
+
+            if isExpanded {
+                // A grid, so every amount and kcal figure lines up in its
+                // own right-aligned column whatever the name length.
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                    ForEach(entry.orderedIngredients) { ingredient in
+                        GridRow(alignment: .firstTextBaseline) {
+                            Text(ingredient.name)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(AppFormatters.quantity(ingredient.quantity, unit: ingredient.unit)) "
+                                 + ingredient.unit.shortLabel)
+                                .foregroundStyle(.secondary)
+                                .gridColumnAlignment(.trailing)
+                            Text("\(AppFormatters.amount(ingredient.total.calories)) kcal")
+                                .fontWeight(.semibold)
+                                .gridColumnAlignment(.trailing)
+                        }
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+                .padding(.bottom, 4)
+            }
+        }
+        .padding(.top, 4)
+        .overlay(alignment: .top) { Rectangle().fill(AppTheme.cardBorder).frame(height: 1) }
+        .padding(.top, 10)
+    }
+
+    private func accessibilitySummary(_ total: Nutrition) -> String {
+        "\(entry.name), \(AppFormatters.amount(total.calories)) calories, "
+            + "\(AppFormatters.time.string(from: entry.consumedAt)). "
+            + "Protein \(AppFormatters.amount(total.protein)) grams, "
+            + "carbs \(AppFormatters.amount(total.carbs)) grams, "
+            + "fat \(AppFormatters.amount(total.fat)) grams"
+    }
+}
+
+/// Protein, carbs and fat as short figures, each after its icon in the
+/// nutrient's colour - the same icons and colours as the rings on Today, so
+/// the shape tells them apart as well as the colour.
+struct MacroLine: View {
+    let nutrition: Nutrition
+
+    var body: some View {
+        HStack(spacing: 10) {
+            item(.protein)
+            item(.carbs)
+            item(.fat)
+        }
+        .font(.footnote.weight(.semibold))
+        .monospacedDigit()
+        .lineLimit(1)
+        .accessibilityHidden(true)
+    }
+
+    private func item(_ nutrient: Nutrient) -> some View {
+        HStack(spacing: 3) {
+            NutrientIcon(nutrient: nutrient, size: 12)
+                .foregroundStyle(AppTheme.color(for: nutrient))
+            Text("\(AppFormatters.amount(nutrition[nutrient]))g")
+        }
     }
 }
 

@@ -85,7 +85,7 @@ final class WeightAndFoodLibraryTests: XCTestCase {
     func testSmoothingAveragesTheTrailingWeek() {
         let points = [point(1, 72), point(2, 71), point(3, 70)]
         let smoothed = WeightStats.smoothed(points)
-        XCTAssertEqual(smoothed.map(\.kg), [72, 71.5, 71], accuracy: 0.001)
+        assertEqual(smoothed.map(\.kg), [72, 71.5, 71], accuracy: 0.001)
     }
 
     func testChangeIsLastMinusFirst() {
@@ -127,6 +127,16 @@ final class WeightAndFoodLibraryTests: XCTestCase {
         XCTAssertTrue(FoodLibrary.filter(records, query: "pizza").isEmpty)
     }
 
+    func testSignatureChangesWhenTheLogDoes() {
+        let first = entry("Banana", day: 1)
+        let entries = [first, entry("Apple", day: 2)]
+        let before = FoodLibrary.signature(of: entries)
+        XCTAssertEqual(before, FoodLibrary.signature(of: entries), "same log, same signature")
+        XCTAssertNotEqual(before, FoodLibrary.signature(of: entries + [entry("Cake", day: 3)]))
+        first.updatedAt = first.updatedAt.addingTimeInterval(60)
+        XCTAssertNotEqual(before, FoodLibrary.signature(of: entries), "an edit counts")
+    }
+
     func testSortOrders() {
         let records = FoodLibrary.records(from: [
             entry("Banana", day: 1), entry("Banana", day: 2), entry("Apple", day: 9), entry("Cake", day: 5)
@@ -137,7 +147,7 @@ final class WeightAndFoodLibraryTests: XCTestCase {
     }
 }
 
-private func XCTAssertEqual(_ values: [Double], _ expected: [Double], accuracy: Double,
+private func assertEqual(_ values: [Double], _ expected: [Double], accuracy: Double,
                             file: StaticString = #filePath, line: UInt = #line) {
     XCTAssertEqual(values.count, expected.count, file: file, line: line)
     for (value, wanted) in zip(values, expected) {

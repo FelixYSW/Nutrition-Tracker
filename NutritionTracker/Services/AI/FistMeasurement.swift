@@ -143,6 +143,7 @@ struct FistScan {
     }
 }
 
+@MainActor
 enum FistScanner {
 
     /// Runs card and hand detection on the device. Nothing leaves the phone.

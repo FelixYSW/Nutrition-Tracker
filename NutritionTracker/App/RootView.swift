@@ -70,8 +70,8 @@ struct RootView: View {
     }
 }
 
-/// Four destinations in the standard iOS tab bar: Today, Add, Assistant
-/// and Calendar. Settings is a button on Today.
+/// Five destinations in the standard iOS tab bar: Today, Add, Foods,
+/// Assistant and Calendar. Settings is a button on Today.
 ///
 /// The system tab bar reserves its own space, so page content and bottom
 /// controls (like Add Meal's save button) always sit above it rather than
@@ -89,16 +89,43 @@ struct MainTabView: View {
                 .tag(AppRouter.Tab.dashboard)
 
             AddMealView()
-                .tabItem { Label("Add", systemImage: "plus.circle.fill") }
+                // A plain plus: a filled circle drew as a heavy grey disc in
+                // the glass tab bar, unlike the line icons beside it.
+                .tabItem { Label("Add", systemImage: "plus") }
                 .tag(AppRouter.Tab.addMeal)
+
+            ShownOnlyWhenSelected(tab: .foods) { FoodsView() }
+                .tabItem { Label("Foods", systemImage: "fork.knife") }
+                .tag(AppRouter.Tab.foods)
 
             AssistantView()
                 .tabItem { Label("Assistant", systemImage: "sparkles") }
                 .tag(AppRouter.Tab.assistant)
 
-            CalendarView()
+            ShownOnlyWhenSelected(tab: .calendar) { CalendarView() }
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag(AppRouter.Tab.calendar)
+        }
+    }
+}
+
+/// A tab's page, built only while its tab is showing.
+///
+/// iOS keeps every visited tab alive, and a live tab redraws whenever the
+/// food log changes or a sheet closes anywhere in the app - Foods and
+/// Calendar read the whole log to do it, which stalled sheets closing on
+/// other tabs. Only tabs whose state lives in `AppRouter` (or that have
+/// none) use this; Add food and the assistant keep their page alive.
+private struct ShownOnlyWhenSelected<Content: View>: View {
+    @Environment(AppRouter.self) private var router
+    let tab: AppRouter.Tab
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        if router.selectedTab == tab {
+            content()
+        } else {
+            AppTheme.background.ignoresSafeArea()
         }
     }
 }

@@ -33,7 +33,7 @@ A native iPhone app for tracking calories and macros. It sets daily targets as r
 - **Assistant** (optional, from the Dashboard nav bar) suggests what to eat with the room you have left. It can also log, edit and delete food, or summarise your trends. **Every change it proposes waits for you to confirm it.**
 - **Settings** (gear icon on the Dashboard) covers profile, ranges, backup and restore, and data deletion. Neither the AI assistant nor the photo models have settings.
 
-The app has four tabs: Dashboard, Scan, Add Meal, Calendar. Settings and the assistant open as sheets from the Dashboard.
+The app has five tabs: Today, Add, Foods (everything logged before), Assistant and Calendar (days, trends and the weight graph). Settings opens from Today.
 
 ## Architecture
 
@@ -238,6 +238,8 @@ The app credits its data sources in Settings → About → Data sources:
 - Malaysia Food-11
 - MF-150
 - Malaysian Food Recognition 1 and 2 (Roboflow, CC BY 4.0)
+
+Nutrient icons (flame, biceps-flexed, wheat, droplet, leaf) are from [Lucide](https://lucide.dev), ISC licence: see [LICENSE-lucide.txt](LICENSE-lucide.txt). They are bundled as vector PDFs in the asset catalogue and credited in Settings → About.
 
 Check every licence before distributing a trained model or the bundled values. See [ml/README.md](ml/README.md#licences).
 

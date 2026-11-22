@@ -31,9 +31,26 @@ struct TrendsView: View {
         Binding(get: { router.trendsNutrient }, set: { router.trendsNutrient = $0 })
     }
 
-    /// Computed on the fly from `FoodEntry` records; nothing is persisted.
+    /// What the buckets depend on: the log, the scale and the day.
+    private struct BucketsKey: Equatable {
+        let log: Int
+        let scale: TrendScale
+        let day: Date
+    }
+    private var bucketsKey: BucketsKey {
+        BucketsKey(log: FoodLibrary.signature(of: allEntries), scale: scale,
+                   day: LocalDay.start(of: .now))
+    }
+    @State private var cachedBuckets: [TrendBucket] = []
+    @State private var cachedBucketsKey: BucketsKey?
+
+    /// Worked out from `FoodEntry` records only when the log, scale or day
+    /// changes - not on every redraw, such as a sheet on this page closing.
+    /// Nothing is persisted.
     private var buckets: [TrendBucket] {
-        TrendAggregator.buckets(entries: allEntries, scale: scale, endingOn: .now)
+        let key = bucketsKey
+        if key == cachedBucketsKey { return cachedBuckets }
+        return TrendAggregator.buckets(entries: allEntries, scale: scale, endingOn: .now)
     }
 
     /// The current range, for deciding whether the legend is worth showing.
@@ -67,6 +84,10 @@ struct TrendsView: View {
                 chartCard
             }
         }
+        .onChange(of: bucketsKey, initial: true) { _, key in
+            cachedBuckets = TrendAggregator.buckets(entries: allEntries, scale: scale, endingOn: .now)
+            cachedBucketsKey = key
+        }
     }
 
     private var controls: some View {
@@ -77,7 +98,9 @@ struct TrendsView: View {
     }
 
     private var chartCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Aggregated once per redraw, not once per use: it reads every entry.
+        let buckets = self.buckets
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
                 Text(chartCaption)
                     .font(.subheadline.weight(.semibold))
@@ -87,7 +110,7 @@ struct TrendsView: View {
                 // The nutrient lives with the chart it changes.
                 Picker("Nutrient", selection: nutrientBinding) {
                     ForEach(Nutrient.allCases) { nutrient in
-                        Label(nutrient.displayName, systemImage: nutrient.symbolName)
+                        Label { Text(nutrient.displayName) } icon: { nutrient.icon }
                             .tag(nutrient)
                     }
                 }
