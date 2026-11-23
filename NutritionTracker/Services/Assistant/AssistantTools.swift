@@ -79,8 +79,9 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
                 + "this month, trends, progress or habits. Read-only."
         case .findFoodNearby:
             "Search the web for places to eat and their menus and prices - around the "
-                + "user's current location, or in an area they name. Returns a summary with "
-                + "sources."
+                + "user's current location, or in an area they name. For a restaurant or chain "
+                + "the user names (\"what to eat at Saizeriya\"), give restaurant instead: its "
+                + "menu is looked up, the same at every branch. Returns a summary with sources."
         case .updateProfile:
             "Propose changing the user's profile: weight, height, target weight, goal or "
                 + "activity level - e.g. a new weigh-in, or a goal changed on a doctor's "
@@ -216,6 +217,10 @@ enum AssistantTool: String, CaseIterable, Codable, Sendable {
 
         case .findFoodNearby:
             return Self.object([
+                "restaurant": Self.field("string", "A restaurant or chain the user named, e.g. "
+                                         + "\"Saizeriya\", \"Sushi King\", \"Nando's\". Its "
+                                         + "menu is looked up. Only add place when the user "
+                                         + "also names an area in this message."),
                 "place": Self.field("string", "The mall, area, street or city the user named in "
                                     + "this message, exactly as they said it (\"Sunway Pyramid\", "
                                     + "\"Mid Valley\", \"Bangsar\") - always put it here, never in "

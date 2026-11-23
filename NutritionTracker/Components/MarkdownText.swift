@@ -62,6 +62,8 @@ struct MarkdownText: View {
         case (_, .heading): 16
         case (.heading, _): 6
         case (.bullet, .bullet), (.numbered, .numbered): 8
+        // A place's dishes sit close under it.
+        case (.numbered, .bullet): 6
         default: 12
         }
     }
@@ -78,6 +80,27 @@ struct MarkdownText: View {
     /// Splits the reply into display blocks. Blank lines just separate blocks;
     /// consecutive plain lines stay separate lines, as the model wrote them.
     static func blocks(from source: String) -> [Block] {
+        // Bullets straight after a numbered item belong to it (dishes under
+        // a place), so they sit indented under it however they were written.
+        var underNumbered = false
+        return parsedBlocks(from: source).map { block in
+            switch block {
+            case .numbered:
+                underNumbered = true
+                return block
+            case .bullet(let text, let level):
+                return underNumbered ? .bullet(text, level: max(level, 1)) : block
+            case .heading:
+                underNumbered = false
+                return block
+            case .paragraph:
+                // A line under the place (why it fits) keeps its dishes with it.
+                return block
+            }
+        }
+    }
+
+    private static func parsedBlocks(from source: String) -> [Block] {
         source.components(separatedBy: .newlines).compactMap { rawLine in
             let indent = rawLine.prefix { $0 == " " || $0 == "\t" }.count
             let line = rawLine.trimmingCharacters(in: .whitespaces)
