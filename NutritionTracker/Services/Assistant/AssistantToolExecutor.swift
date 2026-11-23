@@ -443,6 +443,33 @@ final class AssistantToolExecutor {
                 + "if needed)")
     }
 
+    /// Before and after photos: each component has its own share eaten. The
+    /// same "about 85% eaten" on every item means one share was applied to
+    /// the whole meal - salmon and egg scaled down although none was left.
+    /// Returns what to tell the model, or nil when the shares differ. The view
+    /// model asks only once per chat: a plate shared half and half really is
+    /// 50% of everything.
+    static func uniformEatenShareProblem(in arguments: [String: JSONValue]) -> String? {
+        let items = foods(in: arguments).flatMap { $0["items"]?.arrayValue ?? [] }
+        let names = items.compactMap { $0.objectValue?["name"]?.stringValue }
+        let shares = names.compactMap(eatenShare(in:))
+        guard shares.count >= 3, Set(shares).count == 1, let share = shares.first, share < 100 else {
+            return nil
+        }
+        return "Every item says about \(share)% eaten - one share for the whole meal. Look at the "
+            + "after photo again component by component: anything not visible there was eaten "
+            + "in full (plain name, full grams); only the parts with food left get a share. If "
+            + "every part really was eaten to the same share (a shared plate), send it again "
+            + "unchanged. Nothing was logged."
+    }
+
+    /// "Brown rice (about 85% eaten)" -> 85.
+    static func eatenShare(in name: String) -> Int? {
+        guard let range = name.range(of: #"(\d{1,3})\s*%\s*eaten"#, options: .regularExpression)
+        else { return nil }
+        return Int(name[range].prefix { $0.isNumber })
+    }
+
     /// Fibre, sugar alcohols and rounding make real labels differ from 4/4/9
     /// a little, but rarely by this much.
     static let labelEnergyTolerance = 0.3

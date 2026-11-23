@@ -66,3 +66,35 @@ final class SearchCacheTests: XCTestCase {
                        AssistantViewModel.searchCacheKey("find mcchicken nutrition"))
     }
 }
+
+final class RestaurantSuggestionTests: XCTestCase {
+
+    func testNamedRestaurantLooksUpItsMenuNotOneBranch() {
+        let call = AssistantToolCall(id: "r", tool: .findFoodNearby,
+                                     arguments: ["restaurant": .string("Saizeriya")])
+        let (question, activity) = AssistantViewModel.webQuestion(for: call)
+        XCTAssertTrue(question.contains("menu of the restaurant \"Saizeriya\""))
+        XCTAssertTrue(question.contains("same at every branch"))
+        XCTAssertEqual(activity, "Looked up the menu at Saizeriya")
+    }
+
+    func testRestaurantAreaOnlyFromTheCall() {
+        let call = AssistantToolCall(id: "r", tool: .findFoodNearby,
+                                     arguments: ["restaurant": .string("Sushi King"),
+                                                 "place": .string("Mid Valley")])
+        let (question, activity) = AssistantViewModel.webQuestion(for: call)
+        XCTAssertTrue(question.contains("Mid Valley branch"))
+        XCTAssertEqual(activity, "Looked up the menu at Sushi King, Mid Valley")
+    }
+
+    func testDishesSitUnderTheirPlace() {
+        let blocks = MarkdownText.blocks(from: """
+        1. **Pokok** - Level 2, grilled and light
+        - **Avo Chicken** (RM34) - dressing on the side
+        2. **Saizeriya** - Level 1
+        - **Grilled chicken** (RM16)
+        """)
+        XCTAssertEqual(blocks[1], .bullet("**Avo Chicken** (RM34) - dressing on the side", level: 1))
+        XCTAssertEqual(blocks[3], .bullet("**Grilled chicken** (RM16)", level: 1))
+    }
+}

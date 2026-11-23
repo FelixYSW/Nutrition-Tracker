@@ -54,6 +54,9 @@ final class ChatSession {
     var deferredResults: [AssistantTurn.Block] = []
     var cardOutcomes: [String: [String]] = [:]
     var lookedUpProducts: [String] = []
+    /// Set once the model has been asked to judge each component's share
+    /// separately, so a really uniform share isn't refused twice.
+    var challengedUniformShare = false
     /// Search answers already paid for in this chat, by question. Asking the
     /// same thing again reuses the answer instead of searching again.
     var searchCache: [String: String] = [:]
@@ -374,11 +377,15 @@ final class AssistantViewModel {
                     var here: CurrentPlace?
                     // An area the user named - in the call, or failing that in
                     // their own message - always beats their GPS location.
-                    let named = call.tool == .findFoodNearby
-                        ? AssistantPlaceResolver.place(arguments: call.arguments,
+                    // A named restaurant is looked up by its menu; the area then
+                    // only counts if the call gives one, not from the message.
+                    let restaurant = call.tool == .findFoodNearby
+                        ? Self.restaurantName(in: call.arguments) : nil
+                    let named: String? = call.tool != .findFoodNearby ? nil
+                        : restaurant != nil ? Self.namedPlace(in: call.arguments)
+                        : AssistantPlaceResolver.place(arguments: call.arguments,
                                                        userText: Self.latestUserText(in: chat.turns))
-                        : nil
-                    if call.tool == .findFoodNearby, named == nil {
+                    if call.tool == .findFoodNearby, named == nil, restaurant == nil {
                         do {
                             guard let locator else { throw CurrentLocationError.unavailable }
                             here = try await locator.currentPlace()
@@ -412,7 +419,9 @@ final class AssistantViewModel {
                     searchesRun += 1
                     append(.toolActivity(activity), to: chat)
                     let (content, failed, summary, failure) = await searchWeb(
-                        question, place: named ?? here?.name)
+                        question,
+                        place: restaurant.map { r in named.map { "\(r), \($0)" } ?? r }
+                            ?? named ?? here?.name)
                     if !failed { chat.searchCache[cacheKey] = content }
                     // The model only says "the lookup failed"; the reason (wrong
                     // model name, no quota) is for the user to see.
@@ -443,6 +452,18 @@ final class AssistantViewModel {
                                                                    lookedUp: chat.lookedUpProducts))
                     chat.lookedUpProducts.removeAll { blocked.contains($0) }
                     resultBlocks.append(.toolResult(id: call.id, content: detail, isError: true))
+                    continue
+                }
+
+                // Before and after: one share for every part of the meal is
+                // usually a shortcut. Asked once per chat.
+                if [.addFoodEntry, .editFoodEntry].contains(call.tool), !chat.challengedUniformShare,
+                   let problem = AssistantToolExecutor.uniformEatenShareProblem(in: call.arguments) {
+                    chat.challengedUniformShare = true
+                    resultBlocks.append(.toolResult(
+                        id: call.id,
+                        content: "{\"status\":\"error\",\"detail\":\"\(Self.escape(problem))\"}",
+                        isError: true))
                     continue
                 }
 
@@ -563,6 +584,12 @@ final class AssistantViewModel {
         // model to fit to the user's ranges and budget.
         let budget = arguments["budget"]?.stringValue
         let preferences = arguments["preferences"]?.stringValue
+        if let restaurant = restaurantName(in: arguments) {
+            let area = namedPlace(in: arguments)
+            return (restaurantMenuQuestion(restaurant: restaurant, area: area, budget: budget,
+                                           preferences: preferences),
+                    "Looked up the menu at \(restaurant)" + (area.map { ", \($0)" } ?? ""))
+        }
         let named = resolvedPlace ?? namedPlace(in: arguments)
         if let currentPlace, named == nil {
             return (nearbyFoodQuestion(place: currentPlace.searchDescription, budget: budget,
@@ -572,6 +599,35 @@ final class AssistantViewModel {
         let place = named ?? ""
         return (nearbyFoodQuestion(place: place, budget: budget, preferences: preferences),
                 "Searched for food at \(place)")
+    }
+
+    /// The restaurant or chain named in a findFoodNearby call, if any.
+    nonisolated static func restaurantName(in arguments: [String: JSONValue]) -> String? {
+        guard let name = arguments["restaurant"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return name
+    }
+
+    /// A named restaurant's menu. The menu is the chain's, so a branch that
+    /// isn't listed online never makes the answer "not found".
+    nonisolated static func restaurantMenuQuestion(restaurant: String, area: String?,
+                                                   budget: String?, preferences: String?) -> String {
+        var lines = [
+            "Find the current menu of the restaurant \"\(restaurant)\" in \(regionHint)"
+                + (area.map { ", at or near its \($0) branch" } ?? "") + ".",
+            "Its menu is the same at every branch: if that branch isn't listed, use the chain's "
+                + "\(regionHint) menu. Only say it can't be found if the chain has no menu there at all.",
+            "List 6 to 10 dishes that suit the request, each with its exact menu name, its "
+                + "current price in local currency, and a short note on the portion and how it's cooked.",
+            "Only real dishes from its menu; say if prices may be out of date."
+        ]
+        if let budget = budget?.trimmingCharacters(in: .whitespaces), !budget.isEmpty {
+            lines.append("Budget: \(budget). Only include dishes that fit it.")
+        }
+        if let preferences = preferences?.trimmingCharacters(in: .whitespaces), !preferences.isEmpty {
+            lines.append("Prefer: \(preferences).")
+        }
+        return lines.joined(separator: "\n")
     }
 
     nonisolated static func productSearchQuestion(query: String, country: String?, goal: String?) -> String {

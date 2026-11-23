@@ -88,6 +88,9 @@ final class FistMeasurementTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Eaten = before minus after"))
         XCTAssertTrue(prompt.contains("handReference"))
         XCTAssertTrue(prompt.contains("Size before grams"))
+        XCTAssertTrue(prompt.contains("separate helpings, each eaten in full"))
+        XCTAssertTrue(prompt.contains("Before and after only when the user says so"))
+        XCTAssertTrue(prompt.contains("Sliced or whole"))
     }
 }
 
